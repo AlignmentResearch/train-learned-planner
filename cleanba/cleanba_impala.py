@@ -105,7 +105,7 @@ class Args:
     batch_size: int = 0
     minibatch_size: int = 0
     num_updates: int = 0
-    global_learner_decices: Optional[List[str]] = None
+    global_learner_devices: Optional[List[str]] = None
     actor_devices: Optional[List[str]] = None
     learner_devices: Optional[List[str]] = None
 
@@ -472,13 +472,13 @@ if __name__ == "__main__":
     global_devices = jax.devices()
     learner_devices = [local_devices[d_id] for d_id in args.learner_device_ids]
     actor_devices = [local_devices[d_id] for d_id in args.actor_device_ids]
-    global_learner_decices = [
+    global_learner_devices = [
         global_devices[d_id + process_index * len(local_devices)]
         for process_index in range(args.world_size)
         for d_id in args.learner_device_ids
     ]
-    print("global_learner_decices", global_learner_decices)
-    args.global_learner_decices = [str(item) for item in global_learner_decices]
+    print("global_learner_devices", global_learner_devices)
+    args.global_learner_devices = [str(item) for item in global_learner_devices]
     args.actor_devices = [str(item) for item in actor_devices]
     args.learner_devices = [str(item) for item in learner_devices]
     pprint(args)
@@ -641,7 +641,7 @@ if __name__ == "__main__":
     multi_device_update = jax.pmap(
         single_device_update,
         axis_name="local_devices",
-        devices=global_learner_decices,
+        devices=global_learner_devices,
     )
 
     params_queues = []
@@ -754,6 +754,7 @@ if __name__ == "__main__":
             eval_episodes=10,
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic),
+            capture_video=args.capture_video,
         )
         for idx, episodic_return in enumerate(episodic_returns):
             writer.add_scalar("eval/episodic_return", episodic_return, idx)

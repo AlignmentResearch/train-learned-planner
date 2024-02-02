@@ -46,7 +46,7 @@ def evaluate(
     ):
         hidden = network.apply(network_params, next_obs)
         logits = actor.apply(actor_params, hidden)
-        # sample action: Gumbel-softmax trick
+        # sample action: Gumbel-max trick
         # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
         key, subkey = jax.random.split(key)
         u = jax.random.uniform(subkey, shape=logits.shape)
