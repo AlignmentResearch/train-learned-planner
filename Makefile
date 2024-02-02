@@ -13,16 +13,17 @@ BRANCH_NAME ?= $(shell git branch --show-current)
 
 # Release tag or latest if not a release
 RELEASE_TAG ?= latest
+DEFAULT_TARGET ?= main
 
 .PHONY: default
-default: build-${BASE_TAG}-dependencies
+default: build-${BASE_TAG}-${DEFAULT_TARGET}
 
 # Re-usable function
 .PHONY: build
 build:
-	docker pull ${APPLICATION_URL}:${TAG} || true
+	docker pull "${APPLICATION_URL}:${TAG}-${TARGET}" || true
 	docker build --platform "linux/amd64" \
-		--tag "${APPLICATION_URL}:${TAG}" \
+		--tag "${APPLICATION_URL}:${TAG}-${TARGET}" \
 		--build-arg "APPLICATION_NAME=${APPLICATION_NAME}" \
 		--target ${TARGET} \
 		-f "${DOCKERFILE}" .
@@ -39,9 +40,15 @@ build-%-envpool: ${DOCKERFILE}
 build-%-dependencies: ${DOCKERFILE}
 	$(MAKE) build "TAG=$*" TARGET=dependencies
 
+.PHONY: build-%-jax
+build-%-jax: ${DOCKERFILE}
+	$(MAKE) build "TAG=$*" TARGET=jax
+
 .PHONY: push-%
 push-%: build-%
 	docker push "${APPLICATION_URL}:$*"
+
+release: release-${BASE_TAG}-${DEFAULT_TARGET}
 
 .PHONY: release-%
 release-%: push-%
