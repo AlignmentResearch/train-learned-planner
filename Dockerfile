@@ -43,7 +43,7 @@ RUN apt-get update -q \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
     # essential for running. GCC is for Torch triton
-    git git-lfs tini build-essential python3-dev python3-venv \
+    git git-lfs tini build-essential python3-dev python3-venv cuda-cupti-12-2 \
     # essential for testing
     libgl-dev libglib2.0-0 zip make \
     # devbox niceties
