@@ -100,7 +100,7 @@ if __name__ == "__main__":
         make_env,
         "Pong-v5",
         eval_episodes=10,
-        run_name=f"eval",
+        run_name="eval",
         Model=(Network, Actor, Critic),
         capture_video=False,
     )

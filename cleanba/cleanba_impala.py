@@ -23,6 +23,8 @@ from flax.training.train_state import TrainState
 from rich.pretty import pprint
 from tensorboardX import SummaryWriter
 
+from cleanba.optimizer import rmsprop_pytorch_style
+
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
@@ -136,57 +138,6 @@ def make_env(env_id, seed, num_envs):
         return envs
 
     return thunk
-
-
-### RMSProp implementation for PyTorch-style RMSProp
-# see https://github.com/deepmind/optax/issues/532#issuecomment-1676371843
-# fmt: off
-import jax
-import jax.numpy as jnp
-from optax import update_moment_per_elem_norm
-from optax._src import base, combine, transform
-from optax._src.alias import ScalarOrSchedule, _scale_by_learning_rate
-from optax._src.transform import ScaleByRmsState
-
-
-def scale_by_rms_pytorch_style(
-    decay: float = 0.9,
-    eps: float = 1e-8,
-    initial_scale: float = 0.
-) -> base.GradientTransformation:
-  """See https://github.com/deepmind/optax/issues/532#issuecomment-1676371843"""
-
-  def init_fn(params):
-    nu = jax.tree_util.tree_map(
-        lambda n: jnp.full_like(n, initial_scale), params)  # second moment
-    return ScaleByRmsState(nu=nu)
-
-  def update_fn(updates, state, params=None):
-    del params
-    nu = update_moment_per_elem_norm(updates, state.nu, decay, 2)
-    updates = jax.tree_util.tree_map(
-        lambda g, n: g / (jax.lax.sqrt(n) + eps), updates, nu)
-    return updates, ScaleByRmsState(nu=nu)
-
-  return base.GradientTransformation(init_fn, update_fn)
-
-
-def rmsprop_pytorch_style(
-    learning_rate: ScalarOrSchedule,
-    decay: float = 0.9,
-    eps: float = 1e-8,
-    initial_scale: float = 0.,
-    momentum: Optional[float] = None,
-    nesterov: bool = False
-) -> base.GradientTransformation:
-  return combine.chain(
-      scale_by_rms_pytorch_style(
-          decay=decay, eps=eps, initial_scale=initial_scale),
-      _scale_by_learning_rate(learning_rate),
-      (transform.trace(decay=momentum, nesterov=nesterov)
-       if momentum is not None else base.identity())
-  )
-# fmt: on
 
 
 class ResidualBlock(nn.Module):
@@ -384,12 +335,16 @@ def rollout(
             )
             episode_returns[env_id] += info["reward"]
             returned_episode_returns[env_id] = np.where(
-                info["terminated"] + truncated, episode_returns[env_id], returned_episode_returns[env_id]
+                info["terminated"] + truncated,
+                episode_returns[env_id],
+                returned_episode_returns[env_id],
             )
             episode_returns[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             episode_lengths[env_id] += 1
             returned_episode_lengths[env_id] = np.where(
-                info["terminated"] + truncated, episode_lengths[env_id], returned_episode_lengths[env_id]
+                info["terminated"] + truncated,
+                episode_lengths[env_id],
+                returned_episode_lengths[env_id],
             )
             episode_lengths[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             storage_time += time.time() - storage_time_start
@@ -398,7 +353,12 @@ def rollout(
         avg_episodic_return = np.mean(returned_episode_returns)
         partitioned_storage = prepare_data(storage)
         sharded_storage = Transition(
-            *list(map(lambda x: jax.device_put_sharded(x, devices=learner_devices), partitioned_storage))
+            *list(
+                map(
+                    lambda x: jax.device_put_sharded(x, devices=learner_devices),
+                    partitioned_storage,
+                )
+            )
         )
         payload = (
             global_step,
@@ -423,14 +383,26 @@ def rollout(
                 print("SPS:", int(global_step / (time.time() - start_time)))
             writer.add_scalar("stats/rollout_time", np.mean(rollout_time), global_step)
             writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-            writer.add_scalar("charts/avg_episodic_length", np.mean(returned_episode_lengths), global_step)
-            writer.add_scalar("stats/params_queue_get_time", np.mean(params_queue_get_time), global_step)
+            writer.add_scalar(
+                "charts/avg_episodic_length",
+                np.mean(returned_episode_lengths),
+                global_step,
+            )
+            writer.add_scalar(
+                "stats/params_queue_get_time",
+                np.mean(params_queue_get_time),
+                global_step,
+            )
             writer.add_scalar("stats/env_recv_time", env_recv_time, global_step)
             writer.add_scalar("stats/inference_time", inference_time, global_step)
             writer.add_scalar("stats/storage_time", storage_time, global_step)
             writer.add_scalar("stats/d2h_time", d2h_time, global_step)
             writer.add_scalar("stats/env_send_time", env_send_time, global_step)
-            writer.add_scalar("stats/rollout_queue_put_time", np.mean(rollout_queue_put_time), global_step)
+            writer.add_scalar(
+                "stats/rollout_queue_put_time",
+                np.mean(rollout_queue_put_time),
+                global_step,
+            )
             writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
             writer.add_scalar(
                 "charts/SPS_update",
@@ -526,14 +498,22 @@ if __name__ == "__main__":
         apply_fn=None,
         params=AgentParams(
             network_params,
-            actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
-            critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+            actor.init(
+                actor_key,
+                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
+            ),
+            critic.init(
+                critic_key,
+                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
+            ),
         ),
         tx=optax.MultiSteps(
             optax.chain(
                 optax.clip_by_global_norm(args.max_grad_norm),
                 optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate, eps=0.01, decay=0.99
+                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                    eps=0.01,
+                    decay=0.99,
                 ),
             ),
             every_k_schedule=args.gradient_accumulation_steps,
@@ -541,8 +521,18 @@ if __name__ == "__main__":
     )
     agent_state = flax.jax_utils.replicate(agent_state, devices=learner_devices)
     print(network.tabulate(network_key, np.array([envs.single_observation_space.sample()])))
-    print(actor.tabulate(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))))
-    print(critic.tabulate(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))))
+    print(
+        actor.tabulate(
+            actor_key,
+            network.apply(network_params, np.array([envs.single_observation_space.sample()])),
+        )
+    )
+    print(
+        critic.tabulate(
+            critic_key,
+            network.apply(network_params, np.array([envs.single_observation_space.sample()])),
+        )
+    )
 
     @jax.jit
     def get_logits_and_value(
@@ -606,7 +596,14 @@ if __name__ == "__main__":
         impala_loss_grad_fn = jax.value_and_grad(impala_loss, has_aux=True)
 
         def update_minibatch(agent_state, minibatch):
-            mb_obs, mb_actions, mb_logitss, mb_rewards, mb_dones, mb_firststeps = minibatch
+            (
+                mb_obs,
+                mb_actions,
+                mb_logitss,
+                mb_rewards,
+                mb_dones,
+                mb_firststeps,
+            ) = minibatch
             (loss, (pg_loss, v_loss, entropy_loss)), grads = impala_loss_grad_fn(
                 agent_state.params,
                 mb_obs,
@@ -624,12 +621,48 @@ if __name__ == "__main__":
             update_minibatch,
             agent_state,
             (
-                jnp.array(jnp.split(storage.obs, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.actions, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.logitss, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.rewards, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.dones, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.firststeps, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(
+                    jnp.split(
+                        storage.obs,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
+                jnp.array(
+                    jnp.split(
+                        storage.actions,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
+                jnp.array(
+                    jnp.split(
+                        storage.logitss,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
+                jnp.array(
+                    jnp.split(
+                        storage.rewards,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
+                jnp.array(
+                    jnp.split(
+                        storage.dones,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
+                jnp.array(
+                    jnp.split(
+                        storage.firststeps,
+                        args.num_minibatches * args.gradient_accumulation_steps,
+                        axis=1,
+                    )
+                ),
             ),
         )
         loss = jax.lax.pmean(loss, axis_name="local_devices").mean()
@@ -690,7 +723,14 @@ if __name__ == "__main__":
                 sharded_storages.append(sharded_storage)
         rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
         training_time_start = time.time()
-        (agent_state, loss, pg_loss, v_loss, entropy_loss, learner_keys) = multi_device_update(
+        (
+            agent_state,
+            loss,
+            pg_loss,
+            v_loss,
+            entropy_loss,
+            learner_keys,
+        ) = multi_device_update(
             agent_state,
             sharded_storages,
             learner_keys,
@@ -703,7 +743,11 @@ if __name__ == "__main__":
 
         # record rewards for plotting purposes
         if learner_policy_version % args.log_frequency == 0:
-            writer.add_scalar("stats/rollout_queue_get_time", np.mean(rollout_queue_get_time), global_step)
+            writer.add_scalar(
+                "stats/rollout_queue_get_time",
+                np.mean(rollout_queue_get_time),
+                global_step,
+            )
             writer.add_scalar(
                 "stats/rollout_params_queue_get_time_diff",
                 np.mean(rollout_queue_get_time) - avg_params_queue_get_time,
@@ -717,7 +761,9 @@ if __name__ == "__main__":
                 f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={learner_policy_version}, training time: {time.time() - training_time_start}s",
             )
             writer.add_scalar(
-                "charts/learning_rate", agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(), global_step
+                "charts/learning_rate",
+                agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
+                global_step,
             )
             writer.add_scalar("losses/value_loss", v_loss[-1].item(), global_step)
             writer.add_scalar("losses/policy_loss", pg_loss[-1].item(), global_step)

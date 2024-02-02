@@ -7,7 +7,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import List, NamedTuple, Optional, Sequence, Tuple
+from typing import List, NamedTuple, Optional, Sequence
 from functools import partial
 
 import envpool
@@ -589,9 +589,11 @@ if __name__ == "__main__":
         next_done = jnp.concatenate(sharded_next_done)
         ppo_loss_grad_fn = jax.value_and_grad(ppo_loss, has_aux=True)
         advantages, target_values = compute_gae(agent_state, next_obs, next_done, storage)
-        if args.norm_adv: # NOTE: per-minibatch advantages normalization
+        if args.norm_adv:  # NOTE: per-minibatch advantages normalization
             advantages = advantages.reshape(advantages.shape[0], args.num_minibatches, -1)
-            advantages = (advantages - advantages.mean((0, -1), keepdims=True)) / (advantages.std((0, -1), keepdims=True) + 1e-8)
+            advantages = (advantages - advantages.mean((0, -1), keepdims=True)) / (
+                advantages.std((0, -1), keepdims=True) + 1e-8
+            )
             advantages = advantages.reshape(advantages.shape[0], -1)
 
         def update_epoch(carry, _):
