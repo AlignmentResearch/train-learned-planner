@@ -5,11 +5,11 @@ exclude = ["third_party"]
 line-length = 127
 target-version = "py310"
 exclude = [
-    "third_party/gym-sokoban",
     "third_party/envpool",
+    "legacy_scripts",
 ]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 known-third-party = ["wandb"]
 
 [tool.pytest.ini_options]
