@@ -36,7 +36,22 @@ release: build
 	docker tag "${APPLICATION_URL}:${TAG}-${TARGET}" "${APPLICATION_URL}:${RELEASE_TAG}-${TARGET}"
 	docker push "${APPLICATION_URL}:${RELEASE_TAG}-${TARGET}"
 
-.PHONY: devbox
-devbox:
+DEVBOX_UID ?= 1001
+CPU ?= 14
+MEMORY ?= 60G
+GPU ?= 0
+
+DEVBOX_NAME ?= cleanba-devbox
+
+.PHONY: devbox devbox-main cpu-devbox
+create-devbox:
 	git push
-	python -c "print(open('k8s/devbox.yaml').read().format(NAME='cleanba-devbox-$*', IMAGE='${APPLICATION_URL}:${RELEASE_TAG}-${TARGET}', COMMIT_FULL='${COMMIT_FULL}', CPU=14, MEMORY='60G', GPU=0, USER_ID=1001, GROUP_ID=1001))" | kubectl create -f -
+	python -c "print(open('k8s/devbox.yaml').read().format(NAME='${DEVBOX_NAME}', IMAGE='${APPLICATION_URL}:${RELEASE_TAG}-${TARGET}', COMMIT_FULL='${COMMIT_FULL}', CPU='${CPU}', MEMORY='${MEMORY}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
+
+.PHONY: cpu-devbox
+cpu-devbox: GPU=0
+cpu-devbox: create-devbox
+
+.PHONY: devbox
+devbox: GPU=1
+devbox: create-devbox
