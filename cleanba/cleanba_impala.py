@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import queue
 import random
@@ -6,8 +7,9 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
-from typing import List, NamedTuple, Optional, Sequence
+from typing import Any, List, NamedTuple, Optional, Sequence
 
 import envpool
 import flax
@@ -20,8 +22,8 @@ import rlax
 import tyro
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
+from names_generator import generate_name
 from rich.pretty import pprint
-from tensorboardX import SummaryWriter
 
 from cleanba.optimizer import rmsprop_pytorch_style
 
@@ -31,6 +33,40 @@ os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parall
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+
+
+class WandbWriter:
+    def __init__(self, cfg: "Args"):
+        wandb_kwargs: dict[str, Any]
+        try:
+            wandb_kwargs = dict(
+                entity=os.environ["WANDB_ENTITY"],
+                name=os.environ.get("WANDB_JOB_NAME", generate_name(style="hyphen")),
+                project=os.environ["WANDB_PROJECT"],
+                group=os.environ["WANDB_RUN_GROUP"],
+                mode=os.environ.get("WANDB_MODE", "online"),  # Default to online here
+            )
+        except KeyError:
+            # If any of the essential WANDB environment variables are missing,
+            # simply don't upload this run.
+            # It's fine to do this without giving any indication because Wandb already prints that the run is offline.
+
+            wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
+
+        run_dir = Path("/training") / "cleanba" / wandb_kwargs["group"]
+        run_dir.mkdir(parents=True, exist_ok=True)
+        wandb.init(
+            **wandb_kwargs,
+            config=cfg.to_dict(),
+            save_code=True,  # Make sure git diff is saved
+            dir=run_dir,
+            monitor_gym=False,  # Must manually log videos to wandb
+            sync_tensorboard=False,  # Manually log tensorboard
+            settings=wandb.Settings(code_dir=str(Path(__file__).parent.parent)),
+        )
+
+    def add_scalar(self, name: str, value: int | float, global_step: int):
+        wandb.log({name: value}, step=global_step)
 
 
 @dataclass
@@ -110,6 +146,9 @@ class Args:
     global_learner_devices: Optional[List[str]] = None
     actor_devices: Optional[List[str]] = None
     learner_devices: Optional[List[str]] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 
 
 ATARI_MAX_FRAMES = int(
@@ -468,11 +507,7 @@ if __name__ == "__main__":
             monitor_gym=True,
             save_code=True,
         )
-    writer = SummaryWriter(f"runs/{run_name}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-    )
+    writer = WandbWriter(args)
 
     # seeding
     random.seed(args.seed)
