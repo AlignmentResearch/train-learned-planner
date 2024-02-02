@@ -1,0 +1,3 @@
+[submodule "envpool"]
+	path = third_party/envpool
+	url = https://github.com/alignmentresearch/envpool.git
