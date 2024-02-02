@@ -60,4 +60,4 @@ release-%-main: push-%-main
 devbox: devbox-${DEFAULT_TARGET}
 devbox-%:
 	git push
-	python -c "print(open('k8s/devbox.yaml').read().format(NAME='devbox-$*', IMAGE='${APPLICATION_URL}:$*-latest', COMMIT_FULL='${COMMIT_FULL}', CPU=14, MEMORY='60G', GPU=0, USER_ID=1001, GROUP_ID=1001))" | kubectl create -f -
+	python -c "print(open('k8s/devbox.yaml').read().format(NAME='devbox-$*', IMAGE='${APPLICATION_URL}:latest-$*', COMMIT_FULL='${COMMIT_FULL}', CPU=14, MEMORY='60G', GPU=0, USER_ID=1001, GROUP_ID=1001))" | kubectl create -f -
