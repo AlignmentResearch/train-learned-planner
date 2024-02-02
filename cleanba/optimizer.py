@@ -7,8 +7,7 @@ import jax
 import jax.numpy as jnp
 from optax import update_moment_per_elem_norm
 from optax._src import base, combine, transform
-from optax._src.alias import ScalarOrSchedule, _scale_by_learning_rate
-from optax._src.transform import ScaleByRmsState
+from optax._src.transform import ScaleByRmsState, scale_by_learning_rate
 
 
 def scale_by_rms_pytorch_style(
@@ -30,7 +29,7 @@ def scale_by_rms_pytorch_style(
 
 
 def rmsprop_pytorch_style(
-    learning_rate: ScalarOrSchedule,
+    learning_rate: base.ScalarOrSchedule,
     decay: float = 0.9,
     eps: float = 1e-8,
     initial_scale: float = 0.0,
@@ -39,6 +38,6 @@ def rmsprop_pytorch_style(
 ) -> base.GradientTransformation:
     return combine.chain(
         scale_by_rms_pytorch_style(decay=decay, eps=eps, initial_scale=initial_scale),
-        _scale_by_learning_rate(learning_rate),
+        scale_by_learning_rate(learning_rate),
         (transform.trace(decay=momentum, nesterov=nesterov) if momentum is not None else base.identity()),
     )

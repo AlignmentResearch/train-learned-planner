@@ -20,6 +20,7 @@ import numpy as np
 import optax
 import rlax
 import tyro
+import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from names_generator import generate_name
@@ -93,7 +94,7 @@ class Args:
     "the logging frequency of the model performance (in terms of `updates`)"
 
     # Algorithm specific arguments
-    env_id: str = "Breakout-v5"
+    env_id: str = "Sokoban-v0"
     "the id of the environment"
     total_timesteps: int = 50000000
     "total timesteps of the experiments"
@@ -119,7 +120,7 @@ class Args:
     "coefficient of the value function"
     max_grad_norm: float = 40.0
     "the maximum norm for the gradient clipping"
-    channels: List[int] = field(default_factory=lambda: [16, 32, 32])
+    channels: List[int] = field(default_factory=lambda: [32, 32, 32])
     "the channels of the CNN"
     hiddens: List[int] = field(default_factory=lambda: [256])
     "the hiddens size of the MLP"
@@ -162,13 +163,14 @@ def make_env(env_id, seed, num_envs):
             env_id,
             env_type="gym",
             num_envs=num_envs,
-            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
-            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
-            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
-            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
-            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=True,
             seed=seed,
+            px_scale=4,
+            reward_finished=10.0,
+            reward_box=1.0,
+            reward_step=-0.1,
+            cache_path="/training",
+            split="train",
+            difficulty="unfiltered",
         )
         envs.num_envs = num_envs
         envs.single_action_space = envs.action_space
@@ -205,8 +207,8 @@ class ConvSequence(nn.Module):
 
 
 class Network(nn.Module):
-    channels: Sequence[int] = (16, 32, 32)
-    hiddens: Sequence[int] = (256,)
+    channels: Sequence[int]
+    hiddens: Sequence[int]
 
     @nn.compact
     def __call__(self, x):
@@ -241,6 +243,9 @@ class AgentParams:
     network_params: flax.core.FrozenDict
     actor_params: flax.core.FrozenDict
     critic_params: flax.core.FrozenDict
+
+    def __contains__(self, item):
+        return item in (f.name for f in dataclasses.fields(self))
 
 
 class Transition(NamedTuple):
@@ -610,7 +615,9 @@ if __name__ == "__main__":
         rhos = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a)
         vtrace_td_error_and_advantage = jax.vmap(rlax.vtrace_td_error_and_advantage, in_axes=1, out_axes=1)
 
-        vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, rewards, discounts, rhos)
+        vtrace_returns = vtrace_td_error_and_advantage(
+            v_tm1, v_t, rewards, discounts, rhos, alpha=1.0, lambda_=0.95, clip_rho_threshold=1.0, clip_pg_rho_threshold=1.0
+        )
         pg_advs = vtrace_returns.pg_advantage
         pg_loss = policy_gradient_loss(policy_logits, a, pg_advs, mask)
 
