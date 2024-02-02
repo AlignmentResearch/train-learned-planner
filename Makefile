@@ -52,5 +52,11 @@ release: release-${BASE_TAG}-${DEFAULT_TARGET}
 
 .PHONY: release-%
 release-%: push-%
-	docker tag ${APPLICATION_URL}:$* ${APPLICATION_URL}:${RELEASE_TAG}
-	docker push ${APPLICATION_URL}:${RELEASE_TAG}
+	echo docker tag "${APPLICATION_URL}:$*" "${APPLICATION_URL}:${*##*-}${RELEASE_TAG}
+	echo docker push "${APPLICATION_URL}:${RELEASE_TAG}"
+
+.PHONY: devbox devbox-%
+devbox: devbox-${DEFAULT_TARGET}
+devbox-%:
+	git push
+	python -c "print(open('k8s/devbox.yaml').read().format(NAME='devbox-$*', IMAGE='${APPLICATION_URL}:$*-latest', COMMIT_FULL='${COMMIT_FULL}', CPU=14, MEMORY='60G', GPU=0, USER_ID=1001, GROUP_ID=1001))" | kubectl create -f -

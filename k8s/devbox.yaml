@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {NAME}
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+spec:
+  suspend: true
+  backoffLimit: 1  # How many times to try to run the job until giving up
+  template:
+    metadata:
+      name: {NAME}
+    spec:
+      securityContext:
+        runAsUser: {USER_ID}
+        runAsGroup: {GROUP_ID}
+      priorityClassName: interactive
+      volumes:
+      - name: working-storage
+        persistentVolumeClaim:
+          claimName: devbox-storage
+      - name: training
+        persistentVolumeClaim:
+          claimName: lp-training-storage
+      containers:
+      - name: devbox-container
+        image: "{IMAGE}"
+        command:
+          - bash
+          - -c
+          - |
+            git pull; git checkout {COMMIT_FULL}; git submodule update --recursive; sleep 2d
+        resources:
+          requests:
+            cpu: {CPU}
+          limits:
+            memory: "{MEMORY}"
+            nvidia.com/gpu: {GPU}
+        env:
+        - name: OMP_NUM_THREADS
+          value: "{CPU}"
+        - name: WANDB_MODE
+          value: offline
+        - name: WANDB_PROJECT
+          value: learned-planners
+        - name: WANDB_ENTITY
+          value: farai
+        - name: WANDB_RUN_GROUP
+          value: devbox
+        - name: GIT_ASKPASS
+          value: "true"
+        - name: GITHUB_PAT
+          valueFrom:
+            secretKeyRef:
+              name: github-credentials
+              key: pat
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wandb
+              key: api-key
+        - name: GIT_CONFIG_PARAMETERS
+          value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
+        volumeMounts:
+        - name: working-storage
+          mountPath: /home/dev
+        - name: training
+          mountPath: /training
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: docker
