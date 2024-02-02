@@ -420,6 +420,7 @@ def rollout(
                     f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
                 )
                 print("SPS:", int(global_step / (time.time() - start_time)))
+            writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
             writer.add_scalar("stats/rollout_time", np.mean(rollout_time), global_step)
             writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
             writer.add_scalar(
