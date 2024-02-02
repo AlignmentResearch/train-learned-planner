@@ -15,7 +15,7 @@ BRANCH_NAME ?= $(shell git branch --show-current)
 RELEASE_TAG ?= latest
 
 .PHONY: default
-default: build-${BASE_TAG}-envpool
+default: build-${BASE_TAG}-dependencies
 
 # Re-usable function
 .PHONY: build
@@ -34,6 +34,10 @@ build-%-main: ${DOCKERFILE}
 .PHONY: build-%-envpool
 build-%-envpool: ${DOCKERFILE}
 	$(MAKE) build "TAG=$*" TARGET=envpool
+
+.PHONY: build-%-dependencies
+build-%-dependencies: ${DOCKERFILE}
+	$(MAKE) build "TAG=$*" TARGET=dependencies
 
 .PHONY: push-%
 push-%: build-%

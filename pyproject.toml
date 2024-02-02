@@ -1,8 +1,31 @@
+[tool.ruff.format]
+exclude = ["third_party"]
+
+[tool.ruff]
+line-length = 127
+target-version = "py310"
+exclude = [
+    "third_party/gym-sokoban",
+    "third_party/envpool",
+]
+
+[tool.ruff.isort]
+known-third-party = ["wandb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]  # ignore third_party dir for now
+
+[tool.pyright]
+exclude = [
+    "wandb/**",  # Saved old codes
+    "third_party/**",  # Other libraries
+]
+
 [tool.poetry]
-name = "cleanba"
+name = "lp-cleanba"
 version = "1.0.0"
 description = ""
-authors = ["Costa Huang <costa.huang@outlook.com>"]
+authors = ["Costa Huang <costa.huang@outlook.com>", "Adrià Garriga-Alonso <adria@far.ai>"]
 readme = "README.md"
 packages = [
     { include = "cleanba" },
@@ -14,11 +37,9 @@ python = ">=3.8,<3.11"
 tyro = "^0.5.5"
 tensorboard = "^2.12.0"
 envpool = "^0.8.1"
-jax = "^0.4.8"
 flax = "^0.6.8"
 optax = "^0.1.4"
 huggingface-hub = "^0.12.0"
-jaxlib = "^0.4.7"
 wandb = "^0.13.10"
 tensorboardx = "^2.6"
 chex = "0.1.5"
@@ -26,13 +47,19 @@ gym = "0.23.1"
 opencv-python = "^4.7.0.68"
 moviepy = "^1.0.3"
 rlax = "^0.1.5"
-tensorflow = {version = "^2.12.0", optional = true}
 
 [tool.poetry.extras]
 tensorflow = ["tensorflow"]
 
 [tool.poetry.group.dev.dependencies]
-pre-commit = "^3.0.4"
+pre-commit = "^3.6.0"
+pyright = "^1.1.349"
+ruff = "^0.1.13"
+pytest = "^7.3.1"
+
+[tool.poetry.group.launch-jobs.dependencies]
+names_generator = "^0.1.0"
+GitPython = "^3.1.32"
 
 [build-system]
 requires = ["poetry-core"]

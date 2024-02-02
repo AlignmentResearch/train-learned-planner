@@ -43,7 +43,7 @@ RUN apt-get update -q \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
     # essential for running. GCC is for Torch triton
-    git git-lfs tini build-essential \
+    git git-lfs tini build-essential python3-dev \
     # essential for testing
     libgl-dev libglib2.0-0 zip make \
     # devbox niceties
@@ -70,19 +70,14 @@ RUN python3 -m venv "${VIRTUAL_ENV}" --system-site-packages \
 USER ${USERNAME}
 WORKDIR "/workspace"
 
-# Copy package installation instructions and version.txt files
-COPY --chown=${USERNAME}:${USERNAME} third_party/stable-baselines3/setup.py ./third_party/stable-baselines3/
-COPY --chown=${USERNAME}:${USERNAME} third_party/stable-baselines3/stable_baselines3/version.txt ./third_party/stable-baselines3/stable_baselines3/
-COPY --chown=${USERNAME}:${USERNAME} third_party/gym-sokoban/setup.py ./third_party/gym-sokoban/
-COPY --chown=${USERNAME}:${USERNAME} third_party/gym-sokoban/README.md ./third_party/gym-sokoban/
-COPY --chown=${USERNAME}:${USERNAME} pyproject.toml poetry.lock ./
-
 FROM dependencies as main
 
+# Copy package installation instructions and version.txt files
+COPY --chown=${USERNAME}:${USERNAME} pyproject.toml poetry.lock ./
+
 # Install content-less packages and their dependencies
-RUN mkdir learned_planners experiments \
-    && touch learned_planners/__init__.py \
-             third_party/stable-baselines3/stable_baselines3/__init__.py \
+RUN mkdir cleanba cleanrl_utils \
+    && touch cleanba/__init__.py cleanrl_utils/__init__.py \
     && pip install --require-virtualenv --config-settings editable_mode=compat -e '.[dev,launch_jobs]' -e ./third_party/stable-baselines3 -e ./third_party/gym-sokoban \
     && rm -rf "${HOME}/.cache" "./dist" \
     # Run Pyright so its Node.js package gets installed
