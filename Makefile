@@ -1,6 +1,7 @@
 APPLICATION_NAME ?= lp-cleanba
 APPLICATION_URL ?= ghcr.io/alignmentresearch/${APPLICATION_NAME}
 DOCKERFILE ?= Dockerfile
+SHELL ?= /bin/bash
 
 export APPLICATION_NAME
 export APPLICATION_URL
@@ -50,10 +51,10 @@ push-%: build-%
 
 release: release-${BASE_TAG}-${DEFAULT_TARGET}
 
-.PHONY: release-%
-release-%: push-%
-	echo docker tag "${APPLICATION_URL}:$*" "${APPLICATION_URL}:${*##*-}${RELEASE_TAG}
-	echo docker push "${APPLICATION_URL}:${RELEASE_TAG}"
+.PHONY: release-%-main
+release-%-main: push-%-main
+	docker tag "${APPLICATION_URL}:$*-main" ${APPLICATION_URL}:${RELEASE_TAG}-main
+	docker push "${APPLICATION_URL}:${RELEASE_TAG}-main"
 
 .PHONY: devbox devbox-%
 devbox: devbox-${DEFAULT_TARGET}
