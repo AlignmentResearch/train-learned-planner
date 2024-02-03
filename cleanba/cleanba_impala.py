@@ -7,6 +7,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, List, NamedTuple, Optional, Sequence
@@ -161,16 +162,14 @@ def make_env(env_id, seed, num_envs):
     def thunk():
         envs = envpool.make(
             env_id,
-            env_type="gym",
+            env_type="gymnasium",
             num_envs=num_envs,
             seed=seed,
-            px_scale=4,
+            dim_room=10,
             reward_finished=10.0,
             reward_box=1.0,
             reward_step=-0.1,
-            cache_path="/training",
-            split="train",
-            difficulty="unfiltered",
+            levels_dir="/training/.sokoban_cache/boxoban-levels-master/unfiltered/train",
         )
         envs.num_envs = num_envs
         envs.single_action_space = envs.action_space
@@ -297,9 +296,9 @@ def rollout(
 
     # put data in the last index
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_returns = []
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_lengths = []
     envs.async_reset()
 
     params_queue_get_time = deque(maxlen=10)
@@ -344,9 +343,10 @@ def rollout(
         rollout_time_start = time.time()
         for _ in range(1, num_steps_with_bootstrap):
             env_recv_time_start = time.time()
-            next_obs, next_reward, next_done, info = envs.recv()
+            next_obs, next_reward, terminated, truncated, info = envs.recv()
+            dones = terminated | truncated
             env_recv_time += time.time() - env_recv_time_start
-            global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * args.world_size
+            global_step += len(dones) * args.num_actor_threads * len_actor_device_ids * args.world_size
             env_id = info["env_id"]
 
             inference_time_start = time.time()
@@ -361,40 +361,28 @@ def rollout(
             env_send_time += time.time() - env_send_time_start
             storage_time_start = time.time()
 
-            # info["TimeLimit.truncated"] has a bug https://github.com/sail-sg/envpool/issues/239
-            # so we use our own truncated flag
-            truncated = info["elapsed_step"] >= envs.spec.config.max_episode_steps
             storage.append(
                 Transition(
                     obs=next_obs,
-                    dones=next_done,
+                    dones=dones,
                     actions=action,
                     logitss=logits,
                     env_ids=env_id,
                     rewards=next_reward,
                     truncations=truncated,
-                    terminations=info["terminated"],
+                    terminations=terminated,
                     firststeps=info["elapsed_step"] == 0,
                 )
             )
-            episode_returns[env_id] += info["reward"]
-            returned_episode_returns[env_id] = np.where(
-                info["terminated"] + truncated,
-                episode_returns[env_id],
-                returned_episode_returns[env_id],
-            )
-            episode_returns[env_id] *= (1 - info["terminated"]) * (1 - truncated)
+            returned_episode_returns.extend(episode_returns[dones])
+            episode_returns[env_id] += next_reward
+            episode_returns[env_id] *= ~dones
+            returned_episode_lengths.extend(episode_lengths[dones])
             episode_lengths[env_id] += 1
-            returned_episode_lengths[env_id] = np.where(
-                info["terminated"] + truncated,
-                episode_lengths[env_id],
-                returned_episode_lengths[env_id],
-            )
-            episode_lengths[env_id] *= (1 - info["terminated"]) * (1 - truncated)
+            episode_lengths[env_id] *= ~dones
             storage_time += time.time() - storage_time_start
         rollout_time.append(time.time() - rollout_time_start)
 
-        avg_episodic_return = np.mean(returned_episode_returns)
         partitioned_storage = prepare_data(storage)
         sharded_storage = Transition(
             *list(
@@ -419,12 +407,12 @@ def rollout(
         # move bootstrapping step to the beginning of the next update
         storage = storage[-1:]
 
-        if update % args.log_frequency == 0:
-            if device_thread_id == 0:
-                print(
-                    f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
-                )
-                print("SPS:", int(global_step / (time.time() - start_time)))
+        if device_thread_id == 0 and update % args.log_frequency == 0:
+            avg_episodic_return = np.mean(returned_episode_returns)
+            print(
+                f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
+            )
+            print("SPS:", int(global_step / (time.time() - start_time)))
             writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
             writer.add_scalar("stats/rollout_time", np.mean(rollout_time), global_step)
             writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
@@ -613,11 +601,19 @@ if __name__ == "__main__":
         discounts = discounts[:-1]
 
         rhos = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a)
-        vtrace_td_error_and_advantage = jax.vmap(rlax.vtrace_td_error_and_advantage, in_axes=1, out_axes=1)
-
-        vtrace_returns = vtrace_td_error_and_advantage(
-            v_tm1, v_t, rewards, discounts, rhos, alpha=1.0, lambda_=0.95, clip_rho_threshold=1.0, clip_pg_rho_threshold=1.0
+        vtrace_td_error_and_advantage = jax.vmap(
+            partial(
+                rlax.vtrace_td_error_and_advantage,
+                lambda_=0.95,
+                clip_rho_threshold=1.0,
+                clip_pg_rho_threshold=1.0,
+                stop_target_gradients=True,
+            ),
+            in_axes=1,
+            out_axes=1,
         )
+
+        vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, rewards, discounts, rhos)
         pg_advs = vtrace_returns.pg_advantage
         pg_loss = policy_gradient_loss(policy_logits, a, pg_advs, mask)
 

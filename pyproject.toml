@@ -19,6 +19,7 @@ testpaths = ["tests"]  # ignore third_party dir for now
 exclude = [
     "wandb/**",  # Saved old codes
     "third_party/**",  # Other libraries
+    "legacy_scripts/**",
 ]
 
 [project]

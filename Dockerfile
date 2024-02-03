@@ -1,7 +1,6 @@
-ARG CUDA_VERSION=12.2.2-cudnn8
-ARG CUDA_BASE=ubuntu22.04
+ARG CUDA_BASE_TAG=12.2.2-cudnn8-devel-ubuntu22.04
 
-FROM nvidia/cuda:${CUDA_VERSION}-devel-${CUDA_BASE} as envpool-environment
+FROM nvidia/cuda:${CUDA_BASE_TAG} as envpool-environment
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y golang-1.18 git python3-dev \
@@ -26,7 +25,7 @@ RUN echo "$(git status --porcelain --ignored=traditional)" \
 
 RUN make bazel-release
 
-FROM nvidia/cuda:${CUDA_VERSION}-runtime-${CUDA_BASE} as jax
+FROM nvidia/cuda:${CUDA_BASE_TAG} as jax
 
 ARG APPLICATION_NAME
 ARG USERID=1001
