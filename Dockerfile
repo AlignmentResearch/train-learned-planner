@@ -1,31 +1,48 @@
-ARG CUDA_BASE_TAG=12.2.2-cudnn8-devel-ubuntu22.04
+ARG JAX_DATE=2024-04-08
 
-FROM nvidia/cuda:${CUDA_BASE_TAG} as envpool-environment
+FROM ghcr.io/nvidia/jax:base-${JAX_DATE} as envpool-environment
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y golang-1.18 git python3-dev \
+    && apt-get install -y golang-1.18 git \
+    # Linters
+      clang-format clang-tidy \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PATH=/usr/lib/go-1.18/bin:/root/go/bin:$PATH
 RUN go install github.com/bazelbuild/bazelisk@v1.19.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
 RUN go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
+# Install Go linting tools
+RUN go install github.com/google/addlicense@v1.1.1
 
 ENV USE_BAZEL_VERSION=6.4.0
 RUN bazel version
+
 WORKDIR /app
+# Install python-based linting dependencies
+COPY third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
+    third_party/pip_requirements/requirements-devtools.txt
+RUN pip install -r third_party/pip_requirements/requirements-devtools.txt
 
-FROM envpool-environment as envpool
-
+# Copy the whole repository
 COPY third_party/envpool .
+
+# Deal with the fact that envpool is a submodule and has no .git directory
+RUN rm .git
+# Copy the .git repository for this submodule
+COPY .git/modules/envpool ./.git
+# Remove config line stating that the worktree for this repo is elsewhere
+RUN sed -e 's/^.*worktree =.*$//' .git/config > .git/config.new && mv .git/config.new .git/config
+
 # Abort if repo is dirty
 RUN echo "$(git status --porcelain --ignored=traditional)" \
     && if ! { [ -z "$(git status --porcelain --ignored=traditional)" ] \
     ; }; then exit 1; fi
 
+FROM envpool-environment as envpool
 RUN make bazel-release
 
-FROM nvidia/cuda:${CUDA_BASE_TAG} as jax
+FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} as main-pre-pip
 
 ARG APPLICATION_NAME
 ARG USERID=1001
@@ -39,12 +56,9 @@ MAINTAINER Adrià Garriga-Alonso <adria@far.ai>
 LABEL org.opencontainers.image.source=${GIT_URL}
 
 RUN apt-get update -q \
-    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
-    # essential for running. GCC is for Torch triton
-    git git-lfs tini build-essential python3-dev python3-venv cuda-cupti-12-2 \
-    # essential for testing
-    libgl-dev libglib2.0-0 zip make \
+    # essential for running.
+    git git-lfs tini python3-dev python3-venv \
     # devbox niceties
     curl vim tmux less sudo \
     # CircleCI
@@ -54,8 +68,6 @@ RUN apt-get update -q \
 
 # Tini: reaps zombie processes and forwards signals
 ENTRYPOINT ["/usr/bin/tini", "--"]
-# Default command to run -- may be changed at runtime
-CMD ["/bin/bash"]
 
 # Simulate virtualenv activation
 ENV VIRTUAL_ENV="/opt/venv"
@@ -71,24 +83,21 @@ RUN python3 -m venv "${VIRTUAL_ENV}" --system-site-packages \
 USER ${USERNAME}
 WORKDIR "/workspace"
 
-# Install the main dependency, Jax, and upgrade Pip
-RUN pip install "pip==23.3.2" "jax[cuda12_local]==0.4.23" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html \
-    && rm -rf "${HOME}/.cache"
+# Get a pip modern enough that can resolve farconf
+RUN pip install "pip ==24.0" && rm -rf "${HOME}/.cache"
 
-FROM jax as main
+FROM main-pre-pip as main-pip-tools
+RUN pip install "pip-tools ~=7.4.1"
 
-# Copy package installation instructions and version.txt files
-COPY --chown=${USERNAME}:${USERNAME} pyproject.toml ./
-
-# Install content-less packages and their dependencies
-RUN mkdir cleanba cleanrl_utils \
-    && touch cleanba/__init__.py cleanrl_utils/__init__.py \
-    && pip install --require-virtualenv --config-settings editable_mode=compat -e '.[dev,launch-jobs]' \
-    && rm -rf "${HOME}/.cache" "./dist" \
+FROM main-pre-pip as main
+COPY --chown=${USERNAME}:${USERNAME} requirements.txt ./
+# Install all dependencies, which should be explicit in `requirements.txt`
+RUN pip install --no-deps -r requirements.txt \
+    && rm -rf "${HOME}/.cache" \
     # Run Pyright so its Node.js package gets installed
     && pyright .
 
-# Install Envpool -- which we compile, so it changes more often than the base deps
+# Install Envpool
 ENV ENVPOOL_WHEEL="dist/envpool-0.8.4-cp310-cp310-linux_x86_64.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "./${ENVPOOL_WHEEL}"
 RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
