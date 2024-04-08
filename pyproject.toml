@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
 [tool.ruff.format]
 exclude = ["third_party"]
 
@@ -5,12 +9,16 @@ exclude = ["third_party"]
 line-length = 127
 target-version = "py310"
 exclude = [
-    "third_party/envpool",
-    "legacy_scripts",
+    "third_party",
+    "cleanba/legacy_scripts",
 ]
 
-[tool.ruff.lint.isort]
+[tool.ruff.isort]
 known-third-party = ["wandb"]
+
+[tool.ruff.lint]
+# Enable the isort rules.
+extend-select = ["I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # ignore third_party dir for now
@@ -19,7 +27,7 @@ testpaths = ["tests"]  # ignore third_party dir for now
 exclude = [
     "wandb/**",  # Saved old codes
     "third_party/**",  # Other libraries
-    "legacy_scripts/**",
+    "cleanba/legacy_scripts/**",
 ]
 
 [project]
@@ -62,8 +70,3 @@ launch-jobs = [
 
 [tool.setuptools]
 packages = ["cleanba", "cleanrl_utils"]
-
-
-[build-system]
-requires = ["setuptools"]
-build-backend = "setuptools.build_meta"

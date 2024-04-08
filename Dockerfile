@@ -104,6 +104,7 @@ RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
 
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
+RUN pip install --no-deps -e .
 
 # Set git remote URL to https for all sub-repos
 RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" \

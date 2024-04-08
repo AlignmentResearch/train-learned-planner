@@ -6,9 +6,9 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from functools import partial
 from types import SimpleNamespace
 from typing import List, NamedTuple, Optional, Sequence
-from functools import partial
 
 import envpool
 import flax
