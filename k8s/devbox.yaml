@@ -21,7 +21,7 @@ spec:
           claimName: devbox-storage
       - name: training
         persistentVolumeClaim:
-          claimName: lp-training-storage
+          claimName: learned-planners
       containers:
       - name: devbox-container
         image: "{IMAGE}"
