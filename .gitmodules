@@ -1,3 +1,6 @@
 [submodule "envpool"]
 	path = third_party/envpool
 	url = https://github.com/alignmentresearch/envpool.git
+[submodule "third_party/gym-sokoban"]
+	path = third_party/gym-sokoban
+	url = https://github.com/AlignmentResearch/gym-sokoban
