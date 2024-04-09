@@ -19,6 +19,10 @@ spec:
       - name: training
         persistentVolumeClaim:
           claimName: learned-planners
+      - name: dotfiles
+        configMap:
+          name: dotfiles
+
       containers:
       - name: devbox-container
         image: "{IMAGE}"
@@ -61,6 +65,10 @@ spec:
         volumeMounts:
         - name: training
           mountPath: /training
+        - name: dotfiles
+          mountPath: /home/dev/.tmux.conf
+          subPath: tmux.conf
+
       restartPolicy: Never
       imagePullSecrets:
       - name: docker

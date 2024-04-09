@@ -69,13 +69,6 @@ RUN apt-get update -q \
 # Tini: reaps zombie processes and forwards signals
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Devbox nicety: unison
-WORKDIR "/unison"
-RUN curl -OL https://github.com/bcpierce00/unison/releases/download/v2.53.4/unison-2.53.4-ubuntu-x86_64-static.tar.gz \
-    && tar xf unison-2.53.4-ubuntu-x86_64-static.tar.gz \
-    && mv bin/unison /usr/local/bin/unison \
-    && rm -rf /unison
-
 # Simulate virtualenv activation
 ENV VIRTUAL_ENV="/opt/venv"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
@@ -108,6 +101,16 @@ RUN pip install --no-deps -r requirements.txt \
 ENV ENVPOOL_WHEEL="dist/envpool-0.8.4-cp310-cp310-linux_x86_64.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "./${ENVPOOL_WHEEL}"
 RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
+
+# Devbox niceties
+WORKDIR "/devbox-niceties"
+## the Unison file synchronizer
+RUN curl -OL https://github.com/bcpierce00/unison/releases/download/v2.53.4/unison-2.53.4-ubuntu-x86_64-static.tar.gz \
+    && tar xf unison-2.53.4-ubuntu-x86_64-static.tar.gz \
+    && sudo mv bin/unison bin/unison-fsmonitor /usr/local/bin/ \
+    && sudo rm -rf /devbox-niceties \
+## Terminfo for the Alacritty terminal
+    && curl -L https://raw.githubusercontent.com/alacritty/alacritty/master/extra/alacritty.info | sudo tic -x /dev/stdin
 
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
