@@ -111,7 +111,7 @@ RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
 
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
-RUN pip install --no-deps -e .
+RUN pip install --no-deps -e . -e ./third_party/gym-sokoban/
 
 # Set git remote URL to https for all sub-repos
 RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" \
@@ -120,6 +120,8 @@ RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.c
 # Abort if repo is dirty
 RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && echo "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
+    && echo "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && if ! { [ -z "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     && [ -z "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
+    && [ -z "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     ; }; then exit 1; fi

@@ -8,7 +8,7 @@ wandb
 videos
 runs
 # Byte-compiled / optimized / DLL files
-__pycache__/
+**/__pycache__
 *.py[cod]
 *$py.class
 
@@ -141,3 +141,4 @@ dmypy.json
 .ruff_cache
 
 requirements.txt.new
+envpool
