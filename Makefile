@@ -9,7 +9,7 @@ export DOCKERFILE
 COMMIT_FULL ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
 
-default: release/main release/envpool-ci
+default: release/main
 
 # Section 1: Build Dockerfiles
 ## Release tag or latest if not a release
