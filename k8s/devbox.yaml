@@ -16,9 +16,6 @@ spec:
         runAsGroup: {GROUP_ID}
       priorityClassName: interactive
       volumes:
-      - name: working-storage
-        persistentVolumeClaim:
-          claimName: devbox-storage
       - name: training
         persistentVolumeClaim:
           claimName: learned-planners
@@ -62,8 +59,6 @@ spec:
         - name: GIT_CONFIG_PARAMETERS
           value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
         volumeMounts:
-        - name: working-storage
-          mountPath: /home/dev
         - name: training
           mountPath: /training
       restartPolicy: Never

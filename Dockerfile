@@ -69,6 +69,13 @@ RUN apt-get update -q \
 # Tini: reaps zombie processes and forwards signals
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# Devbox nicety: unison
+WORKDIR "/unison"
+RUN curl -OL https://github.com/bcpierce00/unison/releases/download/v2.53.4/unison-2.53.4-ubuntu-x86_64-static.tar.gz \
+    && tar xf unison-2.53.4-ubuntu-x86_64-static.tar.gz \
+    && mv bin/unison /usr/local/bin/unison \
+    && rm -rf /unison
+
 # Simulate virtualenv activation
 ENV VIRTUAL_ENV="/opt/venv"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
