@@ -1,7 +1,6 @@
 import os
 from typing import Callable
 
-import cv2
 import flax
 import flax.linen as nn
 import jax
@@ -61,14 +60,14 @@ def evaluate(
         if capture_video:
             recorded_frames = []
             # conversion from grayscale into rgb
-            recorded_frames.append(cv2.cvtColor(next_obs[0][-1], cv2.COLOR_GRAY2RGB))
+            recorded_frames.append(next_obs[0][-1])
         for _ in range(envs.spec.config.max_episode_steps):
             actions, key = get_action_and_value(network_params, actor_params, next_obs, key)
             next_obs, _, _, infos = envs.step(np.array(actions))
             episodic_return += infos["reward"][0]
             done = sum(infos["terminated"]) + sum(infos["TimeLimit.truncated"]) >= 1
             if capture_video and episode == 0:
-                recorded_frames.append(cv2.cvtColor(next_obs[0][-1], cv2.COLOR_GRAY2RGB))
+                recorded_frames.append(next_obs[0][-1])
             if done:
                 break
 
