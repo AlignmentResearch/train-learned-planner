@@ -64,7 +64,7 @@ class WandbWriter:
 
             wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
 
-        run_dir = Path("/training") / "cleanba" / wandb_kwargs["group"]
+        run_dir = args.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
         cfg_dict = farconf.to_dict(cfg, Args)
         assert isinstance(cfg_dict, dict)
@@ -113,6 +113,8 @@ class Args:
 
     save_model: bool = True  # whether to save model into the wandb run folder
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
+
+    base_run_dir: Path = Path("/tmp/cleanba")
 
     # Algorithm specific arguments
     total_timesteps: int = 50000000  # total timesteps of the experiments
