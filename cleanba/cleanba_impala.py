@@ -102,7 +102,6 @@ class Args:
     eval_frequency: int = 10  # How often to evaluate and maybe save the model
 
     # Algorithm specific arguments
-    env_id: str = "Sokoban-v0"  # the id of the environment"
     total_timesteps: int = 50000000  # total timesteps of the experiments"
     learning_rate: float = 0.0006  # the learning rate of the optimizer"
     local_num_envs: int = 64  # the number of parallel game environments"
