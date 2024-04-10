@@ -84,43 +84,43 @@ class WandbWriter:
 
 @dataclasses.dataclass
 class Args:
-    env: EnvConfig = dataclasses.field(
+    train_env: EnvConfig = dataclasses.field(  # Environment to do training, including seed
         default_factory=lambda: SokobanConfig(
             max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
         )
     )
-    eval_envs: dict[str, EvalConfig] = dataclasses.field(
+    eval_envs: dict[str, EvalConfig] = dataclasses.field(  # How to evaluate the algorithm? Including envs and seeds
         default_factory=lambda: dict(
             eval=EvalConfig(SokobanConfig(max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1))
         )
     )
-
-    seed: int = dataclasses.field(default_factory=random_seed)  # the entity (team) of wandb's project"
-    capture_video: bool = False  # whether to capture videos of the agent performances (check out `videos` folder)"
-    save_model: bool = False  # whether to save model into the wandb run folder"
-    log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
     eval_frequency: int = 10  # How often to evaluate and maybe save the model
 
-    # Algorithm specific arguments
-    total_timesteps: int = 50000000  # total timesteps of the experiments"
-    learning_rate: float = 0.0006  # the learning rate of the optimizer"
-    local_num_envs: int = 64  # the number of parallel game environments"
-    num_actor_threads: int = 2  # the number of actor threads to use"
-    num_steps: int = 20  # the number of steps to run in each environment per policy rollout"
-    anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks"
-    gamma: float = 0.99  # the discount factor gamma"
-    num_minibatches: int = 4  # the number of mini-batches"
-    gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step"
-    ent_coef: float = 0.01  # coefficient of the entropy"
-    vf_coef: float = 0.5  # coefficient of the value function"
-    max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping"
-    channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN"
-    hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP"
+    seed: int = dataclasses.field(default_factory=random_seed)  # A seed to make the experiment deterministic
 
-    actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use"
-    learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use"
-    distributed: bool = False  # whether to use `jax.distributed`"
-    concurrency: bool = True  # whether to run the actor and learner concurrently"
+    save_model: bool = True  # whether to save model into the wandb run folder
+    log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
+
+    # Algorithm specific arguments
+    total_timesteps: int = 50000000  # total timesteps of the experiments
+    learning_rate: float = 0.0006  # the learning rate of the optimizer
+    local_num_envs: int = 64  # the number of parallel game environments for every actor device
+    num_actor_threads: int = 2  # the number of actor threads to use
+    num_steps: int = 20  # the number of steps to run in each environment per policy rollout
+    anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
+    gamma: float = 0.99  # the discount factor gamma
+    num_minibatches: int = 4  # the number of mini-batches
+    gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
+    ent_coef: float = 0.01  # coefficient of the entropy
+    vf_coef: float = 0.5  # coefficient of the value function
+    max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
+    channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN
+    hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
+
+    actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use
+    learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
+    distributed: bool = False  # whether to use `jax.distributed`
+    concurrency: bool = True  # whether to run the actor and learner concurrently
 
     # runtime arguments to be filled in
     local_batch_size: int = 0
@@ -228,8 +228,8 @@ def rollout(
     actor_device,
 ):
     envs = dataclasses.replace(
-        args.env,
-        seed=args.env.seed + jax.process_index() + device_thread_id,
+        args.train_env,
+        seed=args.train_env.seed + jax.process_index() + device_thread_id,
         num_envs=args.local_num_envs,
     ).make()
 
@@ -462,7 +462,7 @@ if __name__ == "__main__":
     learner_keys = jax.device_put_replicated(key, args.learner_devices)
 
     # env setup
-    envs = dataclasses.replace(args.env, num_envs=args.local_num_envs).make()
+    envs = dataclasses.replace(args.train_env, num_envs=args.local_num_envs).make()
 
     def linear_schedule(count):
         # anneal learning rate linearly after one training iteration which contains
