@@ -606,7 +606,7 @@ if __name__ == "__main__":
             rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, logits_t, a_t)
 
             mask_t = mask_t[:-1]
-            r_tm1 = r_tm1[1:]
+            r_tm1 = r_tm1[:-1]
             discount_tm1 = discount_tm1[:-1]
             vtrace_td_error_and_advantage = jax.vmap(
                 partial(
