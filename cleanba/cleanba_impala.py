@@ -294,14 +294,13 @@ class AgentParams:
 
 
 class Transition(NamedTuple):
-    obs: list
-    dones: list
-    actions: list
-    logitss: list
-    rewards: list
-    truncations: list
-    terminations: list
-    firststeps: list  # first step of an episode
+    obs_t: jax.Array
+    done_tm1: jax.Array
+    a_t: jax.Array
+    logits_t: jax.Array
+    r_tm1: jax.Array
+    trunc_tm1: jax.Array
+    term_tm1: jax.Array
 
 
 MUST_STOP_PROGRAM: bool = False
@@ -330,10 +329,9 @@ def rollout(
     @jax.jit
     def get_action(
         params: flax.core.FrozenDict,
-        next_obs: np.ndarray,
-        key: jax.random.PRNGKey,
+        next_obs: jax.Array,
+        key: jax.Array,
     ):
-        next_obs = jnp.array(next_obs)
         hidden = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
         logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
         # sample action: Gumbel-softmax trick
@@ -398,17 +396,17 @@ def rollout(
         rollout_time_start = time.time()
         for _ in range(1, num_steps_with_bootstrap):
             env_recv_time_start = time.time()
-            next_obs, next_reward, terminated, truncated, info = envs.step_wait()
-            dones = terminated | truncated
+            obs_t, r_tm1, term_tm1, trunc_tm1, info = envs.step_wait()
+            done_tm1 = term_tm1 | trunc_tm1
             env_recv_time += time.time() - env_recv_time_start
-            global_step += len(dones) * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
+            global_step += len(done_tm1) * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
 
             inference_time_start = time.time()
-            next_obs, action, logits, key = get_action(params, next_obs, key)
+            obs_t, a_t, logits_t, key = get_action(params, obs_t, key)
             inference_time += time.time() - inference_time_start
 
             d2h_time_start = time.time()
-            cpu_action = np.array(action)
+            cpu_action = np.array(a_t)
             d2h_time += time.time() - d2h_time_start
             env_send_time_start = time.time()
             envs.step_async(cpu_action)
@@ -417,22 +415,21 @@ def rollout(
 
             storage.append(
                 Transition(
-                    obs=next_obs,
-                    dones=dones,
-                    actions=action,
-                    logitss=logits,
-                    rewards=next_reward,
-                    truncations=truncated,
-                    terminations=terminated,
-                    firststeps=dones,
+                    obs_t=obs_t,
+                    done_tm1=done_tm1,
+                    a_t=a_t,
+                    logits_t=logits_t,
+                    r_tm1=r_tm1,
+                    trunc_tm1=trunc_tm1,
+                    term_tm1=term_tm1,
                 )
             )
-            returned_episode_returns.extend(episode_returns[dones])
-            episode_returns[:] += next_reward
-            episode_returns[:] *= ~dones
-            returned_episode_lengths.extend(episode_lengths[dones])
+            returned_episode_returns.extend(episode_returns[done_tm1])
+            episode_returns[:] += r_tm1
+            episode_returns[:] *= ~done_tm1
+            returned_episode_lengths.extend(episode_lengths[done_tm1])
             episode_lengths[:] += 1
-            episode_lengths[:] *= ~dones
+            episode_lengths[:] *= ~done_tm1
             storage_time += time.time() - storage_time_start
         rollout_time.append(time.time() - rollout_time_start)
 
@@ -592,22 +589,25 @@ if __name__ == "__main__":
             total_loss_per_batch = mean_per_batch * logits.shape[0]
             return jnp.sum(total_loss_per_batch)
 
-        def impala_loss(params, x, a, logitss, rewards, dones, firststeps):
-            discounts = (1.0 - dones) * args.gamma
-            mask = 1.0 - firststeps
-            policy_logits, newvalue = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, x)
+        def impala_loss(params, obs_t, a_t, logits_t, r_tm1, done_tm1):
+            discount_tm1 = (~done_tm1) * args.gamma
+            firststeps_t = done_tm1
+            mask_t = ~firststeps_t
 
-            v_t = newvalue[1:]
+            logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, obs_t)
+
+            v_t = value_to_update[1:]
             # Remove bootstrap timestep from non-timesteps.
-            v_tm1 = newvalue[:-1]
-            policy_logits = policy_logits[:-1]
-            logitss = logitss[:-1]
-            a = a[:-1]
-            mask = mask[:-1]
-            rewards = rewards[:-1]
-            discounts = discounts[:-1]
+            v_tm1 = value_to_update[:-1]
 
-            rhos = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a)
+            logits_to_update = logits_to_update[:-1]
+            logits_t = logits_t[:-1]
+            a_t = a_t[:-1]
+            rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, logits_t, a_t)
+
+            mask_t = mask_t[:-1]
+            r_tm1 = r_tm1[1:]
+            discount_tm1 = discount_tm1[:-1]
             vtrace_td_error_and_advantage = jax.vmap(
                 partial(
                     rlax.vtrace_td_error_and_advantage,
@@ -620,12 +620,23 @@ if __name__ == "__main__":
                 out_axes=1,
             )
 
-            vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, rewards, discounts, rhos)
-            pg_advs = vtrace_returns.pg_advantage
-            pg_loss = policy_gradient_loss(policy_logits, a, pg_advs, mask)
+            """
+            Some of these arguments are misnamed in `vtrace_td_error_and_advantage`:
 
-            baseline_loss = 0.5 * jnp.sum(jnp.square(vtrace_returns.errors) * mask)
-            ent_loss = entropy_loss_fn(policy_logits, mask)
+            The argument `r_t` is paired with `v_t` and `v_tm1` to compute the TD error. But that's not the equation of
+            the TD error, it is:
+
+                 td(t) = r_t + gamma_t*V(x_{t+1}) - V(x_{t})
+
+            So arguably instead of r_t and discount_t, they should be r_tm1 and discount_tm1. And that's what we name
+            them here.
+            """
+            vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_tm1, discount_tm1, rhos_tm1)
+            pg_advs = vtrace_returns.pg_advantage
+            pg_loss = policy_gradient_loss(logits_to_update, a_t, pg_advs, mask_t)
+
+            baseline_loss = 0.5 * jnp.sum(jnp.square(vtrace_returns.errors) * mask_t)
+            ent_loss = entropy_loss_fn(logits_to_update, mask_t)
 
             total_loss = pg_loss
             total_loss += args.vf_coef * baseline_loss
@@ -648,7 +659,6 @@ if __name__ == "__main__":
                     mb_logitss,
                     mb_rewards,
                     mb_dones,
-                    mb_firststeps,
                 ) = minibatch
                 (loss, (pg_loss, v_loss, entropy_loss)), grads = impala_loss_grad_fn(
                     agent_state.params,
@@ -657,7 +667,6 @@ if __name__ == "__main__":
                     mb_logitss,
                     mb_rewards,
                     mb_dones,
-                    mb_firststeps,
                 )
                 grads = jax.lax.pmean(grads, axis_name="local_devices")
                 agent_state = agent_state.apply_gradients(grads=grads)
@@ -669,42 +678,35 @@ if __name__ == "__main__":
                 (
                     jnp.array(
                         jnp.split(
-                            storage.obs,
+                            storage.obs_t,
                             args.num_minibatches * args.gradient_accumulation_steps,
                             axis=1,
                         )
                     ),
                     jnp.array(
                         jnp.split(
-                            storage.actions,
+                            storage.a_t,
                             args.num_minibatches * args.gradient_accumulation_steps,
                             axis=1,
                         )
                     ),
                     jnp.array(
                         jnp.split(
-                            storage.logitss,
+                            storage.logits_t,
                             args.num_minibatches * args.gradient_accumulation_steps,
                             axis=1,
                         )
                     ),
                     jnp.array(
                         jnp.split(
-                            storage.rewards,
+                            storage.r_tm1,
                             args.num_minibatches * args.gradient_accumulation_steps,
                             axis=1,
                         )
                     ),
                     jnp.array(
                         jnp.split(
-                            storage.dones,
-                            args.num_minibatches * args.gradient_accumulation_steps,
-                            axis=1,
-                        )
-                    ),
-                    jnp.array(
-                        jnp.split(
-                            storage.firststeps,
+                            storage.done_tm1,
                             args.num_minibatches * args.gradient_accumulation_steps,
                             axis=1,
                         )
