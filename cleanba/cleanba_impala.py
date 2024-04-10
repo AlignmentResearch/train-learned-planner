@@ -293,7 +293,7 @@ def rollout(
             actor_policy_version += 1
         params_queue_get_time.append(time.time() - params_queue_get_time_start)
         rollout_time_start = time.time()
-        for step_idx in range(1, num_steps_with_bootstrap):
+        for _ in range(1, num_steps_with_bootstrap):
             env_recv_time_start = time.time()
             next_obs, next_reward, terminated, truncated, info = envs.step_wait()
             dones = terminated | truncated
