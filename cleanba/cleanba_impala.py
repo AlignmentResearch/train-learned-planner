@@ -6,6 +6,7 @@ import random
 import sys
 import threading
 import time
+import warnings
 from collections import deque
 from dataclasses import field
 from functools import partial
@@ -205,6 +206,8 @@ def initialize_multi_device(args: Args) -> Iterator[RuntimeInformation]:
         learner_devices=learner_devices,
     )
 
+    global MUST_STOP_PROGRAM
+    MUST_STOP_PROGRAM = True
     if distributed:
         jax.distributed.shutdown()
 
@@ -286,6 +289,9 @@ class Transition(NamedTuple):
     firststeps: list  # first step of an episode
 
 
+MUST_STOP_PROGRAM: bool = False
+
+
 def rollout(
     key: jax.random.PRNGKey,
     args: Args,
@@ -341,7 +347,11 @@ def rollout(
     def prepare_data(storage: List[Transition]) -> Transition:
         return jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
-    for update in range(1, args.num_updates + 2):
+    global MUST_STOP_PROGRAM
+    for update in range(1, runtime_info.num_updates + 2):
+        if MUST_STOP_PROGRAM:
+            break
+
         update_time_start = time.time()
         env_recv_time = 0
         inference_time = 0
@@ -376,7 +386,7 @@ def rollout(
             next_obs, next_reward, terminated, truncated, info = envs.step_wait()
             dones = terminated | truncated
             env_recv_time += time.time() - env_recv_time_start
-            global_step += len(dones) * args.num_actor_threads * len_actor_device_ids * args.world_size
+            global_step += len(dones) * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
 
             inference_time_start = time.time()
             next_obs, action, logits, key = get_action(params, next_obs, key)
@@ -482,8 +492,10 @@ def rollout(
 if __name__ == "__main__":
     args = farconf.parse_cli(["--from-py-fn=cleanba.cleanba_impala:Args"] + sys.argv[1:], Args)
     pprint(args)
-    train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
 
+    warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
+
+    train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
     with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
         writer = WandbWriter(args)
 
@@ -727,6 +739,10 @@ if __name__ == "__main__":
         data_transfer_time = deque(maxlen=10)
         learner_policy_version = 0
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.learner_devices)
+
+        global_step = 0
+        actor_policy_version = 0
+
         while True:
             learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
@@ -794,7 +810,7 @@ if __name__ == "__main__":
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
                     saved_model_version: int = learner_policy_version // args.eval_frequency
-                    with open(writer.save_dir / f"{saved_model_version:03d}.model", "w") as f:
+                    with open(writer.save_dir / f"{saved_model_version:03d}.model", "wb") as f:
                         f.write(
                             flax.serialization.to_bytes(
                                 [
