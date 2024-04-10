@@ -8,6 +8,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import numpy as np
+from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
 
 from cleanba.config import random_seed
@@ -123,6 +124,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     reward_step: float = -0.1  # Reward for completing a step
 
     reset: bool = False
+    asynchronous: bool = True
 
     def env_kwargs(self) -> dict[str, Any]:
         return dict(
@@ -135,6 +137,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             terminate_on_first_box=self.terminate_on_first_box,
             reset_seed=self.seed,
             reset=self.reset,
+            asynchronous=self.asynchronous,
         )
 
     def env_reward_kwargs(self):
@@ -151,14 +154,31 @@ class BaseSokobanEnvConfig(EnvConfig):
         ...
 
 
-def transform_fn(obs):
-    print(f"{obs=}")
-    return partial(np.moveaxis, source=2, destination=0)(obs)
+class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
+    def __init__(self, env: gym.vector.VectorEnv):
+        super().__init__(env)
+        obs_space = env.single_observation_space
+        if isinstance(obs_space, gym.spaces.Box):
+            shape = (obs_space.shape[2], *obs_space.shape[:2], *obs_space.shape[3:])
+            low = obs_space.low if isinstance(obs_space.low, float) else np.moveaxis(obs_space.low, 2, 0)
+            high = obs_space.high if isinstance(obs_space.high, float) else np.moveaxis(obs_space.high, 2, 0)
+            self.single_observation_space = gym.spaces.Box(low, high, shape)
+        else:
+            raise NotImplementedError(f"{type(obs_space)=}")
 
+        self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
 
-transform_nhwc_to_nchw = partial(
-    gym.wrappers.TransformObservation, f=transform_fn
-)  # partial(np.moveaxis, source=2, destination=0))
+    def reset_wait(self, **kwargs):
+        obs, info = super().reset_wait(**kwargs)
+        return np.moveaxis(obs, 3, 1), info
+
+    def step_wait(self):
+        obs, *others = super().step_wait()
+        return (np.moveaxis(obs, 3, 1), *others)
+
+    @classmethod
+    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv]) -> gym.vector.VectorEnv:
+        return cls(fn())
 
 
 @dataclasses.dataclass
@@ -176,11 +196,15 @@ class SokobanConfig(BaseSokobanEnvConfig):
             if (a := getattr(self, k)) is not None:
                 kwargs[k] = a
         make_fn = partial(
-            gym.make_vec,
-            "Sokoban-v2",
-            wrappers=[transform_nhwc_to_nchw],
-            **kwargs,
-            **self.env_reward_kwargs(),
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                # We use `gym.vector.make` even though it is deprecated because it gives us `gym.vector.SyncVectorEnv`
+                # instead of `gym.experimental.vector.SyncVectorEnv`.
+                gym.vector.make,
+                "Sokoban-v2",
+                **kwargs,
+                **self.env_reward_kwargs(),
+            ),
         )
         return make_fn
 
@@ -203,13 +227,19 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 raise ValueError("`medium` levels don't have a `test` split")
 
         make_fn = partial(
-            gym.make_vec,
-            "Boxoban-Val-v1",
-            wrappers=[transform_nhwc_to_nchw],
-            cache_path=self.cache_path,
-            split=self.split,
-            difficulty=self.difficulty,
-            **self.env_kwargs(),
-            **self.env_reward_kwargs(),
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                # We use `gym.vector.make` even though it is deprecated because it gives us `gym.vector.SyncVectorEnv`
+                # instead of `gym.experimental.vector.SyncVectorEnv`.
+                #
+                # This makes it so we can use the gym.vector.Wrapper above
+                gym.vector.make,
+                "Boxoban-Val-v1",
+                cache_path=self.cache_path,
+                split=self.split,
+                difficulty=self.difficulty,
+                **self.env_kwargs(),
+                **self.env_reward_kwargs(),
+            ),
         )
         return make_fn
