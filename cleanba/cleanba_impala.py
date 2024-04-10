@@ -120,6 +120,24 @@ class Args:
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
+    # Loss arguments
+    gamma: float = 0.99  # the discount factor gamma
+    ent_coef: float = 0.01  # coefficient of the entropy
+    vf_coef: float = 0.5  # coefficient of the value function
+
+    # Interpolate between VTrace (1.0) and monte-carlo function (0.0) estimates, for the estimate of targets, used in
+    # both the value and policy losses. It's the parameter in Remark 2 of Espeholt et al.
+    # (https://arxiv.org/pdf/1802.01561.pdf)
+    vtrace_lambda: float = 0.95
+
+    # Maximum importance ratio for the VTrace value estimates. This is \overline{rho} in eq. 1 of Espeholt et al.
+    # (https://arxiv.org/pdf/1802.01561.pdf). \overline{c} is hardcoded to 1 in rlax.
+    clip_rho_threshold: float = 1.0
+
+    # Maximum importance ratio for policy gradient outputs. Clips the importanc ratio in eq. 4 of Espeholt et al.
+    # (https://arxiv.org/pdf/1802.01561.pdf)
+    clip_pg_rho_threshold: float = 1.0
+
     # Algorithm specific arguments
     total_timesteps: int = 50000000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
@@ -127,11 +145,8 @@ class Args:
     num_actor_threads: int = 1  # the number of actor threads to use
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
-    gamma: float = 0.99  # the discount factor gamma
     num_minibatches: int = 1  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
-    ent_coef: float = 0.01  # coefficient of the entropy
-    vf_coef: float = 0.5  # coefficient of the value function
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
     channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
@@ -596,9 +611,9 @@ if __name__ == "__main__":
             vtrace_td_error_and_advantage = jax.vmap(
                 partial(
                     rlax.vtrace_td_error_and_advantage,
-                    lambda_=0.95,
-                    clip_rho_threshold=1.0,
-                    clip_pg_rho_threshold=1.0,
+                    lambda_=args.vtrace_lambda,
+                    clip_rho_threshold=args.clip_rho_threshold,
+                    clip_pg_rho_threshold=args.clip_pg_rho_threshold,
                     stop_target_gradients=True,
                 ),
                 in_axes=1,
