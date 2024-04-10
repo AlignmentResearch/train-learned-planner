@@ -1,4 +1,3 @@
-import dataclasses
 import os
 import queue
 import random
@@ -7,10 +6,8 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from functools import partial
-from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, List, NamedTuple, Optional, Sequence
+from typing import List, NamedTuple, Optional, Sequence
 
 import envpool
 import flax
@@ -21,54 +18,17 @@ import numpy as np
 import optax
 import rlax
 import tyro
-import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from names_generator import generate_name
 from rich.pretty import pprint
-
-from cleanba.optimizer import rmsprop_pytorch_style
+from tensorboardX import SummaryWriter
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
-os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
-
-
-class WandbWriter:
-    def __init__(self, cfg: "Args"):
-        wandb_kwargs: dict[str, Any]
-        try:
-            wandb_kwargs = dict(
-                entity=os.environ["WANDB_ENTITY"],
-                name=os.environ.get("WANDB_JOB_NAME", generate_name(style="hyphen")),
-                project=os.environ["WANDB_PROJECT"],
-                group=os.environ["WANDB_RUN_GROUP"],
-                mode=os.environ.get("WANDB_MODE", "online"),  # Default to online here
-            )
-        except KeyError:
-            # If any of the essential WANDB environment variables are missing,
-            # simply don't upload this run.
-            # It's fine to do this without giving any indication because Wandb already prints that the run is offline.
-
-            wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
-
-        run_dir = Path("/training") / "cleanba" / wandb_kwargs["group"]
-        run_dir.mkdir(parents=True, exist_ok=True)
-        wandb.init(
-            **wandb_kwargs,
-            config=cfg.to_dict(),
-            save_code=True,  # Make sure git diff is saved
-            dir=run_dir,
-            monitor_gym=False,  # Must manually log videos to wandb
-            sync_tensorboard=False,  # Manually log tensorboard
-            settings=wandb.Settings(code_dir=str(Path(__file__).parent.parent)),
-        )
-
-    def add_scalar(self, name: str, value: int | float, global_step: int):
-        wandb.log({name: value}, step=global_step)
+os.environ["TF_CUDNN DETERMINISTIC"] = "1"
 
 
 @dataclass
@@ -76,6 +36,12 @@ class Args:
     exp_name: str = os.path.basename(__file__).rstrip(".py")
     "the name of this experiment"
     seed: int = 1
+    "seed of the experiment"
+    track: bool = False
+    "if toggled, this experiment will be tracked with Weights and Biases"
+    wandb_project_name: str = "cleanRL"
+    "the wandb's project name"
+    wandb_entity: str = None
     "the entity (team) of wandb's project"
     capture_video: bool = False
     "whether to capture videos of the agent performances (check out `videos` folder)"
@@ -89,7 +55,7 @@ class Args:
     "the logging frequency of the model performance (in terms of `updates`)"
 
     # Algorithm specific arguments
-    env_id: str = "Sokoban-v0"
+    env_id: str = "Breakout-v5"
     "the id of the environment"
     total_timesteps: int = 50000000
     "total timesteps of the experiments"
@@ -115,7 +81,7 @@ class Args:
     "coefficient of the value function"
     max_grad_norm: float = 40.0
     "the maximum norm for the gradient clipping"
-    channels: List[int] = field(default_factory=lambda: [32, 32, 32])
+    channels: List[int] = field(default_factory=lambda: [16, 32, 32])
     "the channels of the CNN"
     hiddens: List[int] = field(default_factory=lambda: [256])
     "the hiddens size of the MLP"
@@ -139,12 +105,9 @@ class Args:
     batch_size: int = 0
     minibatch_size: int = 0
     num_updates: int = 0
-    global_learner_devices: Optional[List[str]] = None
+    global_learner_decices: Optional[List[str]] = None
     actor_devices: Optional[List[str]] = None
     learner_devices: Optional[List[str]] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
 
 
 ATARI_MAX_FRAMES = int(
@@ -156,14 +119,15 @@ def make_env(env_id, seed, num_envs):
     def thunk():
         envs = envpool.make(
             env_id,
-            env_type="gymnasium",
+            env_type="gym",
             num_envs=num_envs,
+            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
+            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
+            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
+            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
+            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
+            reward_clip=True,
             seed=seed,
-            dim_room=10,
-            reward_finished=10.0,
-            reward_box=1.0,
-            reward_step=-0.1,
-            levels_dir="/training/.sokoban_cache/boxoban-levels-master/unfiltered/train",
         )
         envs.num_envs = num_envs
         envs.single_action_space = envs.action_space
@@ -172,6 +136,57 @@ def make_env(env_id, seed, num_envs):
         return envs
 
     return thunk
+
+
+### RMSProp implementation for PyTorch-style RMSProp
+# see https://github.com/deepmind/optax/issues/532#issuecomment-1676371843
+# fmt: off
+import jax
+import jax.numpy as jnp
+from optax import update_moment_per_elem_norm
+from optax._src import base, combine, transform
+from optax._src.alias import ScalarOrSchedule, _scale_by_learning_rate
+from optax._src.transform import ScaleByRmsState
+
+
+def scale_by_rms_pytorch_style(
+    decay: float = 0.9,
+    eps: float = 1e-8,
+    initial_scale: float = 0.
+) -> base.GradientTransformation:
+  """See https://github.com/deepmind/optax/issues/532#issuecomment-1676371843"""
+
+  def init_fn(params):
+    nu = jax.tree_util.tree_map(
+        lambda n: jnp.full_like(n, initial_scale), params)  # second moment
+    return ScaleByRmsState(nu=nu)
+
+  def update_fn(updates, state, params=None):
+    del params
+    nu = update_moment_per_elem_norm(updates, state.nu, decay, 2)
+    updates = jax.tree_util.tree_map(
+        lambda g, n: g / (jax.lax.sqrt(n) + eps), updates, nu)
+    return updates, ScaleByRmsState(nu=nu)
+
+  return base.GradientTransformation(init_fn, update_fn)
+
+
+def rmsprop_pytorch_style(
+    learning_rate: ScalarOrSchedule,
+    decay: float = 0.9,
+    eps: float = 1e-8,
+    initial_scale: float = 0.,
+    momentum: Optional[float] = None,
+    nesterov: bool = False
+) -> base.GradientTransformation:
+  return combine.chain(
+      scale_by_rms_pytorch_style(
+          decay=decay, eps=eps, initial_scale=initial_scale),
+      _scale_by_learning_rate(learning_rate),
+      (transform.trace(decay=momentum, nesterov=nesterov)
+       if momentum is not None else base.identity())
+  )
+# fmt: on
 
 
 class ResidualBlock(nn.Module):
@@ -200,8 +215,8 @@ class ConvSequence(nn.Module):
 
 
 class Network(nn.Module):
-    channels: Sequence[int]
-    hiddens: Sequence[int]
+    channels: Sequence[int] = (16, 32, 32)
+    hiddens: Sequence[int] = (256,)
 
     @nn.compact
     def __call__(self, x):
@@ -236,9 +251,6 @@ class AgentParams:
     network_params: flax.core.FrozenDict
     actor_params: flax.core.FrozenDict
     critic_params: flax.core.FrozenDict
-
-    def __contains__(self, item):
-        return item in (f.name for f in dataclasses.fields(self))
 
 
 class Transition(NamedTuple):
@@ -290,9 +302,9 @@ def rollout(
 
     # put data in the last index
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_returns = []
+    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_lengths = []
+    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     envs.async_reset()
 
     params_queue_get_time = deque(maxlen=10)
@@ -337,10 +349,9 @@ def rollout(
         rollout_time_start = time.time()
         for _ in range(1, num_steps_with_bootstrap):
             env_recv_time_start = time.time()
-            next_obs, next_reward, terminated, truncated, info = envs.recv()
-            dones = terminated | truncated
+            next_obs, next_reward, next_done, info = envs.recv()
             env_recv_time += time.time() - env_recv_time_start
-            global_step += len(dones) * args.num_actor_threads * len_actor_device_ids * args.world_size
+            global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * args.world_size
             env_id = info["env_id"]
 
             inference_time_start = time.time()
@@ -355,36 +366,39 @@ def rollout(
             env_send_time += time.time() - env_send_time_start
             storage_time_start = time.time()
 
+            # info["TimeLimit.truncated"] has a bug https://github.com/sail-sg/envpool/issues/239
+            # so we use our own truncated flag
+            truncated = info["elapsed_step"] >= envs.spec.config.max_episode_steps
             storage.append(
                 Transition(
                     obs=next_obs,
-                    dones=dones,
+                    dones=next_done,
                     actions=action,
                     logitss=logits,
                     env_ids=env_id,
                     rewards=next_reward,
                     truncations=truncated,
-                    terminations=terminated,
+                    terminations=info["terminated"],
                     firststeps=info["elapsed_step"] == 0,
                 )
             )
-            returned_episode_returns.extend(episode_returns[dones])
-            episode_returns[env_id] += next_reward
-            episode_returns[env_id] *= ~dones
-            returned_episode_lengths.extend(episode_lengths[dones])
+            episode_returns[env_id] += info["reward"]
+            returned_episode_returns[env_id] = np.where(
+                info["terminated"] + truncated, episode_returns[env_id], returned_episode_returns[env_id]
+            )
+            episode_returns[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             episode_lengths[env_id] += 1
-            episode_lengths[env_id] *= ~dones
+            returned_episode_lengths[env_id] = np.where(
+                info["terminated"] + truncated, episode_lengths[env_id], returned_episode_lengths[env_id]
+            )
+            episode_lengths[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             storage_time += time.time() - storage_time_start
         rollout_time.append(time.time() - rollout_time_start)
 
+        avg_episodic_return = np.mean(returned_episode_returns)
         partitioned_storage = prepare_data(storage)
         sharded_storage = Transition(
-            *list(
-                map(
-                    lambda x: jax.device_put_sharded(x, devices=learner_devices),
-                    partitioned_storage,
-                )
-            )
+            *list(map(lambda x: jax.device_put_sharded(x, devices=learner_devices), partitioned_storage))
         )
         payload = (
             global_step,
@@ -401,35 +415,22 @@ def rollout(
         # move bootstrapping step to the beginning of the next update
         storage = storage[-1:]
 
-        if device_thread_id == 0 and update % args.log_frequency == 0:
-            avg_episodic_return = np.mean(returned_episode_returns)
-            print(
-                f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
-            )
-            print("SPS:", int(global_step / (time.time() - start_time)))
-            writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
+        if update % args.log_frequency == 0:
+            if device_thread_id == 0:
+                print(
+                    f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
+                )
+                print("SPS:", int(global_step / (time.time() - start_time)))
             writer.add_scalar("stats/rollout_time", np.mean(rollout_time), global_step)
             writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-            writer.add_scalar(
-                "charts/avg_episodic_length",
-                np.mean(returned_episode_lengths),
-                global_step,
-            )
-            writer.add_scalar(
-                "stats/params_queue_get_time",
-                np.mean(params_queue_get_time),
-                global_step,
-            )
+            writer.add_scalar("charts/avg_episodic_length", np.mean(returned_episode_lengths), global_step)
+            writer.add_scalar("stats/params_queue_get_time", np.mean(params_queue_get_time), global_step)
             writer.add_scalar("stats/env_recv_time", env_recv_time, global_step)
             writer.add_scalar("stats/inference_time", inference_time, global_step)
             writer.add_scalar("stats/storage_time", storage_time, global_step)
             writer.add_scalar("stats/d2h_time", d2h_time, global_step)
             writer.add_scalar("stats/env_send_time", env_send_time, global_step)
-            writer.add_scalar(
-                "stats/rollout_queue_put_time",
-                np.mean(rollout_queue_put_time),
-                global_step,
-            )
+            writer.add_scalar("stats/rollout_queue_put_time", np.mean(rollout_queue_put_time), global_step)
             writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
             writer.add_scalar(
                 "charts/SPS_update",
@@ -471,19 +472,35 @@ if __name__ == "__main__":
     global_devices = jax.devices()
     learner_devices = [local_devices[d_id] for d_id in args.learner_device_ids]
     actor_devices = [local_devices[d_id] for d_id in args.actor_device_ids]
-    global_learner_devices = [
+    global_learner_decices = [
         global_devices[d_id + process_index * len(local_devices)]
         for process_index in range(args.world_size)
         for d_id in args.learner_device_ids
     ]
-    print("global_learner_devices", global_learner_devices)
-    args.global_learner_devices = [str(item) for item in global_learner_devices]
+    print("global_learner_decices", global_learner_decices)
+    args.global_learner_decices = [str(item) for item in global_learner_decices]
     args.actor_devices = [str(item) for item in actor_devices]
     args.learner_devices = [str(item) for item in learner_devices]
     pprint(args)
 
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{uuid.uuid4()}"
-    writer = WandbWriter(args)
+    if args.track and args.local_rank == 0:
+        import wandb
+
+        wandb.init(
+            project=args.wandb_project_name,
+            entity=args.wandb_entity,
+            sync_tensorboard=True,
+            config=vars(args),
+            name=run_name,
+            monitor_gym=True,
+            save_code=True,
+        )
+    writer = SummaryWriter(f"runs/{run_name}")
+    writer.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
+    )
 
     # seeding
     random.seed(args.seed)
@@ -509,22 +526,14 @@ if __name__ == "__main__":
         apply_fn=None,
         params=AgentParams(
             network_params,
-            actor.init(
-                actor_key,
-                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-            ),
-            critic.init(
-                critic_key,
-                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-            ),
+            actor.init(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
+            critic.init(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))),
         ),
         tx=optax.MultiSteps(
             optax.chain(
                 optax.clip_by_global_norm(args.max_grad_norm),
                 optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                    eps=0.01,
-                    decay=0.99,
+                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate, eps=0.01, decay=0.99
                 ),
             ),
             every_k_schedule=args.gradient_accumulation_steps,
@@ -532,18 +541,8 @@ if __name__ == "__main__":
     )
     agent_state = flax.jax_utils.replicate(agent_state, devices=learner_devices)
     print(network.tabulate(network_key, np.array([envs.single_observation_space.sample()])))
-    print(
-        actor.tabulate(
-            actor_key,
-            network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-        )
-    )
-    print(
-        critic.tabulate(
-            critic_key,
-            network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-        )
-    )
+    print(actor.tabulate(actor_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))))
+    print(critic.tabulate(critic_key, network.apply(network_params, np.array([envs.single_observation_space.sample()]))))
 
     @jax.jit
     def get_logits_and_value(
@@ -583,17 +582,7 @@ if __name__ == "__main__":
         discounts = discounts[:-1]
 
         rhos = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a)
-        vtrace_td_error_and_advantage = jax.vmap(
-            partial(
-                rlax.vtrace_td_error_and_advantage,
-                lambda_=0.95,
-                clip_rho_threshold=1.0,
-                clip_pg_rho_threshold=1.0,
-                stop_target_gradients=True,
-            ),
-            in_axes=1,
-            out_axes=1,
-        )
+        vtrace_td_error_and_advantage = jax.vmap(rlax.vtrace_td_error_and_advantage, in_axes=1, out_axes=1)
 
         vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, rewards, discounts, rhos)
         pg_advs = vtrace_returns.pg_advantage
@@ -617,14 +606,7 @@ if __name__ == "__main__":
         impala_loss_grad_fn = jax.value_and_grad(impala_loss, has_aux=True)
 
         def update_minibatch(agent_state, minibatch):
-            (
-                mb_obs,
-                mb_actions,
-                mb_logitss,
-                mb_rewards,
-                mb_dones,
-                mb_firststeps,
-            ) = minibatch
+            mb_obs, mb_actions, mb_logitss, mb_rewards, mb_dones, mb_firststeps = minibatch
             (loss, (pg_loss, v_loss, entropy_loss)), grads = impala_loss_grad_fn(
                 agent_state.params,
                 mb_obs,
@@ -642,48 +624,12 @@ if __name__ == "__main__":
             update_minibatch,
             agent_state,
             (
-                jnp.array(
-                    jnp.split(
-                        storage.obs,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
-                jnp.array(
-                    jnp.split(
-                        storage.actions,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
-                jnp.array(
-                    jnp.split(
-                        storage.logitss,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
-                jnp.array(
-                    jnp.split(
-                        storage.rewards,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
-                jnp.array(
-                    jnp.split(
-                        storage.dones,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
-                jnp.array(
-                    jnp.split(
-                        storage.firststeps,
-                        args.num_minibatches * args.gradient_accumulation_steps,
-                        axis=1,
-                    )
-                ),
+                jnp.array(jnp.split(storage.obs, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(jnp.split(storage.actions, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(jnp.split(storage.logitss, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(jnp.split(storage.rewards, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(jnp.split(storage.dones, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
+                jnp.array(jnp.split(storage.firststeps, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
             ),
         )
         loss = jax.lax.pmean(loss, axis_name="local_devices").mean()
@@ -695,7 +641,7 @@ if __name__ == "__main__":
     multi_device_update = jax.pmap(
         single_device_update,
         axis_name="local_devices",
-        devices=global_learner_devices,
+        devices=global_learner_decices,
     )
 
     params_queues = []
@@ -744,14 +690,7 @@ if __name__ == "__main__":
                 sharded_storages.append(sharded_storage)
         rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
         training_time_start = time.time()
-        (
-            agent_state,
-            loss,
-            pg_loss,
-            v_loss,
-            entropy_loss,
-            learner_keys,
-        ) = multi_device_update(
+        (agent_state, loss, pg_loss, v_loss, entropy_loss, learner_keys) = multi_device_update(
             agent_state,
             sharded_storages,
             learner_keys,
@@ -764,11 +703,7 @@ if __name__ == "__main__":
 
         # record rewards for plotting purposes
         if learner_policy_version % args.log_frequency == 0:
-            writer.add_scalar(
-                "stats/rollout_queue_get_time",
-                np.mean(rollout_queue_get_time),
-                global_step,
-            )
+            writer.add_scalar("stats/rollout_queue_get_time", np.mean(rollout_queue_get_time), global_step)
             writer.add_scalar(
                 "stats/rollout_params_queue_get_time_diff",
                 np.mean(rollout_queue_get_time) - avg_params_queue_get_time,
@@ -782,9 +717,7 @@ if __name__ == "__main__":
                 f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={learner_policy_version}, training time: {time.time() - training_time_start}s",
             )
             writer.add_scalar(
-                "charts/learning_rate",
-                agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
-                global_step,
+                "charts/learning_rate", agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(), global_step
             )
             writer.add_scalar("losses/value_loss", v_loss[-1].item(), global_step)
             writer.add_scalar("losses/policy_loss", pg_loss[-1].item(), global_step)
@@ -821,7 +754,6 @@ if __name__ == "__main__":
             eval_episodes=10,
             run_name=f"{run_name}-eval",
             Model=(Network, Actor, Critic),
-            capture_video=args.capture_video,
         )
         for idx, episodic_return in enumerate(episodic_returns):
             writer.add_scalar("eval/episodic_return", episodic_return, idx)
