@@ -28,6 +28,7 @@ from rich.pretty import pprint
 
 from cleanba.config import random_seed
 from cleanba.environments import EnvConfig, SokobanConfig
+from cleanba.evaluate import EvalConfig
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
@@ -83,12 +84,22 @@ class WandbWriter:
 
 @dataclasses.dataclass
 class Args:
-    env: EnvConfig = SokobanConfig(max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1)
+    env: EnvConfig = dataclasses.field(
+        default_factory=lambda: SokobanConfig(
+            max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
+        )
+    )
+    eval_envs: dict[str, EvalConfig] = dataclasses.field(
+        default_factory=lambda: dict(
+            eval=EvalConfig(SokobanConfig(max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1))
+        )
+    )
+
     seed: int = dataclasses.field(default_factory=random_seed)  # the entity (team) of wandb's project"
     capture_video: bool = False  # whether to capture videos of the agent performances (check out `videos` folder)"
     save_model: bool = False  # whether to save model into the wandb run folder"
-    log_frequency: int = 100  # the logging frequency of the model performance (in terms of `updates`)
-    eval_frequency: int = 10000  # How often to evaluate and maybe save the model
+    log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
+    eval_frequency: int = 10  # How often to evaluate and maybe save the model
 
     # Algorithm specific arguments
     env_id: str = "Sokoban-v0"  # the id of the environment"
@@ -104,8 +115,8 @@ class Args:
     ent_coef: float = 0.01  # coefficient of the entropy"
     vf_coef: float = 0.5  # coefficient of the value function"
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping"
-    channels: List[int] = field(default_factory=lambda: [32, 32, 32])  # the channels of the CNN"
-    hiddens: List[int] = field(default_factory=lambda: [256])  # the hiddens size of the MLP"
+    channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN"
+    hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP"
 
     actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use"
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use"
@@ -123,7 +134,6 @@ class Args:
     minibatch_size: int = 0
     num_updates: int = 0
     global_learner_devices: Any = None
-    actor_devices: Any = None
     learner_devices: Any = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -261,7 +271,7 @@ def rollout(
 
     @jax.jit
     def prepare_data(storage: List[Transition]) -> Transition:
-        return jax.tree_map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
+        return jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
     for update in range(1, args.num_updates + 2):
         update_time_start = time.time()
@@ -573,7 +583,7 @@ if __name__ == "__main__":
         sharded_storages: List[Transition],
         key: jax.random.PRNGKey,
     ):
-        storage = jax.tree_map(lambda *x: jnp.hstack(x), *sharded_storages)
+        storage = jax.tree.map(lambda *x: jnp.hstack(x), *sharded_storages)
         impala_loss_grad_fn = jax.value_and_grad(impala_loss, has_aux=True)
 
         def update_minibatch(agent_state, minibatch):
@@ -664,6 +674,7 @@ if __name__ == "__main__":
     dummy_writer.add_scalar = lambda x, y, z: None
 
     unreplicated_params = flax.jax_utils.unreplicate(agent_state.params)
+    key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
     for d_idx, d_id in enumerate(args.actor_device_ids):
         device_params = jax.device_put(unreplicated_params, local_devices[d_id])
         for thread_id in range(args.num_actor_threads):
@@ -673,7 +684,7 @@ if __name__ == "__main__":
             threading.Thread(
                 target=rollout,
                 args=(
-                    jax.device_put(key, local_devices[d_id]),
+                    jax.device_put(actor_keys[d_idx], local_devices[d_id]),
                     args,
                     rollout_queues[-1],
                     params_queues[-1],
@@ -753,7 +764,8 @@ if __name__ == "__main__":
 
         if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
             if args.save_model:
-                with open(writer.save_dir / f"{learner_policy_version // args.eval_frequency:03d}.model") as f:
+                saved_model_version: int = learner_policy_version // args.eval_frequency
+                with open(writer.save_dir / f"{saved_model_version:03d}.model") as f:
                     f.write(
                         flax.serialization.to_bytes(
                             [
@@ -766,17 +778,14 @@ if __name__ == "__main__":
                             ]
                         )
                     )
-            # episodic_returns = evaluate(
-            #     model_path,
-            #     args.env.make,
-            #     args.env_id,
-            #     eval_episodes=10,
-            #     run_name=f"{run_name}-eval",
-            #     Model=(Network, Actor, Critic),
-            #     capture_video=args.capture_video,
-            # )
-            # for idx, episodic_return in enumerate(episodic_returns):
-            #     writer.add_scalar("eval/episodic_return", episodic_return, idx)
+                writer.add_scalar("eval/saved_model_idx", saved_model_version, global_step)
+
+            for eval_name, eval_cfg in args.eval_envs.items():
+                key, eval_key = jax.random.split(key, 2)
+                log_dict: dict[str, float] = eval_cfg.run(network, actor, unreplicated_params, key=eval_key)
+
+                for k, v in log_dict.items():
+                    writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
         if learner_policy_version >= args.num_updates:
             break
