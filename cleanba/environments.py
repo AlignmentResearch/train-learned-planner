@@ -5,7 +5,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
-import envpool
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import numpy as np
@@ -40,8 +39,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
         self.envs.send(actions)
 
     def step_wait(self, **kwargs) -> Tuple[Any, NDArray[Any], NDArray[Any], NDArray[Any], dict]:
-        obs, *rest = self.envs.recv(**kwargs)
-        return (np.moveaxis(obs, 1, 3), *rest)
+        return self.envs.recv(**kwargs)
 
     def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
         assert seed is None
@@ -51,8 +49,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
     def reset_wait(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
         assert seed is None
         assert not options
-        obs, *rest = self.envs.recv(reset=True, return_info=self.envs.config["gym_reset_return_info"])
-        return (np.moveaxis(obs, 1, 3), *rest)
+        return self.envs.recv(reset=True, return_info=self.envs.config["gym_reset_return_info"])
 
 
 @dataclasses.dataclass
@@ -99,6 +96,9 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
         return str(levels_dir)
 
     def make(self) -> gym.vector.VectorEnv:
+        # Import envpool only when needed so we can run on Mac OS
+        import envpool
+
         env_id: str = "Sokoban-v0"
         dummy_spec = envpool.make_spec(env_id)
         special_kwargs = dict(
@@ -151,6 +151,16 @@ class BaseSokobanEnvConfig(EnvConfig):
         ...
 
 
+def transform_fn(obs):
+    print(f"{obs=}")
+    return partial(np.moveaxis, source=2, destination=0)(obs)
+
+
+transform_nhwc_to_nchw = partial(
+    gym.wrappers.TransformObservation, f=transform_fn
+)  # partial(np.moveaxis, source=2, destination=0))
+
+
 @dataclasses.dataclass
 class SokobanConfig(BaseSokobanEnvConfig):
     "Procedurally-generated Sokoban"
@@ -168,6 +178,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
         make_fn = partial(
             gym.make_vec,
             "Sokoban-v2",
+            wrappers=[transform_nhwc_to_nchw],
             **kwargs,
             **self.env_reward_kwargs(),
         )
@@ -194,6 +205,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
         make_fn = partial(
             gym.make_vec,
             "Boxoban-Val-v1",
+            wrappers=[transform_nhwc_to_nchw],
             cache_path=self.cache_path,
             split=self.split,
             difficulty=self.difficulty,
