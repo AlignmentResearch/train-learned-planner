@@ -27,7 +27,7 @@ from names_generator import generate_name
 from rich.pretty import pprint
 
 from cleanba.config import random_seed
-from cleanba.environments import EnvConfig, SokobanConfig
+from cleanba.environments import EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
 from cleanba.evaluate import EvalConfig
 from cleanba.optimizer import rmsprop_pytorch_style
 
@@ -37,6 +37,11 @@ os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parall
 # Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+
+
+def unreplicate(tree):
+    """Returns a single instance of a replicated array."""
+    return jax.tree_util.tree_map(lambda x: x[0], tree)
 
 
 class WandbWriter:
@@ -91,7 +96,15 @@ class Args:
     )
     eval_envs: dict[str, EvalConfig] = dataclasses.field(  # How to evaluate the algorithm? Including envs and seeds
         default_factory=lambda: dict(
-            eval=EvalConfig(SokobanConfig(max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1))
+            eval=EvalConfig(
+                SokobanConfig(
+                    max_episode_steps=40,
+                    num_envs=64,
+                    tinyworld_obs=True,
+                    dim_room=(5, 5),
+                    num_boxes=1,
+                )
+            )
         )
     )
     eval_frequency: int = 10  # How often to evaluate and maybe save the model
@@ -104,12 +117,12 @@ class Args:
     # Algorithm specific arguments
     total_timesteps: int = 50000000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
-    local_num_envs: int = 64  # the number of parallel game environments for every actor device
-    num_actor_threads: int = 2  # the number of actor threads to use
+    local_num_envs: int = 1  # the number of parallel game environments for every actor device
+    num_actor_threads: int = 1  # the number of actor threads to use
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     gamma: float = 0.99  # the discount factor gamma
-    num_minibatches: int = 4  # the number of mini-batches
+    num_minibatches: int = 1  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     ent_coef: float = 0.01  # coefficient of the entropy
     vf_coef: float = 0.5  # coefficient of the value function
@@ -158,7 +171,6 @@ class ConvSequence(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
         x = ResidualBlock(self.channels)(x)
         x = ResidualBlock(self.channels)(x)
         return x
@@ -499,7 +511,6 @@ if __name__ == "__main__":
             every_k_schedule=args.gradient_accumulation_steps,
         ),
     )
-    agent_state = flax.jax_utils.replicate(agent_state, devices=args.learner_devices)
     print(network.tabulate(network_key, np.array([envs.single_observation_space.sample()])))
     print(
         actor.tabulate(
@@ -672,7 +683,7 @@ if __name__ == "__main__":
     dummy_writer = SimpleNamespace()
     dummy_writer.add_scalar = lambda x, y, z: None
 
-    unreplicated_params = flax.jax_utils.unreplicate(agent_state.params)
+    unreplicated_params = agent_state.params
     key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
     for d_idx, d_id in enumerate(args.actor_device_ids):
         device_params = jax.device_put(unreplicated_params, local_devices[d_id])
@@ -697,6 +708,7 @@ if __name__ == "__main__":
     rollout_queue_get_time = deque(maxlen=10)
     data_transfer_time = deque(maxlen=10)
     learner_policy_version = 0
+    agent_state = jax.device_put_replicated(agent_state, devices=args.learner_devices)
     while True:
         learner_policy_version += 1
         rollout_queue_get_time_start = time.time()
@@ -726,7 +738,7 @@ if __name__ == "__main__":
             sharded_storages,
             learner_keys,
         )
-        unreplicated_params = flax.jax_utils.unreplicate(agent_state.params)
+        unreplicated_params = unreplicate(agent_state.params)
         for d_idx, d_id in enumerate(args.actor_device_ids):
             device_params = jax.device_put(unreplicated_params, local_devices[d_id])
             for thread_id in range(args.num_actor_threads):
