@@ -105,6 +105,8 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[NDArray, dict[str, Any]]:
+        if seed is None:
+            seed = self.cfg.seed
         super().reset(seed=seed, options=options)
 
         num_timesteps = int(self.np_random.integers(1, self.cfg.max_episode_steps, size=()))
@@ -199,7 +201,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         get_action=_get_zero_action,
     )
 
-    while True:
+    for iteration in range(100):
         try:
             (
                 global_step,
@@ -221,16 +223,33 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
 
         assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
 
-        tr = sharded_transition
+        transition = cleanba_impala.unreplicate(sharded_transition)
 
-        v_t = tr.obs_t[0, 1:]
-        v_tm1 = tr.obs_t[0, :-1]
+        v_t = transition.obs_t[1:]
+        v_tm1 = transition.obs_t[:-1]
 
         # We have to use 1: with these because they represent the reward/discount of the *previous* step.
-        r_t = tr.r_tm1[0, 1:]
-        discount_t = (~tr.done_tm1[0, 1:]) * gamma
+        r_t = transition.r_tm1[1:]
+        discount_t = (~transition.done_tm1[1:]) * gamma
 
         rho_tm1 = np.ones((num_timesteps, num_envs))
 
         out = jax.vmap(rlax.vtrace, 1, 1)(v_tm1, v_t, r_t, discount_t, rho_tm1)
-        assert np.allclose(out, np.zeros_like(out), atol=1e-6)
+        assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
+
+        # Now check that the impala loss works here, i.e. an integration test
+        (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
+            params=(),
+            get_logits_and_value=lambda params, obs: (jnp.zeros((obs.shape[-1], 1)), obs),
+            args=ImpalaLossConfig(gamma=gamma),
+            obs_t=jnp.array(transition.obs_t),
+            a_t=jnp.array(transition.a_t),
+            logits_t=jnp.array(transition.logits_t),
+            r_tm1=jnp.array(transition.r_tm1),
+            done_tm1=jnp.array(transition.done_tm1),
+        )
+
+        assert np.allclose(pg_loss, 0.0)
+        assert np.allclose(baseline_loss, 0.0)
+        assert np.allclose(ent_loss, 0.0)
+        assert np.allclose(total_loss, 0.0)
