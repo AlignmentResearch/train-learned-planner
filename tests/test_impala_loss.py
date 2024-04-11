@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig
+from cleanba.impala_loss import ImpalaLossConfig, impala_loss
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -42,6 +42,46 @@ def test_vtrace_alignment(np_rng: np.random.Generator, gamma: float, num_timeste
     vtrace_error = rlax.vtrace(v_tm1, v_t, rewards, discount, rho_tm1)
 
     assert np.allclose(vtrace_error, np.zeros(num_timesteps))
+
+
+@pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
+@pytest.mark.parametrize("num_timesteps", [20, 2])
+@pytest.mark.parametrize("last_value", [0.0, 1.0])
+def test_impala_loss_zero_when_accurate(
+    np_rng: np.random.Generator, gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5
+):
+    rewards = np_rng.uniform(0.1, 2.0, size=(num_timesteps, batch_size))
+    correct_returns = np.zeros((num_timesteps + 1, batch_size))
+
+    # Episodes change midway through the timesteps
+    done_tm1 = np.zeros((num_timesteps, batch_size), dtype=np.bool_)
+    if num_timesteps > 2:
+        done_tm1[num_timesteps // 2] = 1
+
+    # There are no more returns after the last step
+    correct_returns[-1] = 0.0
+    # Bellman equation to compute the correct returns
+    for i in range(len(rewards) - 1, -1, -1):
+        correct_returns[i] = rewards[i] + ((~done_tm1[i]) * gamma) * correct_returns[i + 1]
+
+    obs_t = correct_returns[1:]  #  Mimic how actual rollouts collect observations
+    logits_t = jnp.zeros((num_timesteps, batch_size, 1))
+    a_t = np.zeros((num_timesteps, batch_size), dtype=jnp.int32)
+    (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
+        params=(),
+        get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
+        args=ImpalaLossConfig(gamma=gamma),
+        obs_t=obs_t,
+        a_t=a_t,
+        logits_t=logits_t,
+        r_tm1=rewards,
+        done_tm1=done_tm1,
+    )
+
+    assert np.allclose(pg_loss, 0.0)
+    assert np.allclose(baseline_loss, 0.0)
+    assert np.allclose(ent_loss, 0.0)
+    assert np.allclose(total_loss, 0.0)
 
 
 class TrivialEnv(gym.Env[NDArray, np.int64]):

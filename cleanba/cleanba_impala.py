@@ -552,7 +552,7 @@ if __name__ == "__main__":
 
         def get_logits_and_value(
             params: flax.core.FrozenDict,
-            x: np.ndarray,
+            x: jax.Array,
         ):
             hidden = Network(args.channels, args.hiddens).apply(params.network_params, x)
             raw_logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)

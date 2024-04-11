@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Callable, List, NamedTuple
+from typing import Any, Callable, List, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -53,7 +53,16 @@ def entropy_loss_fn(logits, *args):
     return jnp.sum(total_loss_per_batch)
 
 
-def impala_loss(params, get_logits_and_value, args: ImpalaLossConfig, obs_t, a_t, logits_t, r_tm1, done_tm1):
+def impala_loss(
+    params,
+    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
+    args: ImpalaLossConfig,
+    obs_t,
+    a_t,
+    logits_t,
+    r_tm1,
+    done_tm1,
+):
     discount_tm1 = (~done_tm1) * args.gamma
     firststeps_t = done_tm1
     mask_t = ~firststeps_t
@@ -71,8 +80,8 @@ def impala_loss(params, get_logits_and_value, args: ImpalaLossConfig, obs_t, a_t
 
     mask_t = mask_t[:-1]
     float_mask_t = jnp.astype(mask_t, jnp.float32)
-    r_tm1 = r_tm1[:-1]
-    discount_tm1 = discount_tm1[:-1]
+    r_tm1 = r_tm1[1:]
+    discount_tm1 = discount_tm1[1:]
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
             rlax.vtrace_td_error_and_advantage,
