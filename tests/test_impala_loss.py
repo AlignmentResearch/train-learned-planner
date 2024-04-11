@@ -1,8 +1,6 @@
-import collections
 import dataclasses
 import queue
 from functools import partial
-from types import SimpleNamespace
 from typing import Any, Callable, SupportsFloat
 
 import gymnasium as gym
@@ -11,11 +9,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import rlax
-from jax import ensure_compile_time_eval
 from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
+from cleanba.impala_loss import ImpalaLossConfig
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -53,7 +51,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
         self.action_space = gym.spaces.Discrete(1)
         self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
 
-    def step(self, action: NDArray) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
+    def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
         # Pretend that we took the optimal action (there is only one action)
         reward = self._rewards[self._t]
 
@@ -133,8 +131,10 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
     args = cleanba_impala.Args(
         train_env=TrivialEnvConfig(max_episode_steps=10, num_envs=0, gamma=gamma),
         eval_envs={},
-        gamma=0.9,
-        vtrace_lambda=1.0,
+        loss=ImpalaLossConfig(
+            gamma=0.9,
+            vtrace_lambda=1.0,
+        ),
         num_steps=num_timesteps,
         concurrency=False,
         local_num_envs=num_envs,
@@ -176,7 +176,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert isinstance(actor_policy_version, int)
         assert isinstance(update, int)
         assert isinstance(sharded_transition, cleanba_impala.Transition)
-        assert isinstance(params_queue_get_time, np.float_)
+        assert isinstance(params_queue_get_time, float)
         assert device_thread_id == 1
 
         assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
