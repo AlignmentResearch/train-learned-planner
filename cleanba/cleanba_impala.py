@@ -303,18 +303,37 @@ class Transition(NamedTuple):
     term_tm1: jax.Array
 
 
+@jax.jit
+def get_action(
+    params: flax.core.FrozenDict,
+    next_obs: jax.Array,
+    key: jax.Array,
+):
+    hidden: jax.Array = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
+    logits: jax.Array = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
+    # sample action: Gumbel-softmax trick
+    # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
+    key, subkey = jax.random.split(key)
+    u = jax.random.uniform(subkey, shape=logits.shape)
+    action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
+    return next_obs, action, logits, key
+
+
 MUST_STOP_PROGRAM: bool = False
 
 
 def rollout(
     key: jax.random.PRNGKey,
     args: Args,
+    runtime_info: RuntimeInformation,
     rollout_queue,
     params_queue: queue.Queue,
     writer,
     learner_devices,
     device_thread_id,
     actor_device,
+    *,
+    get_action,
 ):
     envs = dataclasses.replace(
         args.train_env,
@@ -325,21 +344,6 @@ def rollout(
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
-
-    @jax.jit
-    def get_action(
-        params: flax.core.FrozenDict,
-        next_obs: jax.Array,
-        key: jax.Array,
-    ):
-        hidden = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
-        logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
-        # sample action: Gumbel-softmax trick
-        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-        key, subkey = jax.random.split(key)
-        u = jax.random.uniform(subkey, shape=logits.shape)
-        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
-        return next_obs, action, logits, key
 
     # put data in the last index
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
@@ -743,6 +747,7 @@ if __name__ == "__main__":
                     args=(
                         jax.device_put(actor_keys[d_idx], runtime_info.local_devices[d_id]),
                         args,
+                        runtime_info,
                         rollout_queues[-1],
                         params_queues[-1],
                         writer if d_idx == 0 and thread_id == 0 else dummy_writer,
@@ -750,6 +755,7 @@ if __name__ == "__main__":
                         d_idx * args.num_actor_threads + thread_id,
                         runtime_info.local_devices[d_id],
                     ),
+                    kwargs=dict(get_action=get_action),
                 ).start()
 
         rollout_queue_get_time = deque(maxlen=10)

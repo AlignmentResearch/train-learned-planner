@@ -1,5 +1,8 @@
+import collections
 import dataclasses
+import queue
 from functools import partial
+from types import SimpleNamespace
 from typing import Any, Callable, SupportsFloat
 
 import gymnasium as gym
@@ -11,6 +14,7 @@ import rlax
 from jax import ensure_compile_time_eval
 from numpy.typing import NDArray
 
+import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
 
 
@@ -115,3 +119,78 @@ def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int 
 
     out = jax.vmap(rlax.vtrace, 1, 1)(v_tm1, v_t, r_t, discount_t, rho_tm1)
     assert np.allclose(out, np.zeros_like(out), atol=1e-6)
+
+
+@jax.jit
+def _get_zero_action(params, next_obs, key):
+    assert params == {}
+    actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
+    logits = jnp.zeros((next_obs.shape[0], 1), dtype=jnp.float32)
+    return next_obs, actions, logits, key
+
+
+def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
+    args = cleanba_impala.Args(
+        train_env=TrivialEnvConfig(max_episode_steps=10, num_envs=0, gamma=gamma),
+        eval_envs={},
+        gamma=0.9,
+        vtrace_lambda=1.0,
+        num_steps=num_timesteps,
+        concurrency=False,
+        local_num_envs=num_envs,
+    )
+
+    params_queue = queue.Queue(maxsize=5)
+    for _ in range(5):
+        params_queue.put({})
+
+    rollout_queue = queue.Queue(maxsize=5)
+    key = jax.random.PRNGKey(seed=1234)
+    cleanba_impala.rollout(
+        key=key,
+        args=args,
+        runtime_info=cleanba_impala.RuntimeInformation(0, [], 0, 0, 0, 0, 0, 0, 0, [], []),
+        rollout_queue=rollout_queue,
+        params_queue=params_queue,
+        writer=None,  # OK because device_thread_id != 0
+        learner_devices=jax.local_devices(),
+        device_thread_id=1,
+        actor_device=None,  # Currently unused
+        get_action=_get_zero_action,
+    )
+
+    while True:
+        try:
+            (
+                global_step,
+                actor_policy_version,
+                update,
+                sharded_transition,
+                params_queue_get_time,
+                device_thread_id,
+            ) = rollout_queue.get(timeout=1e-5)
+        except queue.Empty:
+            break  # we're done
+
+        assert isinstance(global_step, int)
+        assert isinstance(actor_policy_version, int)
+        assert isinstance(update, int)
+        assert isinstance(sharded_transition, cleanba_impala.Transition)
+        assert isinstance(params_queue_get_time, np.float_)
+        assert device_thread_id == 1
+
+        assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
+
+        tr = sharded_transition
+
+        v_t = tr.obs_t[0, 1:]
+        v_tm1 = tr.obs_t[0, :-1]
+
+        # We have to use 1: with these because they represent the reward/discount of the *previous* step.
+        r_t = tr.r_tm1[0, 1:]
+        discount_t = (~tr.done_tm1[0, 1:]) * gamma
+
+        rho_tm1 = np.ones((num_timesteps, num_envs))
+
+        out = jax.vmap(rlax.vtrace, 1, 1)(v_tm1, v_t, r_t, discount_t, rho_tm1)
+        assert np.allclose(out, np.zeros_like(out), atol=1e-6)
