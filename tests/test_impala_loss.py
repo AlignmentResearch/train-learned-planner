@@ -64,7 +64,7 @@ def test_impala_loss_zero_when_accurate(
     for i in range(len(rewards) - 1, -1, -1):
         correct_returns[i] = rewards[i] + ((~done_tm1[i]) * gamma) * correct_returns[i + 1]
 
-    obs_t = correct_returns[1:]  #  Mimic how actual rollouts collect observations
+    obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
     (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
@@ -77,8 +77,6 @@ def test_impala_loss_zero_when_accurate(
             a_t=a_t,
             logits_t=logits_t,
             r_t=rewards,
-            trunc_tm1=None,  # type: ignore
-            term_tm1=None,  # type: ignore
         ),
     )
 
@@ -170,7 +168,7 @@ def _get_zero_action(params, next_obs, key):
     assert params == {}
     actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
     logits = jnp.zeros((next_obs.shape[0], 1), dtype=jnp.float32)
-    return next_obs, actions, logits, key
+    return actions, logits, key
 
 
 def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
@@ -226,6 +224,9 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert device_thread_id == 1
 
         assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
+        assert sharded_transition.r_t.shape == (1, num_timesteps, num_envs)
+        assert sharded_transition.a_t.shape == (1, num_timesteps, num_envs)
+        assert sharded_transition.logits_t.shape == (1, num_timesteps, num_envs, 1)
 
         transition = cleanba_impala.unreplicate(sharded_transition)
 
@@ -233,8 +234,8 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         v_tm1 = transition.obs_t[:-1]
 
         # We have to use 1: with these because they represent the reward/discount of the *previous* step.
-        r_t = transition.r_tm1[1:]
-        discount_t = (~transition.done_tm1[1:]) * gamma
+        r_t = transition.r_t
+        discount_t = (~transition.done_t) * gamma
 
         rho_tm1 = np.ones((num_timesteps, num_envs))
 

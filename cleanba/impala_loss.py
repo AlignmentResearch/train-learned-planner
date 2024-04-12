@@ -60,7 +60,7 @@ def impala_loss(
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ):
-    discount_tm1 = (~minibatch.done_t) * args.gamma
+    discount_t = (~minibatch.done_t) * args.gamma
     firststeps_t = minibatch.done_t
     mask_t = ~firststeps_t
 
@@ -70,19 +70,14 @@ def impala_loss(
     #   1. it's stop_grad()-ed in the `vtrace_td_error_and_advantage.errors`
     #   2. it intervenes in `vtrace_td_error_and_advantage.pg_advantage`, but that's stop_grad() ed by the pg loss.
     v_t = value_to_update[1:]
+    logits_to_update = logits_to_update[1:]
 
     # Remove bootstrap timestep from non-timesteps.
     v_tm1 = value_to_update[:-1]
 
-    logits_to_update = logits_to_update[:-1]
-    logits_t = minibatch.logits_t[:-1]
-    a_t = minibatch.a_t[:-1]
-    rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, logits_t, a_t)
+    rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t, minibatch.a_t)
 
-    mask_t = mask_t[:-1]
     float_mask_t = jnp.astype(mask_t, jnp.float32)
-    r_tm1 = minibatch.r_t[1:]
-    discount_tm1 = discount_tm1[1:]
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
             rlax.vtrace_td_error_and_advantage,
@@ -106,9 +101,9 @@ def impala_loss(
     So arguably instead of r_t and discount_t, they should be r_tm1 and discount_tm1. And that's what we name
     them here.
     """
-    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_tm1, discount_tm1, rhos_tm1)
+    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
     pg_advs = vtrace_returns.pg_advantage
-    pg_loss = policy_gradient_loss(logits_to_update, a_t, pg_advs, float_mask_t)
+    pg_loss = policy_gradient_loss(logits_to_update, minibatch.a_t, pg_advs, float_mask_t)
 
     baseline_loss = 0.5 * jnp.sum(jnp.square(vtrace_returns.errors) * mask_t)
     ent_loss = entropy_loss_fn(logits_to_update, float_mask_t)

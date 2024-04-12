@@ -365,8 +365,17 @@ def time_and_append(stats: list[float]):
 
 @partial(jax.jit, static_argnames=["len_learner_devices"])
 def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Array, len_learner_devices: int) -> Rollout:
-    partitioned_storage = jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len_learner_devices, axis=1), *storage)
-    return partitioned_storage
+    # Concatenate the Rollout steps over time
+    out = Rollout(
+        # Add the `last_obs` on the end of this rollout
+        obs_t=jnp.stack([*(r.obs_t for r in storage), last_obs]),
+        a_t=jnp.stack([r.a_t for r in storage]),
+        logits_t=jnp.stack([r.logits_t for r in storage]),
+        r_t=jnp.stack([r.r_t for r in storage]),
+        done_t=jnp.stack([r.done_t for r in storage]),
+    )
+    # Split for every learner device over `num_envs` and return
+    return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
 
 
 def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: tuple[jax.Device, ...]) -> Rollout:
@@ -446,7 +455,7 @@ def rollout(
                     actor_policy_version += 1
 
             with time_and_append(log_stats.rollout_time):
-                for _ in range(1, num_steps_with_bootstrap):
+                for _ in range(1, num_steps_with_bootstrap + 1):
                     global_step += (
                         args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
                     )
