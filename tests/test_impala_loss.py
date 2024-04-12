@@ -73,10 +73,10 @@ def test_impala_loss_zero_when_accurate(
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
-            done_tm1=done_tm1,
+            done_t=done_tm1,
             a_t=a_t,
             logits_t=logits_t,
-            r_tm1=rewards,
+            r_t=rewards,
             trunc_tm1=None,  # type: ignore
             term_tm1=None,  # type: ignore
         ),

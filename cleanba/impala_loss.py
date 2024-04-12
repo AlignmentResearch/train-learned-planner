@@ -30,15 +30,14 @@ class ImpalaLossConfig:
 
 
 class Rollout(NamedTuple):
-    prev_obs: jax.Array
     obs_t: jax.Array
     a_t: jax.Array
     logits_t: jax.Array
-    r_tm1: jax.Array | NDArray
+    r_t: jax.Array | NDArray
     # TODO: handle truncation vs. termination correctly. Truncated episodes should have the discounted estimated value
     # of the next observation, subtracted from the current value's observation. But that's annoying to support and we
     # don't use it for Sokoban anyways, so we won't support it.
-    done_tm1: jax.Array | NDArray
+    done_t: jax.Array | NDArray
 
 
 def policy_gradient_loss(logits, *args):
@@ -61,8 +60,8 @@ def impala_loss(
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ):
-    discount_tm1 = (~minibatch.done_tm1) * args.gamma
-    firststeps_t = minibatch.done_tm1
+    discount_tm1 = (~minibatch.done_t) * args.gamma
+    firststeps_t = minibatch.done_t
     mask_t = ~firststeps_t
 
     logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
@@ -82,7 +81,7 @@ def impala_loss(
 
     mask_t = mask_t[:-1]
     float_mask_t = jnp.astype(mask_t, jnp.float32)
-    r_tm1 = minibatch.r_tm1[1:]
+    r_tm1 = minibatch.r_t[1:]
     discount_tm1 = discount_tm1[1:]
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
@@ -167,4 +166,5 @@ def single_device_update(
         v_loss=v_loss.mean(),
         entropy_loss=entropy_loss.mean(),
     )
+    assert losses.loss.shape == ()
     return (agent_state, key, losses)

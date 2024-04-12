@@ -24,9 +24,9 @@ import optax
 import wandb
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from jaxlib import xla_client
 from names_generator import generate_name
 from rich.pretty import pprint
+from typing_extensions import Self
 
 from cleanba.config import random_seed
 from cleanba.environments import EnvConfig, SokobanConfig
@@ -39,11 +39,16 @@ from cleanba.impala_loss import (
 )
 from cleanba.optimizer import rmsprop_pytorch_style
 
-# Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
-os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
-os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
-# Fix CUDNN non-determinisim; https://github.com/google/jax/issues/4823#issuecomment-952835771
-os.environ["TF_XLA_FLAGS"] = "--xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
+# Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
+os.environ["XLA_FLAGS"] = (
+    os.environ.get("XLA_FLAGS", "") + " --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+)
+# Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
+os.environ["TF_XLA_FLAGS"] = (
+    os.environ.get("TF_XLA_FLAGS", "") + " --xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
+)
+
+# Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 
 
@@ -122,6 +127,7 @@ class Args:
 
     save_model: bool = True  # whether to save model into the wandb run folder
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
+    sync_frequency: int = 100
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
@@ -130,9 +136,8 @@ class Args:
     # Algorithm specific arguments
     total_timesteps: int = 50000000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
-    local_num_envs: int = 1  # the number of parallel game environments for every actor device
-    num_actor_threads: int = 1  # Number of rollout() gatherers. These use *all* of the `actor_device_ids`
-    num_steps: int = 20  # the number of steps to run in each environment per policy rollout
+    local_num_envs: int = 4  # the number of parallel game environments for every actor device
+    num_steps: int = 3  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     num_minibatches: int = 1  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
@@ -140,6 +145,9 @@ class Args:
     channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
 
+    queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
+
+    num_actor_threads: int = 1  # The number of environment threads per actor device
     actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
@@ -149,7 +157,7 @@ class Args:
 @dataclasses.dataclass(frozen=True)
 class RuntimeInformation:
     local_batch_size: int
-    local_devices: list[xla_client.Device]
+    local_devices: list[jax.Device]
     local_minibatch_size: int
     world_size: int
     local_rank: int
@@ -157,8 +165,8 @@ class RuntimeInformation:
     batch_size: int
     minibatch_size: int
     num_updates: int
-    global_learner_devices: Any
-    learner_devices: Any
+    global_learner_devices: list[jax.Device]
+    learner_devices: list[jax.Device]
 
 
 @contextlib.contextmanager
@@ -186,15 +194,11 @@ def initialize_multi_device(args: Args) -> Iterator[RuntimeInformation]:
     local_devices = jax.local_devices()
     global_devices = jax.devices()
     learner_devices = [local_devices[d_id] for d_id in args.learner_device_ids]
-    actor_devices = [local_devices[d_id] for d_id in args.actor_device_ids]
     global_learner_devices = [
         global_devices[d_id + process_index * len(local_devices)]
         for process_index in range(world_size)
         for d_id in args.learner_device_ids
     ]
-    global_learner_devices = global_learner_devices
-    actor_devices = actor_devices
-    learner_devices = learner_devices
 
     yield RuntimeInformation(
         local_batch_size=local_batch_size,
@@ -295,28 +299,107 @@ def get_action(
     key, subkey = jax.random.split(key)
     u = jax.random.uniform(subkey, shape=logits.shape)
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
-    return next_obs, action, logits, key
+    return action, logits, key
+
+
+def flatten_tree(x) -> jax.Array:
+    leaves, _ = jax.tree.flatten(x)
+    return jnp.concat(list(map(jnp.ravel, leaves)))
+
+
+@jax.jit
+def log_parameter_differences(params) -> dict[str, jax.Array]:
+    max_params = jax.tree.map(lambda x: np.max(x, axis=0), params)
+    min_params = jax.tree.map(lambda x: np.min(x, axis=0), params)
+
+    flat_max_params = flatten_tree(max_params)
+    flat_min_params = flatten_tree(min_params)
+    abs_diff = jnp.abs(flat_max_params - flat_min_params)
+    return dict(
+        max_diff=jnp.max(abs_diff),
+        min_diff=jnp.min(abs_diff),
+        mean_diff=jnp.mean(abs_diff),
+    )
 
 
 MUST_STOP_PROGRAM: bool = False
+
+
+@dataclasses.dataclass
+class LoggingStats:
+    episode_returns: list[float]
+    episode_lengths: list[float]
+    params_queue_get_time: list[float]
+    rollout_time: list[float]
+    create_rollout_time: list[float]
+    rollout_queue_put_time: list[float]
+
+    env_recv_time: list[float]
+    inference_time: list[float]
+    storage_time: list[float]
+    device2host_time: list[float]
+    env_send_time: list[float]
+    update_time: list[float]
+
+    @classmethod
+    def new_empty(cls: type[Self]) -> Self:
+        init_dict = {f.name: [] for f in dataclasses.fields(cls)}
+        return cls(**init_dict)
+
+    def avg_and_flush(self) -> dict[str, float]:
+        field_names = [f.name for f in dataclasses.fields(self)]
+        out = {}
+        for n in field_names:
+            this_list = getattr(self, n)
+            out[f"avg_{n}"] = float(np.mean(getattr(self, n)))
+            this_list.clear()  # Flush the stats
+        return out
+
+
+@contextlib.contextmanager
+def time_and_append(stats: list[float]):
+    start_time = time.time()
+    yield
+    stats.append(time.time() - start_time)
+
+
+@partial(jax.jit, static_argnames=["len_learner_devices"])
+def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Array, len_learner_devices: int) -> Rollout:
+    partitioned_storage = jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len_learner_devices, axis=1), *storage)
+    return partitioned_storage
+
+
+def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: tuple[jax.Device, ...]) -> Rollout:
+    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, len(learner_devices))
+    sharded_storage = Rollout(
+        *list(
+            map(
+                lambda x: jax.device_put_sharded(x, devices=learner_devices),
+                partitioned_storage,
+            )
+        )
+    )
+    return sharded_storage
 
 
 def rollout(
     key: jax.random.PRNGKey,
     args: Args,
     runtime_info: RuntimeInformation,
-    rollout_queue,
+    rollout_queue: queue.Queue,
     params_queue: queue.Queue,
     writer,
-    learner_devices,
+    learner_devices: list[jax.Device],
     device_thread_id,
     actor_device,
     *,
     get_action,
 ):
+    actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
+
     envs = dataclasses.replace(
         args.train_env,
-        seed=args.train_env.seed + jax.process_index() + device_thread_id,
+        seed=args.train_env.seed + actor_id,
         num_envs=args.local_num_envs,
     ).make()
 
@@ -324,164 +407,127 @@ def rollout(
     global_step = 0
     start_time = time.time()
 
-    # put data in the last index
+    log_stats = LoggingStats.new_empty()
+    # Counters for episode length and episode return
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_returns = []
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_lengths = []
-    envs.reset()
-    # Take a random action only once
-    envs.step_async(envs.action_space.sample())
 
-    params_queue_get_time = deque(maxlen=10)
-    rollout_time = deque(maxlen=10)
-    rollout_queue_put_time = deque(maxlen=10)
     actor_policy_version = 0
     storage = []
 
-    @jax.jit
-    def prepare_data(storage: List[Rollout]) -> Rollout:
-        return jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
+    # Store the first observation
+    obs_t, _ = envs.reset()
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
 
-        update_time_start = time.time()
-        env_recv_time = 0
-        inference_time = 0
-        storage_time = 0
-        d2h_time = 0
-        env_send_time = 0
-        num_steps_with_bootstrap = (
-            args.num_steps + 1 + int(len(storage) == 0)
-        )  # num_steps + 1 to get the states for value bootstrapping.
-        # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
-        # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
-        # behind the learner's policy version
-        params_queue_get_time_start = time.time()
-        if args.concurrency:
-            if update != 2:
-                params = params_queue.get()
-                # NOTE: block here is important because otherwise this thread will call
-                # the jitted `get_action` function that hangs until the params are ready.
-                # This blocks the `get_action` function in other actor threads.
-                # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                params.network_params["params"]["Dense_0"][
-                    "kernel"
-                ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
-                actor_policy_version += 1
-        else:
-            params = params_queue.get()
-            actor_policy_version += 1
-        params_queue_get_time.append(time.time() - params_queue_get_time_start)
-        rollout_time_start = time.time()
-        for _ in range(1, num_steps_with_bootstrap):
-            env_recv_time_start = time.time()
-            obs_t, r_tm1, term_tm1, trunc_tm1, info = envs.step_wait()
-            done_tm1 = term_tm1 | trunc_tm1
-            env_recv_time += time.time() - env_recv_time_start
-            global_step += len(done_tm1) * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
+        with time_and_append(log_stats.update_time):
+            with time_and_append(log_stats.params_queue_get_time):
+                num_steps_with_bootstrap = args.num_steps
 
-            inference_time_start = time.time()
-            obs_t, a_t, logits_t, key = get_action(params, obs_t, key)
-            inference_time += time.time() - inference_time_start
+                # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
+                # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
+                # behind the learner's policy version
+                if args.concurrency:
+                    if update != 2:
+                        params = params_queue.get(timeout=args.queue_timeout)
+                        # NOTE: block here is important because otherwise this thread will call
+                        # the jitted `get_action` function that hangs until the params are ready.
+                        # This blocks the `get_action` function in other actor threads.
+                        # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
+                        params.network_params["params"]["Dense_0"][
+                            "kernel"
+                        ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
+                        actor_policy_version += 1
+                else:
+                    params = params_queue.get(timeout=args.queue_timeout)
+                    actor_policy_version += 1
 
-            d2h_time_start = time.time()
-            cpu_action = np.array(a_t)
-            d2h_time += time.time() - d2h_time_start
-            env_send_time_start = time.time()
-            envs.step_async(cpu_action)
-            env_send_time += time.time() - env_send_time_start
-            storage_time_start = time.time()
+            with time_and_append(log_stats.rollout_time):
+                for _ in range(1, num_steps_with_bootstrap):
+                    global_step += (
+                        args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
+                    )
 
-            storage.append(
-                Rollout(
-                    obs_t=obs_t,
-                    done_tm1=done_tm1,
-                    a_t=a_t,
-                    logits_t=logits_t,
-                    r_tm1=r_tm1,
-                    trunc_tm1=trunc_tm1,
-                    term_tm1=term_tm1,
+                    with time_and_append(log_stats.inference_time):
+                        a_t, logits_t, key = get_action(params, obs_t, key)
+
+                    with time_and_append(log_stats.device2host_time):
+                        cpu_action = np.array(a_t)
+
+                    with time_and_append(log_stats.env_send_time):
+                        envs.step_async(cpu_action)
+
+                    with time_and_append(log_stats.env_recv_time):
+                        obs_t_plus_1, r_t, term_t, trunc_t, info_t = envs.step_wait()
+                        done_t = term_t | trunc_t
+
+                    with time_and_append(log_stats.create_rollout_time):
+                        storage.append(
+                            Rollout(
+                                obs_t=obs_t,
+                                done_t=done_t,
+                                a_t=a_t,
+                                logits_t=logits_t,
+                                r_t=r_t,
+                            )
+                        )
+                        obs_t = obs_t_plus_1
+
+                        log_stats.episode_returns.extend(episode_returns[done_t])
+                        episode_returns[:] += r_t
+                        episode_returns[:] *= ~done_t
+                        log_stats.episode_lengths.extend(episode_lengths[done_t])
+                        episode_lengths[:] += 1
+                        episode_lengths[:] *= ~done_t
+
+            with time_and_append(log_stats.storage_time):
+                sharded_storage = concat_and_shard_rollout(storage, obs_t, learner_devices)
+                storage.clear()
+                payload = (
+                    global_step,
+                    actor_policy_version,
+                    update,
+                    sharded_storage,
+                    np.mean(log_stats.params_queue_get_time),
+                    device_thread_id,
                 )
+            with time_and_append(log_stats.rollout_queue_put_time):
+                rollout_queue.put(payload, timeout=args.queue_timeout)
+
+        # Log on all rollout threads
+        if update % args.log_frequency == 0:
+            inner_loop_time = (
+                np.sum(log_stats.env_recv_time)
+                + np.sum(log_stats.create_rollout_time)
+                + np.sum(log_stats.inference_time)
+                + np.sum(log_stats.device2host_time)
+                + np.sum(log_stats.env_send_time)
             )
-            returned_episode_returns.extend(episode_returns[done_tm1])
-            episode_returns[:] += r_tm1
-            episode_returns[:] *= ~done_tm1
-            returned_episode_lengths.extend(episode_lengths[done_tm1])
-            episode_lengths[:] += 1
-            episode_lengths[:] *= ~done_tm1
-            storage_time += time.time() - storage_time_start
-        rollout_time.append(time.time() - rollout_time_start)
+            middle_loop_time = np.sum(log_stats.rollout_time) + np.sum(log_stats.storage_time)
+            outer_loop_time = np.sum(log_stats.update_time)
 
-        partitioned_storage = prepare_data(storage)
-        sharded_storage = Rollout(
-            *list(
-                map(
-                    lambda x: jax.device_put_sharded(x, devices=learner_devices),
-                    partitioned_storage,
-                )
-            )
-        )
-        payload = (
-            global_step,
-            actor_policy_version,
-            update,
-            sharded_storage,
-            np.mean(params_queue_get_time),
-            device_thread_id,
-        )
-        rollout_queue_put_time_start = time.time()
-        rollout_queue.put(payload)
-        rollout_queue_put_time.append(time.time() - rollout_queue_put_time_start)
-
-        # move bootstrapping step to the beginning of the next update
-        storage = storage[-1:]
-
-        if device_thread_id == 0 and update % args.log_frequency == 0:
-            avg_episodic_return = np.mean(returned_episode_returns)
+            stats_dict: dict[str, float] = log_stats.avg_and_flush()
+            steps_per_second = global_step / (time.time() - start_time)
             print(
-                f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
+                f"{device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
-            print("SPS:", int(global_step / (time.time() - start_time)))
-            writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
-            writer.add_scalar("stats/rollout_time", np.mean(rollout_time), global_step)
-            writer.add_scalar("charts/avg_episodic_return", avg_episodic_return, global_step)
+
+            for k, v in stats_dict.items():
+                if k.endswith("_time"):
+                    writer.add_scalar(f"stats/{device_thread_id}/{k}", v, global_step)
+                else:
+                    writer.add_scalar(f"charts/{device_thread_id}/{k}", v, global_step)
+
             writer.add_scalar(
-                "charts/avg_episodic_length",
-                np.mean(returned_episode_lengths),
-                global_step,
+                f"charts/{device_thread_id}/inner_time_efficiency", inner_loop_time / outer_loop_time, global_step
             )
             writer.add_scalar(
-                "stats/params_queue_get_time",
-                np.mean(params_queue_get_time),
-                global_step,
+                f"charts/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
             )
-            writer.add_scalar("stats/env_recv_time", env_recv_time, global_step)
-            writer.add_scalar("stats/inference_time", inference_time, global_step)
-            writer.add_scalar("stats/storage_time", storage_time, global_step)
-            writer.add_scalar("stats/d2h_time", d2h_time, global_step)
-            writer.add_scalar("stats/env_send_time", env_send_time, global_step)
-            writer.add_scalar(
-                "stats/rollout_queue_put_time",
-                np.mean(rollout_queue_put_time),
-                global_step,
-            )
-            writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
-            writer.add_scalar(
-                "charts/SPS_update",
-                int(
-                    args.local_num_envs
-                    * args.num_steps
-                    * len_actor_device_ids
-                    * args.num_actor_threads
-                    * runtime_info.world_size
-                    / (time.time() - update_time_start)
-                ),
-                global_step,
-            )
+            writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
 
 if __name__ == "__main__":
@@ -602,7 +648,7 @@ if __name__ == "__main__":
         rollout_queue_get_time = deque(maxlen=10)
         data_transfer_time = deque(maxlen=10)
         learner_policy_version = 0
-        agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.learner_devices)
+        agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
         global_step = 0
         actor_policy_version = 0
@@ -620,7 +666,7 @@ if __name__ == "__main__":
                         sharded_storage,
                         avg_params_queue_get_time,
                         device_thread_id,
-                    ) = rollout_queues[d_idx * args.num_actor_threads + thread_id].get()
+                    ) = rollout_queues[d_idx * args.num_actor_threads + thread_id].get(timeout=args.queue_timeout)
                     sharded_storages.append(sharded_storage)
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
@@ -637,7 +683,18 @@ if __name__ == "__main__":
             for d_idx, d_id in enumerate(args.actor_device_ids):
                 device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
                 for thread_id in range(args.num_actor_threads):
-                    params_queues[d_idx * args.num_actor_threads + thread_id].put(device_params)
+                    params_queues[d_idx * args.num_actor_threads + thread_id].put(device_params, timeout=args.queue_timeout)
+
+            # Copy the parameters from the first device to all other learner devices
+            if learner_policy_version % args.sync_frequency == 0:
+                # Check the maximum parameter difference
+                param_diff_stats = log_parameter_differences(agent_state.params)
+                for k, v in param_diff_stats.items():
+                    writer.add_scalar(f"diffs/{k}", v.item(), global_step)
+                    print(f"diffs/{k}", v.item(), global_step)
+
+                unreplicated_agent_state = unreplicate(agent_state)
+                agent_state = jax.device_put_replicated(unreplicated_agent_state, devices=runtime_info.global_learner_devices)
 
             # record rewards for plotting purposes
             if learner_policy_version % args.log_frequency == 0:
@@ -663,10 +720,11 @@ if __name__ == "__main__":
                     agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
                     global_step,
                 )
-                writer.add_scalar("losses/value_loss", loss.v_loss.item(), global_step)
-                writer.add_scalar("losses/policy_loss", loss.pg_loss.item(), global_step)
-                writer.add_scalar("losses/entropy", loss.entropy_loss.item(), global_step)
-                writer.add_scalar("losses/loss", loss.loss.item(), global_step)
+                writer.add_scalar("losses/value_loss", loss.v_loss[0].item(), global_step)
+                writer.add_scalar("losses/policy_loss", loss.pg_loss[0].item(), global_step)
+                writer.add_scalar("losses/entropy", loss.entropy_loss[0].item(), global_step)
+                writer.add_scalar("losses/loss", loss.loss[0].item(), global_step)
+                print("loss difference:", np.abs(loss.loss[1] - loss.loss[0]))
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
