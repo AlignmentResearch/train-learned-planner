@@ -76,6 +76,7 @@ def impala_loss(
     v_tm1 = value_to_update[:-1]
 
     rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t, minibatch.a_t)
+    max_ratio = jnp.max(jnp.abs(rhos_tm1))
 
     float_mask_t = jnp.astype(mask_t, jnp.float32)
     vtrace_td_error_and_advantage = jax.vmap(
@@ -111,7 +112,7 @@ def impala_loss(
     total_loss = pg_loss
     total_loss += args.vf_coef * baseline_loss
     total_loss += args.ent_coef * ent_loss
-    return total_loss, (pg_loss, baseline_loss, ent_loss)
+    return total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)
 
 
 SINGLE_DEVICE_UPDATE_DEVICES_AXIS: str = "local_devices"
@@ -154,7 +155,9 @@ def single_device_update(
         storage_by_minibatches,
     )
 
-    (loss, (pg_loss, v_loss, entropy_loss)) = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
+    (loss, (pg_loss, v_loss, entropy_loss, _)) = jax.lax.pmean(
+        loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS
+    )
     losses = LossesTuple(
         loss=loss.mean(),
         pg_loss=pg_loss.mean(),

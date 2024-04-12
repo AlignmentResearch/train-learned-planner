@@ -243,7 +243,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
-        (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
+        (total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)) = impala_loss(
             params=(),
             get_logits_and_value=lambda params, obs: (jnp.zeros((obs.shape[-1], 1)), obs),
             args=ImpalaLossConfig(gamma=gamma),
@@ -254,3 +254,4 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert np.allclose(baseline_loss, 0.0)
         assert np.allclose(ent_loss, 0.0)
         assert np.allclose(total_loss, 0.0)
+        assert np.allclose(max_ratio, 1.0)
