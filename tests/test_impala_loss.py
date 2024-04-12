@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, Transition, impala_loss
+from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -71,7 +71,7 @@ def test_impala_loss_zero_when_accurate(
         params=(),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
         args=ImpalaLossConfig(gamma=gamma),
-        minibatch=Transition(
+        minibatch=Rollout(
             obs_t=jnp.array(obs_t),
             done_tm1=done_tm1,
             a_t=a_t,
@@ -221,7 +221,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert isinstance(global_step, int)
         assert isinstance(actor_policy_version, int)
         assert isinstance(update, int)
-        assert isinstance(sharded_transition, cleanba_impala.Transition)
+        assert isinstance(sharded_transition, cleanba_impala.Rollout)
         assert isinstance(params_queue_get_time, float)
         assert device_thread_id == 1
 

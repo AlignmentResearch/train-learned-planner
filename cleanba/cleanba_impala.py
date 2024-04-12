@@ -34,7 +34,7 @@ from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
     ImpalaLossConfig,
-    Transition,
+    Rollout,
     single_device_update,
 )
 from cleanba.optimizer import rmsprop_pytorch_style
@@ -131,7 +131,7 @@ class Args:
     total_timesteps: int = 50000000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
     local_num_envs: int = 1  # the number of parallel game environments for every actor device
-    num_actor_threads: int = 1  # the number of actor threads to use
+    num_actor_threads: int = 1  # Number of rollout() gatherers. These use *all* of the `actor_device_ids`
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     num_minibatches: int = 1  # the number of mini-batches
@@ -340,7 +340,7 @@ def rollout(
     storage = []
 
     @jax.jit
-    def prepare_data(storage: List[Transition]) -> Transition:
+    def prepare_data(storage: List[Rollout]) -> Rollout:
         return jax.tree.map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
     global MUST_STOP_PROGRAM
@@ -397,7 +397,7 @@ def rollout(
             storage_time_start = time.time()
 
             storage.append(
-                Transition(
+                Rollout(
                     obs_t=obs_t,
                     done_tm1=done_tm1,
                     a_t=a_t,
@@ -417,7 +417,7 @@ def rollout(
         rollout_time.append(time.time() - rollout_time_start)
 
         partitioned_storage = prepare_data(storage)
-        sharded_storage = Transition(
+        sharded_storage = Rollout(
             *list(
                 map(
                     lambda x: jax.device_put_sharded(x, devices=learner_devices),

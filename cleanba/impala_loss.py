@@ -29,14 +29,16 @@ class ImpalaLossConfig:
     clip_pg_rho_threshold: float = 1.0
 
 
-class Transition(NamedTuple):
+class Rollout(NamedTuple):
+    prev_obs: jax.Array
     obs_t: jax.Array
-    done_tm1: jax.Array | NDArray
     a_t: jax.Array
     logits_t: jax.Array
     r_tm1: jax.Array | NDArray
-    trunc_tm1: jax.Array | NDArray
-    term_tm1: jax.Array | NDArray
+    # TODO: handle truncation vs. termination correctly. Truncated episodes should have the discounted estimated value
+    # of the next observation, subtracted from the current value's observation. But that's annoying to support and we
+    # don't use it for Sokoban anyways, so we won't support it.
+    done_tm1: jax.Array | NDArray
 
 
 def policy_gradient_loss(logits, *args):
@@ -57,7 +59,7 @@ def impala_loss(
     params,
     get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
     args: ImpalaLossConfig,
-    minibatch: Transition,
+    minibatch: Rollout,
 ):
     discount_tm1 = (~minibatch.done_tm1) * args.gamma
     firststeps_t = minibatch.done_tm1
@@ -65,7 +67,11 @@ def impala_loss(
 
     logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
 
+    # v_t does not enter the gradient in any way, because
+    #   1. it's stop_grad()-ed in the `vtrace_td_error_and_advantage.errors`
+    #   2. it intervenes in `vtrace_td_error_and_advantage.pg_advantage`, but that's stop_grad() ed by the pg loss.
     v_t = value_to_update[1:]
+
     # Remove bootstrap timestep from non-timesteps.
     v_tm1 = value_to_update[:-1]
 
@@ -127,14 +133,14 @@ class LossesTuple(NamedTuple):
 @partial(jax.jit, static_argnames=["num_batches", "get_logits_and_value", "impala_cfg"])
 def single_device_update(
     agent_state: TrainState,
-    sharded_storages: List[Transition],
+    sharded_storages: List[Rollout],
     key: jax.Array,
     *,
     get_logits_and_value: Callable,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
 ) -> tuple[TrainState, jax.Array, LossesTuple]:
-    def update_minibatch(agent_state: TrainState, minibatch: Transition):
+    def update_minibatch(agent_state: TrainState, minibatch: Rollout):
         loss_and_aux, grads = jax.value_and_grad(impala_loss, has_aux=True)(
             agent_state.params,
             get_logits_and_value,
