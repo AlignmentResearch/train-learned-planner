@@ -123,9 +123,9 @@ class Args:
     loss: ImpalaLossConfig = ImpalaLossConfig(vf_coef=0.5)
 
     # Algorithm specific arguments
-    total_timesteps: int = 50000000  # total timesteps of the experiments
-    learning_rate: float = 20 * 64 * 0.0006  # the learning rate of the optimizer
-    local_num_envs: int = 512  # the number of parallel game environments for every actor device
+    total_timesteps: int = 100_000_000  # total timesteps of the experiments
+    learning_rate: float = 0.0006  # the learning rate of the optimizer
+    local_num_envs: int = 64  # the number of parallel game environments for every actor device
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     num_minibatches: int = 4  # the number of mini-batches
@@ -544,6 +544,7 @@ if __name__ == "__main__":
 
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
     with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
+        pprint(runtime_info)
         writer = WandbWriter(args)
 
         # seeding
