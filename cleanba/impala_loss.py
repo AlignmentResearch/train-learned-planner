@@ -40,20 +40,6 @@ class Rollout(NamedTuple):
     done_t: jax.Array | NDArray
 
 
-def policy_gradient_loss(logits, *args):
-    """rlax.policy_gradient_loss, but with sum(loss) and [T, B, ...] inputs."""
-    mean_per_batch = jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits, *args)
-    total_loss_per_batch = mean_per_batch * logits.shape[0]
-    return jnp.sum(total_loss_per_batch)
-
-
-def entropy_loss_fn(logits, *args):
-    """rlax.entropy_loss, but with sum(loss) and [T, B, ...] inputs."""
-    mean_per_batch = jax.vmap(rlax.entropy_loss, in_axes=1)(logits, *args)
-    total_loss_per_batch = mean_per_batch * logits.shape[0]
-    return jnp.sum(total_loss_per_batch)
-
-
 def impala_loss(
     params,
     get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
@@ -61,8 +47,7 @@ def impala_loss(
     minibatch: Rollout,
 ):
     discount_t = (~minibatch.done_t) * args.gamma
-    firststeps_t = minibatch.done_t
-    mask_t = ~firststeps_t
+    mask_t = jnp.ones_like(discount_t)  # Don't mask any loss timesteps -- we use them all.
 
     logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
 
@@ -70,7 +55,10 @@ def impala_loss(
     #   1. it's stop_grad()-ed in the `vtrace_td_error_and_advantage.errors`
     #   2. it intervenes in `vtrace_td_error_and_advantage.pg_advantage`, but that's stop_grad() ed by the pg loss.
     v_t = value_to_update[1:]
-    logits_to_update = logits_to_update[1:]
+
+    # Discarding the last observation's logit corresponds to logits for the same timesteps as was observed in the
+    # minibatch.
+    logits_to_update = logits_to_update[:-1]
 
     # Remove bootstrap timestep from non-timesteps.
     v_tm1 = value_to_update[:-1]
@@ -78,7 +66,6 @@ def impala_loss(
     rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t, minibatch.a_t)
     max_ratio = jnp.max(jnp.abs(rhos_tm1))
 
-    float_mask_t = jnp.astype(mask_t, jnp.float32)
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
             rlax.vtrace_td_error_and_advantage,
@@ -104,10 +91,12 @@ def impala_loss(
     """
     vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
     pg_advs = vtrace_returns.pg_advantage
-    pg_loss = policy_gradient_loss(logits_to_update, minibatch.a_t, pg_advs, float_mask_t)
 
-    baseline_loss = 0.5 * jnp.sum(jnp.square(vtrace_returns.errors) * mask_t)
-    ent_loss = entropy_loss_fn(logits_to_update, float_mask_t)
+    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, minibatch.a_t, pg_advs, mask_t))
+
+    baseline_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
+
+    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(logits_to_update, mask_t))
 
     total_loss = pg_loss
     total_loss += args.vf_coef * baseline_loss

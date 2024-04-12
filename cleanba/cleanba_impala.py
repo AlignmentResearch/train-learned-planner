@@ -11,7 +11,6 @@ from collections import deque
 from dataclasses import field
 from functools import partial
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Iterator, List, Sequence
 
 import farconf
@@ -378,15 +377,13 @@ def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Arr
     return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
 
 
-def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: tuple[jax.Device, ...]) -> Rollout:
+def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: list[jax.Device]) -> Rollout:
     partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, len(learner_devices))
-    sharded_storage = Rollout(
-        *list(
-            map(
-                lambda x: jax.device_put_sharded(x, devices=learner_devices),
-                partitioned_storage,
-            )
-        )
+    # partitioned_storage is a Rollout with lists inside
+    sharded_storage = jax.tree.map(
+        partial(jax.device_put_sharded, devices=learner_devices),
+        partitioned_storage,
+        is_leaf=lambda x: isinstance(x, list),
     )
     return sharded_storage
 
@@ -399,7 +396,7 @@ def rollout(
     params_queue: queue.Queue,
     writer,
     learner_devices: list[jax.Device],
-    device_thread_id,
+    device_thread_id: int,
     actor_device,
     *,
     get_action,
@@ -627,8 +624,6 @@ if __name__ == "__main__":
 
         params_queues = []
         rollout_queues = []
-        dummy_writer = SimpleNamespace()
-        dummy_writer.add_scalar = lambda x, y, z: None
 
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
@@ -646,7 +641,7 @@ if __name__ == "__main__":
                         runtime_info,
                         rollout_queues[-1],
                         params_queues[-1],
-                        writer if d_idx == 0 and thread_id == 0 else dummy_writer,
+                        writer,
                         runtime_info.learner_devices,
                         d_idx * args.num_actor_threads + thread_id,
                         runtime_info.local_devices[d_id],
@@ -733,7 +728,6 @@ if __name__ == "__main__":
                 writer.add_scalar("losses/policy_loss", loss.pg_loss[0].item(), global_step)
                 writer.add_scalar("losses/entropy", loss.entropy_loss[0].item(), global_step)
                 writer.add_scalar("losses/loss", loss.loss[0].item(), global_step)
-                print("loss difference:", np.abs(loss.loss[1] - loss.loss[0]))
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
