@@ -28,7 +28,7 @@ from rich.pretty import pprint
 from typing_extensions import Self
 
 from cleanba.config import random_seed
-from cleanba.environments import EnvConfig, SokobanConfig
+from cleanba.environments import AtariEnv, EnvConfig
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -102,51 +102,41 @@ class WandbWriter:
 @dataclasses.dataclass
 class Args:
     train_env: EnvConfig = dataclasses.field(  # Environment to do training, including seed
-        default_factory=lambda: SokobanConfig(
-            asynchronous=False, max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
-        )
+        # default_factory=lambda: SokobanConfig(
+        #     asynchronous=False, max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
+        # )
+        default_factory=lambda: AtariEnv(env_id="Breakout-v5"),
     )
     eval_envs: dict[str, EvalConfig] = dataclasses.field(  # How to evaluate the algorithm? Including envs and seeds
-        default_factory=lambda: dict(
-            eval=EvalConfig(
-                SokobanConfig(
-                    asynchronous=False,
-                    max_episode_steps=40,
-                    num_envs=64,
-                    tinyworld_obs=True,
-                    dim_room=(5, 5),
-                    num_boxes=1,
-                )
-            )
-        )
+        default_factory=lambda: dict(eval=EvalConfig(AtariEnv(env_id="Breakout-v5", num_envs=128)))
     )
-    eval_frequency: int = 10  # How often to evaluate and maybe save the model
+    eval_frequency: int = 1000  # How often to evaluate and maybe save the model
 
     seed: int = dataclasses.field(default_factory=random_seed)  # A seed to make the experiment deterministic
 
     save_model: bool = True  # whether to save model into the wandb run folder
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
-    sync_frequency: int = 100
+    sync_frequency: int = 400
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
-    loss: ImpalaLossConfig = ImpalaLossConfig()
+    loss: ImpalaLossConfig = ImpalaLossConfig(vf_coef=0.5)
 
     # Algorithm specific arguments
     total_timesteps: int = 50000000  # total timesteps of the experiments
-    learning_rate: float = 0.0006  # the learning rate of the optimizer
-    local_num_envs: int = 4  # the number of parallel game environments for every actor device
-    num_steps: int = 3  # the number of steps to run in each environment per policy rollout
+    learning_rate: float = 20 * 64 * 0.0006  # the learning rate of the optimizer
+    local_num_envs: int = 512  # the number of parallel game environments for every actor device
+    num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
-    num_minibatches: int = 1  # the number of mini-batches
+    num_minibatches: int = 4  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
-    channels: tuple[int, ...] = (32, 32, 32)  # the channels of the CNN
+    channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
-    num_actor_threads: int = 1  # The number of environment threads per actor device
+    num_actor_threads: int = 4  # The number of environment threads per actor device
     actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
@@ -238,6 +228,7 @@ class ConvSequence(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
         x = ResidualBlock(self.channels)(x)
         x = ResidualBlock(self.channels)(x)
         return x
@@ -512,7 +503,13 @@ def rollout(
                 + np.sum(log_stats.device2host_time)
                 + np.sum(log_stats.env_send_time)
             )
-            middle_loop_time = np.sum(log_stats.rollout_time) + np.sum(log_stats.storage_time)
+            total_rollout_time = np.sum(log_stats.rollout_time)
+            middle_loop_time = (
+                total_rollout_time
+                + np.sum(log_stats.storage_time)
+                + np.sum(log_stats.params_queue_get_time)
+                + np.sum(log_stats.rollout_queue_put_time)
+            )
             outer_loop_time = np.sum(log_stats.update_time)
 
             stats_dict: dict[str, float] = log_stats.avg_and_flush()
@@ -527,11 +524,14 @@ def rollout(
                 else:
                     writer.add_scalar(f"charts/{device_thread_id}/{k}", v, global_step)
 
+            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
+
             writer.add_scalar(
-                f"charts/{device_thread_id}/inner_time_efficiency", inner_loop_time / outer_loop_time, global_step
+                f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
             )
             writer.add_scalar(
-                f"charts/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
+                f"stats/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
             )
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 

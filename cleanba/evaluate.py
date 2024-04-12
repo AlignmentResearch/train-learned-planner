@@ -47,14 +47,15 @@ class EvalConfig:
             raise NotImplementedError(f"{self.steps_to_think=}")
 
     def run(self, network, actor, agent_state, *, key: jnp.ndarray) -> dict[str, float]:
-        envs = self.env.make()
+        key, env_key = jax.random.split(key, 2)
+        env_seed = int(jax.random.randint(env_key, (), minval=0, maxval=2**31 - 2))
+        envs = dataclasses.replace(self.env, seed=env_seed).make()
+
         try:
             all_episode_returns = []
             all_episode_lengths = []
             for _ in range(self.n_episode_multiple):
-                key, env_seed = jax.random.split(key, 2)
-                jax_randint = jax.random.randint(env_seed, (), minval=0, maxval=2**31 - 1)
-                obs, _ = envs.reset(seed=int(jax_randint))
+                obs, _ = envs.reset()
 
                 eps_done = np.zeros(envs.num_envs, dtype=np.bool_)
                 episode_returns = np.zeros(envs.num_envs, dtype=np.float64)

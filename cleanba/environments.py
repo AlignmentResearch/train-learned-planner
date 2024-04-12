@@ -1,6 +1,7 @@
 import abc
 import dataclasses
 import os
+import warnings
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, ClassVar, List, Literal, Optional, Tuple, Union
@@ -17,7 +18,7 @@ from cleanba.config import random_seed
 @dataclasses.dataclass
 class EnvConfig(abc.ABC):
     max_episode_steps: int
-    num_envs: int
+    num_envs: int = 0  # gets overwritten anyways
     seed: int = dataclasses.field(default_factory=random_seed)
 
     @property
@@ -47,7 +48,13 @@ class EnvpoolEnvConfig(EnvConfig):
             batch_size=self.num_envs,
         )
         SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
-        env_kwargs = {k: getattr(self, k) for k in dummy_spec._config_keys if not (k in special_kwargs or k in SPECIAL_KEYS)}
+        env_kwargs = {}
+        for k in dummy_spec._config_keys:
+            if not (k in special_kwargs or k in SPECIAL_KEYS):
+                try:
+                    env_kwargs[k] = getattr(self, k)
+                except AttributeError as e:
+                    warnings.warn(f"Could not get environment setting: {e}")
 
         vec_envs_fn = partial(
             EnvpoolVectorEnv,
@@ -98,6 +105,8 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
     def __post_init__(self):
+        assert self.env_id is not None
+
         if self.difficulty == "hard":
             assert self.split is None
         else:
@@ -251,3 +260,20 @@ class BoxobanConfig(BaseSokobanEnvConfig):
             ),
         )
         return make_fn
+
+
+ATARI_MAX_FRAMES = int(
+    108000 / 4
+)  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
+# This equals 27k, which is the default max_episode_steps for Atari in Envpool
+
+
+@dataclasses.dataclass
+class AtariEnv(EnvpoolEnvConfig):
+    max_episode_steps: int = ATARI_MAX_FRAMES  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
+    episodic_life: bool = False  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
+    repeat_action_probability: float = 0.25  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
+    # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
+    noop_max: int = 1
+    full_action_space: bool = True  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
+    reward_clip: bool = True
