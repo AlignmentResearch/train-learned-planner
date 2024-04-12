@@ -57,30 +57,26 @@ def impala_loss(
     params,
     get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
     args: ImpalaLossConfig,
-    obs_t,
-    a_t,
-    logits_t,
-    r_tm1,
-    done_tm1,
+    minibatch: Transition,
 ):
-    discount_tm1 = (~done_tm1) * args.gamma
-    firststeps_t = done_tm1
+    discount_tm1 = (~minibatch.done_tm1) * args.gamma
+    firststeps_t = minibatch.done_tm1
     mask_t = ~firststeps_t
 
-    logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, obs_t)
+    logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
 
     v_t = value_to_update[1:]
     # Remove bootstrap timestep from non-timesteps.
     v_tm1 = value_to_update[:-1]
 
     logits_to_update = logits_to_update[:-1]
-    logits_t = logits_t[:-1]
-    a_t = a_t[:-1]
+    logits_t = minibatch.logits_t[:-1]
+    a_t = minibatch.a_t[:-1]
     rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, logits_t, a_t)
 
     mask_t = mask_t[:-1]
     float_mask_t = jnp.astype(mask_t, jnp.float32)
-    r_tm1 = r_tm1[1:]
+    r_tm1 = minibatch.r_tm1[1:]
     discount_tm1 = discount_tm1[1:]
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
@@ -121,6 +117,13 @@ def impala_loss(
 SINGLE_DEVICE_UPDATE_DEVICES_AXIS: str = "local_devices"
 
 
+class LossesTuple(NamedTuple):
+    loss: float | jax.Array
+    pg_loss: float | jax.Array
+    v_loss: float | jax.Array
+    entropy_loss: float | jax.Array
+
+
 @partial(jax.jit, static_argnames=["num_batches", "get_logits_and_value", "impala_cfg"])
 def single_device_update(
     agent_state: TrainState,
@@ -130,45 +133,32 @@ def single_device_update(
     get_logits_and_value: Callable,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
-):
-    storage = jax.tree.map(lambda *x: jnp.hstack(x), *sharded_storages)
-    impala_loss_grad_fn = jax.value_and_grad(impala_loss, has_aux=True)
-
-    def update_minibatch(agent_state, minibatch):
-        (
-            mb_obs,
-            mb_actions,
-            mb_logitss,
-            mb_rewards,
-            mb_dones,
-        ) = minibatch
-        (loss, (pg_loss, v_loss, entropy_loss)), grads = impala_loss_grad_fn(
+) -> tuple[TrainState, jax.Array, LossesTuple]:
+    def update_minibatch(agent_state: TrainState, minibatch: Transition):
+        loss_and_aux, grads = jax.value_and_grad(impala_loss, has_aux=True)(
             agent_state.params,
             get_logits_and_value,
             impala_cfg,
-            mb_obs,
-            mb_actions,
-            mb_logitss,
-            mb_rewards,
-            mb_dones,
+            minibatch,
         )
-        grads = jax.lax.pmean(grads, axis_name="local_devices")
+        grads = jax.lax.pmean(grads, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
         agent_state = agent_state.apply_gradients(grads=grads)
-        return agent_state, (loss, pg_loss, v_loss, entropy_loss)
+        return agent_state, loss_and_aux
 
-    agent_state, (loss, pg_loss, v_loss, entropy_loss) = jax.lax.scan(
+    storage = jax.tree.map(lambda *x: jnp.hstack(x), *sharded_storages)
+    storage_by_minibatches = jax.tree.map(lambda x: jnp.array(jnp.split(x, num_batches, axis=1)), storage)
+
+    agent_state, loss_and_aux_per_step = jax.lax.scan(
         update_minibatch,
         agent_state,
-        (
-            jnp.array(jnp.split(storage.obs_t, num_batches, axis=1)),
-            jnp.array(jnp.split(storage.a_t, num_batches, axis=1)),
-            jnp.array(jnp.split(storage.logits_t, num_batches, axis=1)),
-            jnp.array(jnp.split(storage.r_tm1, num_batches, axis=1)),
-            jnp.array(jnp.split(storage.done_tm1, num_batches, axis=1)),
-        ),
+        storage_by_minibatches,
     )
-    loss = jax.lax.pmean(loss, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS).mean()
-    pg_loss = jax.lax.pmean(pg_loss, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS).mean()
-    v_loss = jax.lax.pmean(v_loss, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS).mean()
-    entropy_loss = jax.lax.pmean(entropy_loss, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS).mean()
-    return agent_state, loss, pg_loss, v_loss, entropy_loss, key
+
+    (loss, (pg_loss, v_loss, entropy_loss)) = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
+    losses = LossesTuple(
+        loss=loss.mean(),
+        pg_loss=pg_loss.mean(),
+        v_loss=v_loss.mean(),
+        entropy_loss=entropy_loss.mean(),
+    )
+    return (agent_state, key, losses)

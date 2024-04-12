@@ -13,7 +13,7 @@ from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, impala_loss
+from cleanba.impala_loss import ImpalaLossConfig, Transition, impala_loss
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -45,7 +45,7 @@ def test_vtrace_alignment(np_rng: np.random.Generator, gamma: float, num_timeste
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
-@pytest.mark.parametrize("num_timesteps", [20, 2])
+@pytest.mark.parametrize("num_timesteps", [20, 2])  # Note: with 1 timesteps we get zero-length arrays
 @pytest.mark.parametrize("last_value", [0.0, 1.0])
 def test_impala_loss_zero_when_accurate(
     np_rng: np.random.Generator, gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5
@@ -66,16 +66,20 @@ def test_impala_loss_zero_when_accurate(
 
     obs_t = correct_returns[1:]  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
-    a_t = np.zeros((num_timesteps, batch_size), dtype=jnp.int32)
+    a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
     (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
         params=(),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
         args=ImpalaLossConfig(gamma=gamma),
-        obs_t=obs_t,
-        a_t=a_t,
-        logits_t=logits_t,
-        r_tm1=rewards,
-        done_tm1=done_tm1,
+        minibatch=Transition(
+            obs_t=jnp.array(obs_t),
+            done_tm1=done_tm1,
+            a_t=a_t,
+            logits_t=logits_t,
+            r_tm1=rewards,
+            trunc_tm1=None,  # type: ignore
+            term_tm1=None,  # type: ignore
+        ),
     )
 
     assert np.allclose(pg_loss, 0.0)
@@ -242,11 +246,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
             params=(),
             get_logits_and_value=lambda params, obs: (jnp.zeros((obs.shape[-1], 1)), obs),
             args=ImpalaLossConfig(gamma=gamma),
-            obs_t=jnp.array(transition.obs_t),
-            a_t=jnp.array(transition.a_t),
-            logits_t=jnp.array(transition.logits_t),
-            r_tm1=jnp.array(transition.r_tm1),
-            done_tm1=jnp.array(transition.done_tm1),
+            minibatch=transition,
         )
 
         assert np.allclose(pg_loss, 0.0)
