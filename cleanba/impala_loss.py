@@ -142,11 +142,23 @@ def single_device_update(
             key_str = "/".join(key)
             metrics_dict["param_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
 
-        flat_param = tree_flatten_and_concat(agent_state.params)
+        flat_param = tree_flatten_and_concat(
+            dict(
+                network=agent_state.params.network_params,
+                actor=agent_state.params.actor_params,
+                critic=agent_state.params.critic_params,
+            )
+        )
         metrics_dict["param_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_param)))
         metrics_dict["param_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_param)))
 
-        flat_grad = tree_flatten_and_concat(grads)
+        flat_grad = tree_flatten_and_concat(
+            dict(
+                network=grads.network_params,
+                actor=grads.actor_params,
+                critic=grads.critic_params,
+            )
+        )
         metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
         metrics_dict["grad_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_grad)))
 
