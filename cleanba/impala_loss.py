@@ -134,31 +134,31 @@ def single_device_update(
         metrics_dict["loss"] = loss
         grads = jax.lax.pmean(grads, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
 
-        for key, value in flax.traverse_util.flatten_dict(grads):
-            key_str = "/".join(key)
-            metrics_dict["grad_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
-
-        for key, value in flax.traverse_util.flatten_dict(agent_state.params):
-            key_str = "/".join(key)
-            metrics_dict["param_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
-
-        flat_param = tree_flatten_and_concat(
+        for key, value in flax.traverse_util.flatten_dict(
             dict(
                 network=agent_state.params.network_params,
                 actor=agent_state.params.actor_params,
                 critic=agent_state.params.critic_params,
             )
-        )
-        metrics_dict["param_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_param)))
-        metrics_dict["param_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_param)))
+        ):
+            key_str = "/".join(key)
+            metrics_dict["param_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
 
-        flat_grad = tree_flatten_and_concat(
+        for key, value in flax.traverse_util.flatten_dict(
             dict(
                 network=grads.network_params,
                 actor=grads.actor_params,
                 critic=grads.critic_params,
             )
-        )
+        ):
+            key_str = "/".join(key)
+            metrics_dict["grad_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
+
+        flat_param = tree_flatten_and_concat(agent_state.params)
+        metrics_dict["param_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_param)))
+        metrics_dict["param_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_param)))
+
+        flat_grad = tree_flatten_and_concat(grads)
         metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
         metrics_dict["grad_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_grad)))
 
