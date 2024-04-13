@@ -315,225 +315,194 @@ def log_parameter_differences(params) -> dict[str, jax.Array]:
 MUST_STOP_PROGRAM: bool = False
 
 
-@dataclasses.dataclass
-class LoggingStats:
-    episode_returns: list[float]
-    episode_lengths: list[float]
-    params_queue_get_time: list[float]
-    rollout_time: list[float]
-    create_rollout_time: list[float]
-    rollout_queue_put_time: list[float]
-
-    env_recv_time: list[float]
-    inference_time: list[float]
-    storage_time: list[float]
-    device2host_time: list[float]
-    env_send_time: list[float]
-    update_time: list[float]
-
-    @classmethod
-    def new_empty(cls: type[Self]) -> Self:
-        init_dict = {f.name: [] for f in dataclasses.fields(cls)}
-        return cls(**init_dict)
-
-    def avg_and_flush(self) -> dict[str, float]:
-        field_names = [f.name for f in dataclasses.fields(self)]
-        out = {}
-        for n in field_names:
-            this_list = getattr(self, n)
-            out[f"avg_{n}"] = float(np.mean(getattr(self, n)))
-            this_list.clear()  # Flush the stats
-        return out
-
-
-@contextlib.contextmanager
-def time_and_append(stats: list[float]):
-    start_time = time.time()
-    yield
-    stats.append(time.time() - start_time)
-
-
-@partial(jax.jit, static_argnames=["len_learner_devices"])
-def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Array, len_learner_devices: int) -> Rollout:
-    # Concatenate the Rollout steps over time
-    out = Rollout(
-        # Add the `last_obs` on the end of this rollout
-        obs_t=jnp.stack([*(r.obs_t for r in storage), last_obs]),
-        a_t=jnp.stack([r.a_t for r in storage]),
-        logits_t=jnp.stack([r.logits_t for r in storage]),
-        r_t=jnp.stack([r.r_t for r in storage]),
-        done_t=jnp.stack([r.done_t for r in storage]),
-    )
-    # Split for every learner device over `num_envs` and return
-    return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
-
-
-def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: list[jax.Device]) -> Rollout:
-    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, len(learner_devices))
-    # partitioned_storage is a Rollout with lists inside
-    sharded_storage = jax.tree.map(
-        partial(jax.device_put_sharded, devices=learner_devices),
-        partitioned_storage,
-        is_leaf=lambda x: isinstance(x, list),
-    )
-    return sharded_storage
+def make_env(env_id, seed, num_envs):
+    return AtariEnv(env_id=env_id, seed=seed, num_envs=num_envs).make
 
 
 def rollout(
     key: jax.random.PRNGKey,
     args: Args,
-    runtime_info: RuntimeInformation,
-    rollout_queue: queue.Queue,
+    rollout_queue,
     params_queue: queue.Queue,
     writer,
-    learner_devices: list[jax.Device],
-    device_thread_id: int,
+    learner_devices,
+    device_thread_id,
     actor_device,
-    *,
-    get_action,
 ):
-    actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
-
-    envs = dataclasses.replace(
-        args.train_env,
-        seed=args.train_env.seed + actor_id,
-        num_envs=args.local_num_envs,
-    ).make()
-
+    envs = make_env(
+        args.train_env.env_id,
+        args.seed + jax.process_index() + device_thread_id,
+        args.local_num_envs,
+    )()
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
 
-    log_stats = LoggingStats.new_empty()
-    # Counters for episode length and episode return
-    episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    @jax.jit
+    def get_action(
+        params: flax.core.FrozenDict,
+        next_obs: np.ndarray,
+        key: jax.random.PRNGKey,
+    ):
+        next_obs = jnp.array(next_obs)
+        hidden = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
+        logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
+        # sample action: Gumbel-softmax trick
+        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
+        key, subkey = jax.random.split(key)
+        u = jax.random.uniform(subkey, shape=logits.shape)
+        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
+        return next_obs, action, logits, key
 
+    # put data in the last index
+    episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
+    episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    envs.reset()
+    envs.step_async(envs.action_space.sample())
+
+    params_queue_get_time = deque(maxlen=10)
+    rollout_time = deque(maxlen=10)
+    rollout_queue_put_time = deque(maxlen=10)
     actor_policy_version = 0
     storage = []
 
-    # Store the first observation
-    obs_t, _ = envs.reset()
+    @jax.jit
+    def prepare_data(storage: List[Rollout]) -> Rollout:
+        return jax.tree_map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
     global MUST_STOP_PROGRAM
-    for update in range(1, runtime_info.num_updates + 2):
+    for update in range(1, args.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
+        update_time_start = time.time()
+        env_recv_time = 0
+        inference_time = 0
+        storage_time = 0
+        d2h_time = 0
+        env_send_time = 0
+        num_steps_with_bootstrap = (
+            args.num_steps + 1 + int(len(storage) == 0)
+        )  # num_steps + 1 to get the states for value bootstrapping.
+        # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
+        # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
+        # behind the learner's policy version
+        params_queue_get_time_start = time.time()
+        if args.concurrency:
+            if update != 2:
+                params = params_queue.get()
+                # NOTE: block here is important because otherwise this thread will call
+                # the jitted `get_action` function that hangs until the params are ready.
+                # This blocks the `get_action` function in other actor threads.
+                # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
+                params.network_params["params"]["Dense_0"][
+                    "kernel"
+                ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
+                actor_policy_version += 1
+        else:
+            params = params_queue.get()
+            actor_policy_version += 1
+        params_queue_get_time.append(time.time() - params_queue_get_time_start)
+        rollout_time_start = time.time()
+        for _ in range(1, num_steps_with_bootstrap):
+            env_recv_time_start = time.time()
+            next_obs, next_reward, next_trunc, next_term, info = envs.step_wait()
+            next_done = next_trunc | next_term
+            env_recv_time += time.time() - env_recv_time_start
+            global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * args.world_size
+            env_id = info["env_id"]
 
-        with time_and_append(log_stats.update_time):
-            with time_and_append(log_stats.params_queue_get_time):
-                num_steps_with_bootstrap = args.num_steps
+            inference_time_start = time.time()
+            next_obs, action, logits, key = get_action(params, next_obs, key)
+            inference_time += time.time() - inference_time_start
 
-                # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
-                # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
-                # behind the learner's policy version
-                if args.concurrency:
-                    if update != 2:
-                        params = params_queue.get(timeout=args.queue_timeout)
-                        # NOTE: block here is important because otherwise this thread will call
-                        # the jitted `get_action` function that hangs until the params are ready.
-                        # This blocks the `get_action` function in other actor threads.
-                        # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                        params.network_params["params"]["Dense_0"][
-                            "kernel"
-                        ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
-                        actor_policy_version += 1
-                else:
-                    params = params_queue.get(timeout=args.queue_timeout)
-                    actor_policy_version += 1
+            d2h_time_start = time.time()
+            cpu_action = np.array(action)
+            d2h_time += time.time() - d2h_time_start
+            env_send_time_start = time.time()
+            envs.step_async(cpu_action)
+            env_send_time += time.time() - env_send_time_start
+            storage_time_start = time.time()
 
-            with time_and_append(log_stats.rollout_time):
-                for _ in range(1, num_steps_with_bootstrap + 1):
-                    global_step += (
-                        args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
-                    )
-
-                    with time_and_append(log_stats.inference_time):
-                        a_t, logits_t, key = get_action(params, obs_t, key)
-
-                    with time_and_append(log_stats.device2host_time):
-                        cpu_action = np.array(a_t)
-
-                    with time_and_append(log_stats.env_send_time):
-                        envs.step_async(cpu_action)
-
-                    with time_and_append(log_stats.env_recv_time):
-                        obs_t_plus_1, r_t, term_t, trunc_t, info_t = envs.step_wait()
-                        done_t = term_t | trunc_t
-
-                    with time_and_append(log_stats.create_rollout_time):
-                        storage.append(
-                            Rollout(
-                                obs_t=obs_t,
-                                done_t=done_t,
-                                a_t=a_t,
-                                logits_t=logits_t,
-                                r_t=r_t,
-                            )
-                        )
-                        obs_t = obs_t_plus_1
-
-                        log_stats.episode_returns.extend(episode_returns[done_t])
-                        episode_returns[:] += r_t
-                        episode_returns[:] *= ~done_t
-                        log_stats.episode_lengths.extend(episode_lengths[done_t])
-                        episode_lengths[:] += 1
-                        episode_lengths[:] *= ~done_t
-
-            with time_and_append(log_stats.storage_time):
-                sharded_storage = concat_and_shard_rollout(storage, obs_t, learner_devices)
-                storage.clear()
-                payload = (
-                    global_step,
-                    actor_policy_version,
-                    update,
-                    sharded_storage,
-                    np.mean(log_stats.params_queue_get_time),
-                    device_thread_id,
+            # info["TimeLimit.truncated"] has a bug https://github.com/sail-sg/envpool/issues/239
+            # so we use our own truncated flag
+            truncated = info["elapsed_step"] >= envs.envs.spec.config.max_episode_steps
+            storage.append(
+                Rollout(
+                    obs=next_obs,
+                    dones=next_done,
+                    actions=action,
+                    logitss=logits,
+                    env_ids=env_id,
+                    rewards=next_reward,
+                    truncations=truncated,
+                    terminations=info["terminated"],
+                    firststeps=info["elapsed_step"] == 0,
                 )
-            with time_and_append(log_stats.rollout_queue_put_time):
-                rollout_queue.put(payload, timeout=args.queue_timeout)
+            )
+            episode_returns[env_id] += info["reward"]
+            returned_episode_returns[env_id] = np.where(
+                info["terminated"] + truncated, episode_returns[env_id], returned_episode_returns[env_id]
+            )
+            episode_returns[env_id] *= (1 - info["terminated"]) * (1 - truncated)
+            episode_lengths[env_id] += 1
+            returned_episode_lengths[env_id] = np.where(
+                info["terminated"] + truncated, episode_lengths[env_id], returned_episode_lengths[env_id]
+            )
+            episode_lengths[env_id] *= (1 - info["terminated"]) * (1 - truncated)
+            storage_time += time.time() - storage_time_start
+        rollout_time.append(time.time() - rollout_time_start)
 
-        # Log on all rollout threads
+        avg_episodic_return = np.mean(returned_episode_returns)
+        partitioned_storage = prepare_data(storage)
+        sharded_storage = Rollout(
+            *list(map(lambda x: jax.device_put_sharded(x, devices=learner_devices), partitioned_storage))
+        )
+        payload = (
+            global_step,
+            actor_policy_version,
+            update,
+            sharded_storage,
+            np.mean(params_queue_get_time),
+            device_thread_id,
+        )
+        rollout_queue_put_time_start = time.time()
+        rollout_queue.put(payload)
+        rollout_queue_put_time.append(time.time() - rollout_queue_put_time_start)
+
+        # move bootstrapping step to the beginning of the next update
+        storage = storage[-1:]
+
         if update % args.log_frequency == 0:
-            inner_loop_time = (
-                np.sum(log_stats.env_recv_time)
-                + np.sum(log_stats.create_rollout_time)
-                + np.sum(log_stats.inference_time)
-                + np.sum(log_stats.device2host_time)
-                + np.sum(log_stats.env_send_time)
-            )
-            total_rollout_time = np.sum(log_stats.rollout_time)
-            middle_loop_time = (
-                total_rollout_time
-                + np.sum(log_stats.storage_time)
-                + np.sum(log_stats.params_queue_get_time)
-                + np.sum(log_stats.rollout_queue_put_time)
-            )
-            outer_loop_time = np.sum(log_stats.update_time)
-
-            stats_dict: dict[str, float] = log_stats.avg_and_flush()
-            steps_per_second = global_step / (time.time() - start_time)
-            print(
-                f"{device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
-            )
-
-            for k, v in stats_dict.items():
-                if k.endswith("_time"):
-                    writer.add_scalar(f"stats/{device_thread_id}/{k}", v, global_step)
-                else:
-                    writer.add_scalar(f"charts/{device_thread_id}/{k}", v, global_step)
-
-            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
-
+            if device_thread_id == 0:
+                print(
+                    f"global_step={global_step}, avg_episodic_return={avg_episodic_return}, rollout_time={np.mean(rollout_time)}"
+                )
+                print("SPS:", int(global_step / (time.time() - start_time)))
+            writer.add_scalar(f"stats/{device_thread_id}/rollout_time", np.mean(rollout_time), global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/avg_episodic_return", avg_episodic_return, global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/avg_episodic_length", np.mean(returned_episode_lengths), global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/params_queue_get_time", np.mean(params_queue_get_time), global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/env_recv_time", env_recv_time, global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/inference_time", inference_time, global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/storage_time", storage_time, global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/d2h_time", d2h_time, global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/env_send_time", env_send_time, global_step)
+            writer.add_scalar(f"stats/{device_thread_id}/rollout_queue_put_time", np.mean(rollout_queue_put_time), global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/SPS", int(global_step / (time.time() - start_time)), global_step)
             writer.add_scalar(
-                f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
+                f"charts/{device_thread_id}/SPS_update",
+                int(
+                    args.local_num_envs
+                    * args.num_steps
+                    * len_actor_device_ids
+                    * args.num_actor_threads
+                    * args.world_size
+                    / (time.time() - update_time_start)
+                ),
+                global_step,
             )
-            writer.add_scalar(
-                f"stats/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
-            )
-            writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
 
 if __name__ == "__main__":
