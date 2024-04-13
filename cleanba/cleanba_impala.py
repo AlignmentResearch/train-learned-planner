@@ -26,6 +26,7 @@ from rich.pretty import pprint
 from tensorboardX import SummaryWriter
 
 from cleanba.environments import AtariEnv
+from cleanba.impala_loss import ImpalaLossConfig, Rollout, single_device_update
 
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
@@ -73,22 +74,18 @@ class Args:
     "the number of steps to run in each environment per policy rollout"
     anneal_lr: bool = True
     "Toggle learning rate annealing for policy and value networks"
-    gamma: float = 0.99
-    "the discount factor gamma"
     num_minibatches: int = 4
     "the number of mini-batches"
     gradient_accumulation_steps: int = 1
     "the number of gradient accumulation steps before performing an optimization step"
-    ent_coef: float = 0.01
-    "coefficient of the entropy"
-    vf_coef: float = 0.5
-    "coefficient of the value function"
     max_grad_norm: float = 40.0
     "the maximum norm for the gradient clipping"
     channels: List[int] = field(default_factory=lambda: [16, 32, 32])
     "the channels of the CNN"
     hiddens: List[int] = field(default_factory=lambda: [256])
     "the hiddens size of the MLP"
+
+    loss: ImpalaLossConfig = ImpalaLossConfig()
 
     actor_device_ids: List[int] = field(default_factory=lambda: [0])
     "the device ids that actor workers will use"
@@ -240,19 +237,6 @@ class AgentParams:
         return item in (f.name for f in dataclasses.fields(self))
 
 
-
-class Transition(NamedTuple):
-    obs: list
-    dones: list
-    actions: list
-    logitss: list
-    env_ids: list
-    rewards: list
-    truncations: list
-    terminations: list
-    firststeps: list  # first step of an episode
-
-
 def rollout(
     key: jax.random.PRNGKey,
     args,
@@ -303,7 +287,7 @@ def rollout(
     storage = []
 
     @jax.jit
-    def prepare_data(storage: List[Transition]) -> Transition:
+    def prepare_data(storage: List[Rollout]) -> Rollout:
         return jax.tree_map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
     for update in range(1, args.num_updates + 2):
@@ -360,7 +344,7 @@ def rollout(
             # so we use our own truncated flag
             truncated = info["elapsed_step"] >= envs.envs.spec.config.max_episode_steps
             storage.append(
-                Transition(
+                Rollout(
                     obs=next_obs,
                     dones=next_done,
                     actions=action,
@@ -387,7 +371,7 @@ def rollout(
 
         avg_episodic_return = np.mean(returned_episode_returns)
         partitioned_storage = prepare_data(storage)
-        sharded_storage = Transition(
+        sharded_storage = Rollout(
             *list(map(lambda x: jax.device_put_sharded(x, devices=learner_devices), partitioned_storage))
         )
         payload = (
@@ -544,97 +528,13 @@ if __name__ == "__main__":
         value = Critic().apply(params.critic_params, hidden).squeeze(-1)
         return raw_logits, value
 
-    def impala_loss(params, x, a_t, logitss, rewards, dones, firststeps):
-        discounts = (1.0 - dones) * args.gamma
-        mask = jnp.ones_like(1.0 - firststeps)
-
-        policy_logits, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, x)
-
-        v_t = value_to_update[1:]
-        # Remove bootstrap timestep from non-timesteps.
-        v_tm1 = value_to_update[:-1]
-
-        # Discarding the last observation's logit corresponds to logits for the same timesteps as was observed in the
-        # minibatch.
-        policy_logits = policy_logits[:-1]
-        logitss = logitss[:-1]
-        a_t = a_t[:-1]
-        mask = mask[1:]
-        rewards = rewards[1:]
-        discounts = discounts[1:]
-
-
-        rhos_tm1 = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a_t)
-        # max_ratio = jnp.max(jnp.abs(rhos_tm1))
-
-        vtrace_td_error_and_advantage = jax.vmap(
-            partial(
-                rlax.vtrace_td_error_and_advantage,
-                lambda_=1.0,
-                clip_rho_threshold=1.0,
-                clip_pg_rho_threshold=1.0,
-                stop_target_gradients=True,
-            ),
-            in_axes=1,
-            out_axes=1,
-        )
-
-        vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, rewards, discounts, rhos_tm1)
-        pg_advs = vtrace_returns.pg_advantage
-
-        pg_loss = len(policy_logits) * jnp.sum(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(policy_logits, a_t, pg_advs, mask))
-        baseline_loss = 0.5 * jnp.sum(jnp.square(vtrace_returns.errors))
-        ent_loss = len(policy_logits) * jnp.sum(jax.vmap(rlax.entropy_loss, in_axes=1)(policy_logits, mask))
-
-        total_loss =  pg_loss
-        total_loss += (args.vf_coef) * baseline_loss
-        total_loss += (args.ent_coef) * ent_loss
-        return total_loss, (pg_loss, baseline_loss, ent_loss)
-
-    @jax.jit
-    def single_device_update(
-        agent_state: TrainState,
-        sharded_storages: List[Transition],
-        key: jax.random.PRNGKey,
-    ):
-        storage = jax.tree_map(lambda *x: jnp.hstack(x), *sharded_storages)
-        impala_loss_grad_fn = jax.value_and_grad(impala_loss, has_aux=True)
-
-        def update_minibatch(agent_state, minibatch):
-            mb_obs, mb_actions, mb_logitss, mb_rewards, mb_dones, mb_firststeps = minibatch
-            (loss, (pg_loss, v_loss, entropy_loss)), grads = impala_loss_grad_fn(
-                agent_state.params,
-                mb_obs,
-                mb_actions,
-                mb_logitss,
-                mb_rewards,
-                mb_dones,
-                mb_firststeps,
-            )
-            grads = jax.lax.pmean(grads, axis_name="local_devices")
-            agent_state = agent_state.apply_gradients(grads=grads)
-            return agent_state, (loss, pg_loss, v_loss, entropy_loss)
-
-        agent_state, (loss, pg_loss, v_loss, entropy_loss) = jax.lax.scan(
-            update_minibatch,
-            agent_state,
-            (
-                jnp.array(jnp.split(storage.obs, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.actions, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.logitss, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.rewards, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.dones, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-                jnp.array(jnp.split(storage.firststeps, args.num_minibatches * args.gradient_accumulation_steps, axis=1)),
-            ),
-        )
-        loss = jax.lax.pmean(loss, axis_name="local_devices").mean()
-        pg_loss = jax.lax.pmean(pg_loss, axis_name="local_devices").mean()
-        v_loss = jax.lax.pmean(v_loss, axis_name="local_devices").mean()
-        entropy_loss = jax.lax.pmean(entropy_loss, axis_name="local_devices").mean()
-        return agent_state, loss, pg_loss, v_loss, entropy_loss, key
-
     multi_device_update = jax.pmap(
-        single_device_update,
+        partial(
+            single_device_update,
+            get_logits_and_value=get_logits_and_value,
+            num_batches=args.num_minibatches * args.gradient_accumulation_steps,
+            impala_cfg=args.loss,
+        ),
         axis_name="local_devices",
         devices=global_learner_decices,
     )
@@ -685,7 +585,7 @@ if __name__ == "__main__":
                 sharded_storages.append(sharded_storage)
         rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
         training_time_start = time.time()
-        (agent_state, loss, pg_loss, v_loss, entropy_loss, learner_keys) = multi_device_update(
+        (agent_state, learner_keys, all_losses) = multi_device_update(
             agent_state,
             sharded_storages,
             learner_keys,
@@ -714,10 +614,10 @@ if __name__ == "__main__":
             writer.add_scalar(
                 "charts/learning_rate", agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(), global_step
             )
-            writer.add_scalar("losses/value_loss", v_loss[-1].item(), global_step)
-            writer.add_scalar("losses/policy_loss", pg_loss[-1].item(), global_step)
-            writer.add_scalar("losses/entropy", entropy_loss[-1].item(), global_step)
-            writer.add_scalar("losses/loss", loss[-1].item(), global_step)
+            writer.add_scalar("losses/value_loss", all_losses.v_loss[-1].item(), global_step)
+            writer.add_scalar("losses/policy_loss", all_losses.pg_loss[-1].item(), global_step)
+            writer.add_scalar("losses/entropy", all_losses.entropy_loss[-1].item(), global_step)
+            writer.add_scalar("losses/loss", all_losses.loss[-1].item(), global_step)
         if learner_policy_version >= args.num_updates:
             break
 
