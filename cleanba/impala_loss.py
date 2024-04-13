@@ -11,6 +11,7 @@ from numpy.typing import NDArray
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig:
+    global_coef: float = 640.0  # Multiply the whole loss by this
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
     vf_coef: float = 0.5  # coefficient of the value function
@@ -98,9 +99,9 @@ def impala_loss(
 
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(logits_to_update, mask_t))
 
-    total_loss = pg_loss
-    total_loss += args.vf_coef * baseline_loss
-    total_loss += args.ent_coef * ent_loss
+    total_loss = args.global_coef * pg_loss
+    total_loss += (args.global_coef * args.vf_coef) * baseline_loss
+    total_loss += (args.global_coef * args.ent_coef) * ent_loss
     return total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)
 
 
