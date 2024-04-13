@@ -358,7 +358,7 @@ def rollout(
 
             # info["TimeLimit.truncated"] has a bug https://github.com/sail-sg/envpool/issues/239
             # so we use our own truncated flag
-            truncated = info["elapsed_step"] >= envs.spec.config.max_episode_steps
+            truncated = info["elapsed_step"] >= envs.envs.spec.config.max_episode_steps
             storage.append(
                 Transition(
                     obs=next_obs,
