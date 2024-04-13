@@ -6,6 +6,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+import dataclasses
 from types import SimpleNamespace
 from typing import List, NamedTuple, Optional, Sequence
 
@@ -250,6 +251,10 @@ class AgentParams:
     network_params: flax.core.FrozenDict
     actor_params: flax.core.FrozenDict
     critic_params: flax.core.FrozenDict
+
+    def __contains__(self, item):
+        return item in (f.name for f in dataclasses.fields(self))
+
 
 
 class Transition(NamedTuple):
