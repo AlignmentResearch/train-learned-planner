@@ -574,9 +574,9 @@ if __name__ == "__main__":
         policy_logits = policy_logits[:-1]
         logitss = logitss[:-1]
         a_t = a_t[:-1]
-        mask = mask[:-1]
-        rewards = rewards[:-1]
-        discounts = discounts[:-1]
+        mask = mask[1:]
+        rewards = rewards[1:]
+        discounts = discounts[1:]
 
 
         rhos_tm1 = rlax.categorical_importance_sampling_ratios(policy_logits, logitss, a_t)
