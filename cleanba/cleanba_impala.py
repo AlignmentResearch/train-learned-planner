@@ -35,6 +35,7 @@ from cleanba.impala_loss import (
     ImpalaLossConfig,
     Rollout,
     single_device_update,
+    tree_flatten_and_concat,
 )
 from cleanba.optimizer import rmsprop_pytorch_style
 
@@ -292,18 +293,14 @@ def get_action(
     return action, logits, key
 
 
-def flatten_tree(x) -> jax.Array:
-    leaves, _ = jax.tree.flatten(x)
-    return jnp.concat(list(map(jnp.ravel, leaves)))
-
 
 @jax.jit
 def log_parameter_differences(params) -> dict[str, jax.Array]:
     max_params = jax.tree.map(lambda x: np.max(x, axis=0), params)
     min_params = jax.tree.map(lambda x: np.min(x, axis=0), params)
 
-    flat_max_params = flatten_tree(max_params)
-    flat_min_params = flatten_tree(min_params)
+    flat_max_params = tree_flatten_and_concat(max_params)
+    flat_min_params = tree_flatten_and_concat(min_params)
     abs_diff = jnp.abs(flat_max_params - flat_min_params)
     return dict(
         max_diff=jnp.max(abs_diff),
@@ -687,7 +684,7 @@ if __name__ == "__main__":
             (
                 agent_state,
                 learner_keys,
-                loss,
+                metrics_dict,
             ) = multi_device_update(
                 agent_state,
                 sharded_storages,
@@ -734,10 +731,13 @@ if __name__ == "__main__":
                     agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
                     global_step,
                 )
-                writer.add_scalar("losses/value_loss", loss.v_loss[0].item(), global_step)
-                writer.add_scalar("losses/policy_loss", loss.pg_loss[0].item(), global_step)
-                writer.add_scalar("losses/entropy", loss.entropy_loss[0].item(), global_step)
-                writer.add_scalar("losses/loss", loss.loss[0].item(), global_step)
+                writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
+                writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
+                writer.add_scalar("losses/entropy", metrics_dict.pop("entropy_loss")[0].item(), global_step)
+                writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
+
+                for key, value in metrics_dict:
+                    writer.add_scalar(key, value[0].item(), global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
