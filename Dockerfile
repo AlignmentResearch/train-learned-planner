@@ -131,4 +131,4 @@ RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$'
 
 
 FROM main as atari
-RUN pip uninstall envpool && pip install envpool && rm -rf "${HOME}/.cache"
+RUN pip uninstall -y envpool && pip install envpool && rm -rf "${HOME}/.cache"
