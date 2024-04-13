@@ -741,8 +741,8 @@ if __name__ == "__main__":
                 writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
                 writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
 
-                for key, value in metrics_dict.items():
-                    writer.add_scalar(key, value[0].item(), global_step)
+                for name, value in metrics_dict.items():
+                    writer.add_scalar(name, value[0].item(), global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
