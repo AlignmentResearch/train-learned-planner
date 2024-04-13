@@ -25,6 +25,8 @@ from flax.training.train_state import TrainState
 from rich.pretty import pprint
 from tensorboardX import SummaryWriter
 
+from cleanba.environments import AtariEnv
+
 # Fix weird OOM https://github.com/google/jax/discussions/6332#discussioncomment-1279991
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.6"
 os.environ["XLA_FLAGS"] = "--xla_cpu_multi_thread_eigen=false " "intra_op_parallelism_threads=1"
@@ -118,26 +120,7 @@ ATARI_MAX_FRAMES = int(
 
 
 def make_env(env_id, seed, num_envs):
-    def thunk():
-        envs = envpool.make(
-            env_id,
-            env_type="gym",
-            num_envs=num_envs,
-            episodic_life=False,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
-            repeat_action_probability=0.25,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
-            noop_max=1,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
-            full_action_space=True,  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
-            max_episode_steps=ATARI_MAX_FRAMES,  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
-            reward_clip=True,
-            seed=seed,
-        )
-        envs.num_envs = num_envs
-        envs.single_action_space = envs.action_space
-        envs.single_observation_space = envs.observation_space
-        envs.is_vector_env = True
-        return envs
-
-    return thunk
+    return AtariEnv(env_id=env_id, seed=seed, num_envs=num_envs).make
 
 
 ### RMSProp implementation for PyTorch-style RMSProp
@@ -310,7 +293,8 @@ def rollout(
     returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    envs.async_reset()
+    envs.reset()
+    envs.step_async(envs.action_space.sample())
 
     params_queue_get_time = deque(maxlen=10)
     rollout_time = deque(maxlen=10)
@@ -354,7 +338,8 @@ def rollout(
         rollout_time_start = time.time()
         for _ in range(1, num_steps_with_bootstrap):
             env_recv_time_start = time.time()
-            next_obs, next_reward, next_done, info = envs.recv()
+            next_obs, next_reward, next_trunc, next_term, info = envs.step_wait()
+            next_done = next_trunc | next_term
             env_recv_time += time.time() - env_recv_time_start
             global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * args.world_size
             env_id = info["env_id"]
@@ -367,7 +352,7 @@ def rollout(
             cpu_action = np.array(action)
             d2h_time += time.time() - d2h_time_start
             env_send_time_start = time.time()
-            envs.send(cpu_action, env_id)
+            envs.step_async(cpu_action)
             env_send_time += time.time() - env_send_time_start
             storage_time_start = time.time()
 
