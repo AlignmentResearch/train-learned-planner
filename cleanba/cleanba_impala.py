@@ -408,6 +408,8 @@ def rollout(
     # Counters for episode length and episode return
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
 
     actor_policy_version = 0
     storage = []
@@ -474,12 +476,14 @@ def rollout(
                         obs_t = obs_t_plus_1
 
                         log_stats.episode_returns.extend(episode_returns[done_t])
+                        returned_episode_returns[done_t] = episode_returns[done_t]
                         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
                         # the true return.
                         non_clipped_reward = info_t.get("reward", r_t)
                         episode_returns[:] += non_clipped_reward
                         episode_returns[:] *= ~done_t
                         log_stats.episode_lengths.extend(episode_lengths[done_t])
+                        returned_episode_lengths[done_t] = episode_lengths[done_t]
                         episode_lengths[:] += 1
                         episode_lengths[:] *= ~done_t
 
@@ -529,6 +533,8 @@ def rollout(
 
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step)
+            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step)
 
             writer.add_scalar(
                 f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
