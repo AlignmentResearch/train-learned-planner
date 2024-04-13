@@ -134,6 +134,8 @@ class Args:
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
+    rmsprop_eps: float = 0.01
+    rmsprop_decay: float = 0.01
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
@@ -291,7 +293,6 @@ def get_action(
     u = jax.random.uniform(subkey, shape=logits.shape)
     action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
     return action, logits, key
-
 
 
 @jax.jit
@@ -530,8 +531,12 @@ def rollout(
 
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step)
+            writer.add_scalar(
+                f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step
+            )
+            writer.add_scalar(
+                f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step
+            )
 
             writer.add_scalar(
                 f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
@@ -588,8 +593,8 @@ if __name__ == "__main__":
                     optax.clip_by_global_norm(args.max_grad_norm),
                     optax.inject_hyperparams(rmsprop_pytorch_style)(
                         learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        eps=0.01,
-                        decay=0.99,
+                        eps=args.rmsprop_eps,
+                        decay=args.rmsprop_decay,
                     ),
                 ),
                 every_k_schedule=args.gradient_accumulation_steps,
@@ -733,10 +738,10 @@ if __name__ == "__main__":
                 )
                 writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
                 writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
-                writer.add_scalar("losses/entropy", metrics_dict.pop("entropy_loss")[0].item(), global_step)
+                writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
                 writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
 
-                for key, value in metrics_dict:
+                for key, value in metrics_dict.items():
                     writer.add_scalar(key, value[0].item(), global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:

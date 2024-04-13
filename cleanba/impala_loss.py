@@ -96,14 +96,14 @@ def impala_loss(
 
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, minibatch.a_t, pg_advs, mask_t))
 
-    baseline_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
+    v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
 
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(logits_to_update, mask_t))
 
     total_loss = args.global_coef * pg_loss
-    total_loss += (args.global_coef * args.vf_coef) * baseline_loss
+    total_loss += (args.global_coef * args.vf_coef) * v_loss
     total_loss += (args.global_coef * args.ent_coef) * ent_loss
-    return total_loss, dict(pg_loss=pg_loss, baseline_loss=baseline_loss, ent_loss=ent_loss, max_ratio=max_ratio)
+    return total_loss, dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
 
 
 SINGLE_DEVICE_UPDATE_DEVICES_AXIS: str = "local_devices"
@@ -140,7 +140,7 @@ def single_device_update(
                 actor=agent_state.params.actor_params,
                 critic=agent_state.params.critic_params,
             )
-        ):
+        ).items():
             key_str = "/".join(key)
             metrics_dict["param_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
 
@@ -150,7 +150,7 @@ def single_device_update(
                 actor=grads.actor_params,
                 critic=grads.critic_params,
             )
-        ):
+        ).items():
             key_str = "/".join(key)
             metrics_dict["grad_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
 
