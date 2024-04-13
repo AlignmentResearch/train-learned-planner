@@ -14,12 +14,12 @@ class ImpalaLossConfig:
     global_coef: float = 640.0  # Multiply the whole loss by this
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
-    vf_coef: float = 0.5  # coefficient of the value function
+    vf_coef: float = 0.25  # coefficient of the value function
 
     # Interpolate between VTrace (1.0) and monte-carlo function (0.0) estimates, for the estimate of targets, used in
     # both the value and policy losses. It's the parameter in Remark 2 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf)
-    vtrace_lambda: float = 0.95
+    vtrace_lambda: float = 1.0
 
     # Maximum importance ratio for the VTrace value estimates. This is \overline{rho} in eq. 1 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf). \overline{c} is hardcoded to 1 in rlax.
@@ -47,7 +47,7 @@ def impala_loss(
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ):
-    discount_t = (~minibatch.done_t) * args.gamma
+    discount_t = (~minibatch.done_t)[1:] * args.gamma
     mask_t = jnp.ones_like(discount_t)  # Don't mask any loss timesteps -- we use them all.
 
     logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
@@ -64,7 +64,8 @@ def impala_loss(
     # Remove bootstrap timestep from non-timesteps.
     v_tm1 = value_to_update[:-1]
 
-    rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t, minibatch.a_t)
+    a_t = minibatch.a_t[:-1]
+    rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t[:-1], a_t)
     max_ratio = jnp.max(jnp.abs(rhos_tm1))
 
     vtrace_td_error_and_advantage = jax.vmap(
@@ -90,10 +91,10 @@ def impala_loss(
     So arguably instead of r_t and discount_t, they should be r_tm1 and discount_tm1. And that's what we name
     them here.
     """
-    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
+    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t[1:], discount_t, rhos_tm1)
     pg_advs = vtrace_returns.pg_advantage
 
-    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, minibatch.a_t, pg_advs, mask_t))
+    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, a_t, pg_advs, mask_t))
 
     baseline_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
 

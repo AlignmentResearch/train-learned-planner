@@ -322,12 +322,15 @@ def make_env(env_id, seed, num_envs):
 def rollout(
     key: jax.random.PRNGKey,
     args: Args,
+    runtime_info: RuntimeInformation,
     rollout_queue,
     params_queue: queue.Queue,
     writer,
     learner_devices,
     device_thread_id,
     actor_device,
+    *,
+    get_action,
 ):
     envs = make_env(
         args.train_env.env_id,
@@ -337,22 +340,6 @@ def rollout(
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
-
-    @jax.jit
-    def get_action(
-        params: flax.core.FrozenDict,
-        next_obs: np.ndarray,
-        key: jax.random.PRNGKey,
-    ):
-        next_obs = jnp.array(next_obs)
-        hidden = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
-        logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
-        # sample action: Gumbel-softmax trick
-        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-        key, subkey = jax.random.split(key)
-        u = jax.random.uniform(subkey, shape=logits.shape)
-        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
-        return next_obs, action, logits, key
 
     # put data in the last index
     episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
@@ -373,7 +360,7 @@ def rollout(
         return jax.tree_map(lambda *xs: jnp.split(jnp.stack(xs), len(learner_devices), axis=1), *storage)
 
     global MUST_STOP_PROGRAM
-    for update in range(1, args.num_updates + 2):
+    for update in range(1, runtime_info.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
         update_time_start = time.time()
@@ -410,11 +397,11 @@ def rollout(
             next_obs, next_reward, next_trunc, next_term, info = envs.step_wait()
             next_done = next_trunc | next_term
             env_recv_time += time.time() - env_recv_time_start
-            global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * args.world_size
+            global_step += len(next_done) * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
             env_id = info["env_id"]
 
             inference_time_start = time.time()
-            next_obs, action, logits, key = get_action(params, next_obs, key)
+            action, logits, key = get_action(params, next_obs, key)
             inference_time += time.time() - inference_time_start
 
             d2h_time_start = time.time()
@@ -430,26 +417,18 @@ def rollout(
             truncated = info["elapsed_step"] >= envs.envs.spec.config.max_episode_steps
             storage.append(
                 Rollout(
-                    obs=next_obs,
-                    dones=next_done,
-                    actions=action,
-                    logitss=logits,
-                    env_ids=env_id,
-                    rewards=next_reward,
-                    truncations=truncated,
-                    terminations=info["terminated"],
-                    firststeps=info["elapsed_step"] == 0,
+                    obs_t=next_obs,
+                    done_t=next_done,
+                    a_t=action,
+                    logits_t=logits,
+                    r_t=next_reward,
                 )
             )
             episode_returns[env_id] += info["reward"]
-            returned_episode_returns[env_id] = np.where(
-                info["terminated"] + truncated, episode_returns[env_id], returned_episode_returns[env_id]
-            )
+            returned_episode_returns[env_id] = np.where(next_done, episode_returns[env_id], returned_episode_returns[env_id])
             episode_returns[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             episode_lengths[env_id] += 1
-            returned_episode_lengths[env_id] = np.where(
-                info["terminated"] + truncated, episode_lengths[env_id], returned_episode_lengths[env_id]
-            )
+            returned_episode_lengths[env_id] = np.where(next_done, episode_lengths[env_id], returned_episode_lengths[env_id])
             episode_lengths[env_id] *= (1 - info["terminated"]) * (1 - truncated)
             storage_time += time.time() - storage_time_start
         rollout_time.append(time.time() - rollout_time_start)
@@ -498,7 +477,7 @@ def rollout(
                     * args.num_steps
                     * len_actor_device_ids
                     * args.num_actor_threads
-                    * args.world_size
+                    * runtime_info.world_size
                     / (time.time() - update_time_start)
                 ),
                 global_step,
