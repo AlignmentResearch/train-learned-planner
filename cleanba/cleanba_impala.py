@@ -135,7 +135,7 @@ class Args:
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
     rmsprop_eps: float = 0.01
-    rmsprop_decay: float = 0.01
+    rmsprop_decay: float = 0.99
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
