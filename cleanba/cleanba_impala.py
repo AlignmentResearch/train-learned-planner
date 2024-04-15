@@ -361,6 +361,7 @@ def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Arr
         logits_t=jnp.stack([r.logits_t for r in storage]),
         r_t=jnp.stack([r.r_t for r in storage]),
         done_t=jnp.stack([r.done_t for r in storage]),
+        truncated_t=jnp.stack([r.truncated_t for r in storage]),
     )
     # Split for every learner device over `num_envs` and return
     return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
@@ -465,10 +466,11 @@ def rollout(
                         storage.append(
                             Rollout(
                                 obs_t=obs_t,
-                                done_t=done_t,
                                 a_t=a_t,
                                 logits_t=logits_t,
                                 r_t=r_t,
+                                done_t=done_t,
+                                truncated_t=trunc_t,
                             )
                         )
                         obs_t = obs_t_plus_1

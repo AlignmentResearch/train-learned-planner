@@ -13,7 +13,6 @@ from numpy.typing import NDArray
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig:
-    global_coef: float = 640.0  # Multiply the whole loss by this
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
     vf_coef: float = 0.5  # coefficient of the value function
@@ -37,10 +36,8 @@ class Rollout(NamedTuple):
     a_t: jax.Array
     logits_t: jax.Array
     r_t: jax.Array | NDArray
-    # TODO: handle truncation vs. termination correctly. Truncated episodes should have the discounted estimated value
-    # of the next observation, subtracted from the current value's observation. But that's annoying to support and we
-    # don't use it for Sokoban anyways, so we won't support it.
     done_t: jax.Array | NDArray
+    truncated_t: jax.Array | NDArray
 
 
 def impala_loss(
@@ -49,25 +46,55 @@ def impala_loss(
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
+    # If the episode has been truncated, the value of the next state (after truncation) would be some non-zero amount.
+    # But we don't have access to that state, because the resetting code just throws it away. To compensate, we'll
+    # actually truncate 1 step earlier than the time limit, use the value of the state we know, and just discard the
+    # transition that actually caused truncation. That is, we receive:
+    #
+    #     s0, --r0-> s1 --r1-> s2 --r2-> s3 --r3-> ...
+    #
+    # and say the episode was truncated at s3. We don't know s4, so we can't calculate V(s4), which we need for the
+    # objective. So instead we'll discard r3 and treat s3 as the final state. Now we can calculate V(s3).
+    #
+    # We can implement this by just not using the loss at the truncated steps.
+    mask_t = jnp.float32(~minibatch.truncated_t)
+
+    # If the episode has actually terminated, the outgoing state's value is known to be zero.
+    #
+    # If the episode was truncated or terminated, we don't want the value estimation for future steps to influence the
+    # value estimation for the current one (or previous once). I.e., in the VTrace (or GAE) recurrence, we want to stop
+    # the value at time t+1 from influencing the value at time t and before.
+    #
+    # Both of these aims can be served by setting the discount to zero when the episode is terminated or truncated.
+    #
+    # done_t = truncated_t | terminated_t
     discount_t = (~minibatch.done_t) * args.gamma
-    mask_t = jnp.ones_like(discount_t)  # Don't mask any loss timesteps -- we use them all.
 
-    logits_to_update, value_to_update = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
+    nn_logits_from_obs, nn_value_from_obs = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
 
+    # There's one extra timestep at the end for `obs_t` than logits and the rest of objects in `minibatch`, so we need
+    # to cut these values to size.
+    #
+    # For the logits, we discard the last one, which makes the time-steps of `nn_logits_from_obs` match exactly with the
+    # time-steps from `minibatch.logits_t`
+    nn_logits_t = nn_logits_from_obs[:-1]
+
+    ## Remark 1:
     # v_t does not enter the gradient in any way, because
     #   1. it's stop_grad()-ed in the `vtrace_td_error_and_advantage.errors`
     #   2. it intervenes in `vtrace_td_error_and_advantage.pg_advantage`, but that's stop_grad() ed by the pg loss.
-    v_t = value_to_update[1:]
+    #
+    # so we don't actually need to call stop_grad here.
+    #
+    ## Remark 2:
+    # If we followed normal RL conventions, v_t corresponds to V(s_{t+1}) and v_tm1 corresponds to V(s_{t}). This can be
+    # gleaned from looking at the implementation of the TD error in `rlax.vtrace`.
+    #
+    # We keep the name error from the `rlax` library for consistence.
+    v_t = nn_value_from_obs[1:]
+    v_tm1 = nn_value_from_obs[:-1]
 
-    # Discarding the last observation's logit corresponds to logits for the same timesteps as was observed in the
-    # minibatch.
-    logits_to_update = logits_to_update[:-1]
-
-    # Remove bootstrap timestep from non-timesteps.
-    v_tm1 = value_to_update[:-1]
-
-    rhos_tm1 = rlax.categorical_importance_sampling_ratios(logits_to_update, minibatch.logits_t, minibatch.a_t)
-    max_ratio = jnp.max(jnp.abs(rhos_tm1))
+    rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
 
     vtrace_td_error_and_advantage = jax.vmap(
         partial(
@@ -80,31 +107,27 @@ def impala_loss(
         in_axes=1,
         out_axes=1,
     )
-
-    """
-    Some of these arguments are misnamed in `vtrace_td_error_and_advantage`:
-
-    The argument `r_t` is paired with `v_t` and `v_tm1` to compute the TD error. But that's not the equation of
-    the TD error, it is:
-
-            td(t) = r_t + gamma_t*V(x_{t+1}) - V(x_{t})
-
-    So arguably instead of r_t and discount_t, they should be r_tm1 and discount_tm1. And that's what we name
-    them here.
-    """
     vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
+
+    # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
+    # are implicit in `pg_advs`.
     pg_advs = vtrace_returns.pg_advantage
+    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
-    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, minibatch.a_t, pg_advs, mask_t))
-
+    # Value loss: MSE of VTrace-estimated errors
     v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
 
-    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(logits_to_update, mask_t))
+    # Entropy loss: negative average entropy of the policy across timesteps and environments
+    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_from_obs, mask_t))
 
-    total_loss = args.global_coef * pg_loss
-    total_loss += (args.global_coef * args.vf_coef) * v_loss
-    total_loss += (args.global_coef * args.ent_coef) * ent_loss
-    return total_loss, dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
+    total_loss = pg_loss
+    total_loss += args.vf_coef * v_loss
+    total_loss += args.ent_coef * ent_loss
+
+    # Useful metrics to know
+    max_ratio = jnp.max(jnp.abs(rhos_tm1))
+    metrics_dict = dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
+    return total_loss, metrics_dict
 
 
 SINGLE_DEVICE_UPDATE_DEVICES_AXIS: str = "local_devices"
