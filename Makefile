@@ -111,5 +111,6 @@ typecheck:
 	pyright .
 
 
+PYTEST_ARGS ?=
 mactest:
-	pytest -k 'not test_environment_basics[cfg2]'
+	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg2]'

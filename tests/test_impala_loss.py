@@ -68,22 +68,23 @@ def test_impala_loss_zero_when_accurate(
     obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
-    (total_loss, (pg_loss, baseline_loss, ent_loss, _)) = impala_loss(
+    (total_loss, metrics_dict) = impala_loss(
         params=(),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
             done_t=done_tm1,
+            truncated_t=np.zeros_like(done_tm1),
             a_t=a_t,
             logits_t=logits_t,
             r_t=rewards,
         ),
     )
 
-    assert np.allclose(pg_loss, 0.0)
-    assert np.allclose(baseline_loss, 0.0)
-    assert np.allclose(ent_loss, 0.0)
+    assert np.allclose(metrics_dict["pg_loss"], 0.0)
+    assert np.allclose(metrics_dict["v_loss"], 0.0)
+    assert np.allclose(metrics_dict["ent_loss"], 0.0)
     assert np.allclose(total_loss, 0.0)
 
 
@@ -250,7 +251,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
-        (total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)) = impala_loss(
+        (total_loss, metrics_dict) = impala_loss(
             params={},
             get_logits_and_value=lambda params, obs: (_get_zero_action(params, obs, None)[1], obs),
             args=ImpalaLossConfig(gamma=gamma),
@@ -258,7 +259,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy())
 
-        assert np.abs(pg_loss) < 1e-6
-        assert np.allclose(baseline_loss, 0.0)
-        assert np.allclose(ent_loss, logit_negentropy)
-        assert np.allclose(max_ratio, 1.0)
+        assert np.abs(metrics_dict["pg_loss"]) < 1e-6
+        assert np.allclose(metrics_dict["v_loss"], 0.0)
+        assert np.allclose(metrics_dict["ent_loss"], logit_negentropy)
+        assert np.allclose(metrics_dict["max_ratio"], 1.0)

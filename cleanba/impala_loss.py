@@ -78,6 +78,7 @@ def impala_loss(
     # For the logits, we discard the last one, which makes the time-steps of `nn_logits_from_obs` match exactly with the
     # time-steps from `minibatch.logits_t`
     nn_logits_t = nn_logits_from_obs[:-1]
+    del nn_logits_from_obs
 
     ## Remark 1:
     # v_t does not enter the gradient in any way, because
@@ -93,6 +94,7 @@ def impala_loss(
     # We keep the name error from the `rlax` library for consistence.
     v_t = nn_value_from_obs[1:]
     v_tm1 = nn_value_from_obs[:-1]
+    del nn_value_from_obs
 
     rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
 
@@ -118,7 +120,7 @@ def impala_loss(
     v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
-    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_from_obs, mask_t))
+    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
 
     total_loss = pg_loss
     total_loss += args.vf_coef * v_loss
