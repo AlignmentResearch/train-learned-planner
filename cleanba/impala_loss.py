@@ -5,6 +5,7 @@ from typing import Any, Callable, List, NamedTuple
 import flax.traverse_util
 import jax
 import jax.numpy as jnp
+import numpy as np
 import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
@@ -134,33 +135,13 @@ def single_device_update(
         metrics_dict["loss"] = loss
         grads = jax.lax.pmean(grads, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
 
-        for key, value in flax.traverse_util.flatten_dict(
-            dict(
-                network=agent_state.params.network_params,
-                actor=agent_state.params.actor_params,
-                critic=agent_state.params.critic_params,
-            )
-        ).items():
-            key_str = "/".join(key)
-            metrics_dict["param_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
-
-        for key, value in flax.traverse_util.flatten_dict(
-            dict(
-                network=grads.network_params,
-                actor=grads.actor_params,
-                critic=grads.critic_params,
-            )
-        ).items():
-            key_str = "/".join(key)
-            metrics_dict["grad_rms/" + key_str] = jnp.sqrt(jnp.mean(jnp.square(value)))
-
         flat_param = tree_flatten_and_concat(agent_state.params)
         metrics_dict["param_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_param)))
-        metrics_dict["param_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_param)))
+        metrics_dict["param_rms/total"] = metrics_dict["param_rms/avg"] * np.sqrt(np.prod(flat_param.shape))
 
         flat_grad = tree_flatten_and_concat(grads)
         metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
-        metrics_dict["grad_rms/total"] = jnp.sqrt(jnp.sum(jnp.square(flat_grad)))
+        metrics_dict["grad_rms/total"] = metrics_dict["grad_rms/avg"] * np.sqrt(np.prod(flat_grad.shape))
 
         agent_state = agent_state.apply_gradients(grads=grads)
         return agent_state, metrics_dict
