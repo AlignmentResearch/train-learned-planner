@@ -1,22 +1,24 @@
 import abc
 import dataclasses
 import os
-import random
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import envpool
+import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import numpy as np
-from numpy.typing import NDArray  # noqa: F401
+from numpy.typing import NDArray
+
+from cleanba.config import random_seed
 
 
 @dataclasses.dataclass
 class EnvConfig(abc.ABC):
     max_episode_steps: int
     num_envs: int
-    seed: int = dataclasses.field(default_factory=lambda: random.randint(0, 2**31 - 1))
+    seed: int = dataclasses.field(default_factory=random_seed)
 
     @abc.abstractmethod
     def make(self) -> gym.vector.VectorEnv:
@@ -130,7 +132,6 @@ class BaseSokobanEnvConfig(EnvConfig):
             # Sokoban env uses `max_steps` internally
             max_steps=self.max_episode_steps,
             # Passing `max_episode_steps` to Gymnasium makes it add a TimeLimitWrapper
-            max_episode_steps=self.max_episode_steps,
             terminate_on_first_box=self.terminate_on_first_box,
             reset_seed=self.seed,
             reset=self.reset,
@@ -165,7 +166,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
             if (a := getattr(self, k)) is not None:
                 kwargs[k] = a
         make_fn = partial(
-            gym.vector.make,
+            gym.make_vec,
             "Sokoban-v2",
             **kwargs,
             **self.env_reward_kwargs(),
@@ -191,7 +192,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 raise ValueError("`medium` levels don't have a `test` split")
 
         make_fn = partial(
-            gym.vector.make,
+            gym.make_vec,
             "Boxoban-Val-v1",
             cache_path=self.cache_path,
             split=self.split,
