@@ -90,18 +90,32 @@ def test_impala_loss_zero_when_accurate(
 
 class TrivialEnv(gym.Env[NDArray, np.int64]):
     def __init__(self, cfg: "TrivialEnvConfig"):
+        """
+        truncation_probability: the probability that an entire *episode* is truncated prematurely
+        """
         self.cfg = cfg
         self.reward_range = (0.1, 2.0)
         self.action_space = gym.spaces.Discrete(2)  # Two actions so we can test importance ratios
         self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
+
+        self.per_step_truncation_probability = 2 ** (np.log2(cfg.truncation_probability) / self.cfg.max_episode_steps)
+        print(self.per_step_truncation_probability)
 
     def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
         # Pretend that we took the optimal action (there is only one action)
         reward = self._rewards[self._t]
 
         self._t += 1
-        terminated = self._t == len(self._rewards)
-        return (self._returns[self._t], reward, terminated, False, {})
+        terminated = truncated = False
+        if self.np_random.uniform(0.0, 1.0) < self.per_step_truncation_probability:
+            terminated = True
+            truncated = True
+
+        # This goes after the previous if so takes precedence.
+        if self._t == len(self._rewards):
+            terminated = True
+            truncated = False
+        return (self._returns[self._t], reward, terminated, truncated, {})
 
     def reset(
         self,
@@ -129,6 +143,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
 @dataclasses.dataclass
 class TrivialEnvConfig(EnvConfig):
     gamma: float = 0.9
+    truncation_probability: float = 0.5
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
@@ -137,7 +152,7 @@ class TrivialEnvConfig(EnvConfig):
 
 
 def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int = 7, gamma: float = 0.9):
-    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma).make()
+    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma, truncation_probability=0.0).make()
 
     returns = []
     rewards = []
@@ -179,9 +194,12 @@ def _get_zero_action(params, next_obs, key):
     return actions, logits, key
 
 
-def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
+@pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
+def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
     args = cleanba_impala.Args(
-        train_env=TrivialEnvConfig(max_episode_steps=10, num_envs=0, gamma=gamma),
+        train_env=TrivialEnvConfig(
+            max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability
+        ),
         eval_envs={},
         loss=ImpalaLossConfig(
             gamma=0.9,
