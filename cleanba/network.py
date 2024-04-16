@@ -88,10 +88,30 @@ class NetworkSpec(abc.ABC):
         return logits, value.squeeze(-1)
 
 
+class NormConfig(nn.Module, abc.ABC):
+    pass
+
+
+class RMSNorm(NormConfig):
+    eps: float = 1e-8
+
+    @nn.compact
+    def __call__(self, x):
+        norm = jnp.square(x).mean(axis=-1, keepdims=True)
+        return x * jax.lax.rsqrt(norm + self.eps)
+
+
+class IdentityNorm(NormConfig):
+    @nn.compact
+    def __call__(self, x):
+        return x
+
+
 @dataclasses.dataclass(frozen=True)
 class AtariCNNSpec(NetworkSpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
+    norm: NormConfig = RMSNorm()
 
     def make(self) -> "AtariCNN":
         return AtariCNN(self)
@@ -101,11 +121,13 @@ class ResidualBlock(nn.Module):
     channels: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, norm):
         inputs = x
         x = nn.relu(x)
+        x = norm(x)
         x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
         x = nn.relu(x)
+        x = norm(x)
         x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
         return x + inputs
 
@@ -114,11 +136,12 @@ class ConvSequence(nn.Module):
     channels: int
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, norm):
+        x = norm(x)
         x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
-        x = ResidualBlock(self.channels)(x)
-        x = ResidualBlock(self.channels)(x)
+        x = ResidualBlock(self.channels)(x, norm=norm)
+        x = ResidualBlock(self.channels)(x, norm=norm)
         return x
 
 
@@ -130,7 +153,7 @@ class AtariCNN(nn.Module):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
         for channels in self.cfg.channels:
-            x = ConvSequence(channels)(x)
+            x = ConvSequence(channels)(x, norm=norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
