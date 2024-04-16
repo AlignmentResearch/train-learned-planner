@@ -23,7 +23,7 @@ runs: list[FlamingoRun] = [
                 "rmsprop_decay=0.99",
                 f"rmsprop_eps={eps}",
                 f"learning_rate={lr}",
-                f"net.norm._type_=cleanba.network:{norm}",
+                f'net.norm={{"_type_": "cleanba.network:{norm}"}}',
             ]
         ],
         CONTAINER_TAG="latest-atari",
