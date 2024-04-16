@@ -24,6 +24,7 @@ runs: list[FlamingoRun] = [
                 f'net.norm={{"_type_": "cleanba.network:{norm}"}}',
                 "total_timesteps=500000000",
                 f"optimizer={optimizer}",
+                "eval_envs={}",
             ]
         ],
         CONTAINER_TAG="e5a58c4-main",
@@ -33,11 +34,11 @@ runs: list[FlamingoRun] = [
         PRIORITY="normal-batch",
     )
     for max_grad_norm in [0.0625]
-    for lr in [0.0006, 0.00006]
-    for norm in ["RMSNorm", "IdentityNorm"]
-    for optimizer in ["adam", "rmsprop"]
-    for train_epochs in [2, 4, 8]
     for eps in [1.5625e-05, 1e-8]
+    for norm in ["IdentityNorm", "RMSNorm"]
+    for lr in [0.0006, 0.00006]
+    for train_epochs in [2, 4]
+    for optimizer in ["adam", "rmsprop"]
 ]
 
 GROUP: str = group_from_fname(__file__)

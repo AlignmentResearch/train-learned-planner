@@ -184,7 +184,7 @@ class Actor(nn.Module):
 class SokobanResNetConfig(NetworkSpec):
     channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
     kernel_sizes: tuple[int, ...] = (8, 4, 4, 4, 4, 4, 4, 4, 4)
-    strides: tuple[int, ...] = (4, 2, 1, 1, 1, 1, 1, 1, 1)
+    strides: tuple[int, ...] = (1, 1, 1, 1, 1, 1, 1, 1, 1)
     multiplicity: int = 2
     norm: NormConfig = IdentityNorm()
 
@@ -210,6 +210,7 @@ class SokobanResNet(nn.Module):
             )(x, self.cfg.norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
+        assert x.shape[-1] == 64 * 10 * 10
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
             x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
@@ -226,10 +227,9 @@ class SokobanResidualBlock(nn.Module):
     def __call__(self, x, norm):
         inputs = x
         for _ in range(self.multiplicity):
-            x = norm(x)
             x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size))(x)
             x = nn.relu(x)
-        return x + inputs
+        return norm(x + inputs)
 
 
 class SokobanConvSequence(nn.Module):
@@ -240,9 +240,9 @@ class SokobanConvSequence(nn.Module):
 
     @nn.compact
     def __call__(self, x, norm):
-        x = norm(x)
         x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size), strides=(self.strides, self.strides))(x)
         x = nn.relu(x)
+        x = norm(x)
         x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
         x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
         return x
