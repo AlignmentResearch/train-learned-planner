@@ -1,38 +1,11 @@
 import dataclasses
-from functools import partial
+from typing import Callable
 
-import flax
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from cleanba.environments import EnvConfig
-
-
-@partial(jax.jit, static_argnames=("temperature_is_zero", "network", "actor"))
-def get_action_and_value(
-    temperature_is_zero: bool,  # static
-    temperature: float,
-    network,  # static
-    actor,  # static
-    network_params: flax.core.FrozenDict,
-    actor_params: flax.core.FrozenDict,
-    obs: np.ndarray,
-    key: jax.Array,
-) -> tuple[jax.Array, jax.Array]:
-    hidden = network.apply(network_params, obs)
-    logits = actor.apply(actor_params, hidden)
-    assert len(logits.shape) == 2
-
-    if temperature_is_zero:
-        action = jnp.argmax(logits, axis=1)
-    else:
-        # sample action: Gumbel-max trick
-        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-        key, subkey = jax.random.split(key)
-        u = jax.random.uniform(subkey, shape=logits.shape)
-        action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-    return action, key
 
 
 @dataclasses.dataclass
@@ -46,7 +19,7 @@ class EvalConfig:
         if self.steps_to_think > 0:
             raise NotImplementedError(f"{self.steps_to_think=}")
 
-    def run(self, network, actor, agent_state, *, key: jnp.ndarray) -> dict[str, float]:
+    def run(self, get_action: Callable, agent_state, *, key: jnp.ndarray) -> dict[str, float]:
         key, env_key = jax.random.split(key, 2)
         env_seed = int(jax.random.randint(env_key, (), minval=0, maxval=2**31 - 2))
         envs = dataclasses.replace(self.env, seed=env_seed).make()
@@ -62,15 +35,12 @@ class EvalConfig:
                 episode_lengths = np.zeros(envs.num_envs, dtype=np.int64)
 
                 while not np.all(eps_done):
-                    action, key = get_action_and_value(
-                        temperature_is_zero=(self.temperature == 0.0),
-                        temperature=self.temperature,
-                        network=network,
-                        actor=actor,
-                        network_params=agent_state.network_params,
-                        actor_params=agent_state.actor_params,
-                        obs=obs,
+                    action, _, key = get_action(
+                        n_actions=envs.single_action_space.n,
+                        params=agent_state,
+                        next_obs=obs,
                         key=key,
+                        temperature=self.temperature,
                     )
                     cpu_action = np.asarray(action)
                     obs, rewards, truncated, terminated, infos = envs.step(cpu_action)

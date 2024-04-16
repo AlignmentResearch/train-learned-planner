@@ -39,22 +39,27 @@ class NetworkSpec(abc.ABC):
         critic_params = Critic().init(critic_key, jnp.zeros(net_out_shape.shape))
         return AgentParams(net_params, actor_params, critic_params)
 
-    @partial(jax.jit, static_argnames=["self", "n_actions"])
+    @partial(jax.jit, static_argnames=["self", "n_actions", "temperature"])
     def get_action(
         self,
         n_actions: int,
         params: AgentParams,
         next_obs: jax.Array,
         key: jax.Array,
+        *,
+        temperature: float = 1.0,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         hidden: jax.Array = self.make().apply(params.network_params, next_obs)
 
         logits: jax.Array = Actor(n_actions).apply(params.actor_params, hidden)
-        # sample action: Gumbel-softmax trick
-        # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-        key, subkey = jax.random.split(key)
-        u = jax.random.uniform(subkey, shape=logits.shape)
-        action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
+        if temperature == 0.0:
+            action = jnp.argmax(logits, axis=1)
+        else:
+            # sample action: Gumbel-softmax trick
+            # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
+            key, subkey = jax.random.split(key)
+            u = jax.random.uniform(subkey, shape=logits.shape)
+            action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
         return action, logits, key
 
     @partial(jax.jit, static_argnames=["self", "n_actions"])

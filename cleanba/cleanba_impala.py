@@ -15,14 +15,12 @@ from typing import Any, Iterator, List, Sequence
 
 import farconf
 import flax
-import flax.linen as nn
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import wandb
-from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from names_generator import generate_name
 from rich.pretty import pprint
@@ -649,7 +647,7 @@ if __name__ == "__main__":
 
                 for eval_name, eval_cfg in args.eval_envs.items():
                     key, eval_key = jax.random.split(key, 2)
-                    log_dict: dict[str, float] = eval_cfg.run(network, actor, unreplicated_params, key=eval_key)
+                    log_dict: dict[str, float] = eval_cfg.run(args.net.get_action, unreplicated_params, key=eval_key)
 
                     for k, v in log_dict.items():
                         writer.add_scalar(f"{eval_name}/{k}", v, global_step)
