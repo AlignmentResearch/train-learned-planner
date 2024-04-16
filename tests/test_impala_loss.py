@@ -1,7 +1,6 @@
 import dataclasses
 import queue
 from functools import partial
-from types import SimpleNamespace
 from typing import Any, Callable, SupportsFloat
 
 import distrax

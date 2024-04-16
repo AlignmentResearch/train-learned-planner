@@ -9,7 +9,7 @@ runs: list[FlamingoRun] = [
                 "python",
                 "-m",
                 "cleanba.cleanba_impala",
-                "--from-py-fn=cleanba.cleanba_impala:Args",
+                "--from-py-fn=cleanba.config:Args",
                 "local_num_envs=64",
                 "num_actor_threads=2",
                 "num_steps=20",

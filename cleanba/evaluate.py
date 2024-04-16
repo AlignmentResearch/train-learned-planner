@@ -15,7 +15,7 @@ class EvalConfig:
     steps_to_think: int = 0
     temperature: float = 0.0
 
-    safeguard_max_episode_steps: int = 100000
+    safeguard_max_episode_steps: int = 30000
 
     def __post_init__(self):
         if self.steps_to_think > 0:
@@ -41,8 +41,6 @@ class EvalConfig:
                     i += 1
                     if i >= self.safeguard_max_episode_steps:
                         break
-                    elif i % 200 == 0:
-                        print("Eval episode step", i)
                     action, _, key = get_action(
                         params=agent_state,
                         next_obs=obs,

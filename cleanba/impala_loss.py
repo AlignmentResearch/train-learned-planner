@@ -2,7 +2,6 @@ import dataclasses
 from functools import partial
 from typing import Any, Callable, List, NamedTuple
 
-import flax.traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
