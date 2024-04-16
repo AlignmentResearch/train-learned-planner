@@ -19,7 +19,6 @@ runs: list[FlamingoRun] = [
                 "eval_frequency=1000000000",
                 "loss.vf_coef=0.25",
                 "loss.vtrace_lambda=1.0",
-                "loss.global_coef=1.0",
                 f"max_grad_norm={max_grad_norm}",
                 "rmsprop_decay=0.99",
                 f"rmsprop_eps={eps}",
@@ -42,4 +41,9 @@ runs: list[FlamingoRun] = [
 GROUP: str = group_from_fname(__file__)
 
 if __name__ == "__main__":
-    launch_jobs(runs, group=GROUP, job_template_path=Path(__file__).parent.parent.parent / "k8s/runner-no-nfs.yaml")
+    launch_jobs(
+        runs,
+        group=GROUP,
+        job_template_path=Path(__file__).parent.parent.parent / "k8s/runner-no-nfs.yaml",
+        project="cleanba",
+    )
