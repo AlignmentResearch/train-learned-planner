@@ -4,12 +4,12 @@ from functools import partial
 
 import flax
 import flax.linen as nn
+import flax.struct
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
-from flax.training.train_state import TrainState
 
 
 @flax.struct.dataclass
@@ -21,6 +21,9 @@ class AgentParams:
     def __contains__(self, item):
         return item in (f.name for f in dataclasses.fields(self))
 
+    def _n_actions(self) -> int:
+        return self.actor_params["params"]["Dense_0"]["kernel"].shape[-1]  # type: ignore
+
 
 @dataclasses.dataclass(frozen=True)
 class NetworkSpec(abc.ABC):
@@ -28,7 +31,11 @@ class NetworkSpec(abc.ABC):
     def make(self) -> nn.Module:
         ...
 
-    def init_params(self, n_actions: int, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
+    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
+        action_space = envs.single_action_space
+        assert isinstance(action_space, gym.spaces.Discrete)
+        n_actions = int(action_space.n)
+
         net_key, actor_key, critic_key = jax.random.split(key, 3)
 
         net_obj = self.make()
@@ -37,21 +44,25 @@ class NetworkSpec(abc.ABC):
 
         actor_params = Actor(n_actions).init(actor_key, jnp.zeros(net_out_shape.shape))
         critic_params = Critic().init(critic_key, jnp.zeros(net_out_shape.shape))
-        return AgentParams(net_params, actor_params, critic_params)
+        out = AgentParams(net_params, actor_params, critic_params)  # type: ignore
 
-    @partial(jax.jit, static_argnames=["self", "n_actions", "temperature"])
+        assert out._n_actions() == n_actions
+        return out
+
+    @partial(jax.jit, static_argnames=["self", "temperature"])
     def get_action(
         self,
-        n_actions: int,
         params: AgentParams,
         next_obs: jax.Array,
         key: jax.Array,
         *,
         temperature: float = 1.0,
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        hidden: jax.Array = self.make().apply(params.network_params, next_obs)
+        hidden = self.make().apply(params.network_params, next_obs)
 
-        logits: jax.Array = Actor(n_actions).apply(params.actor_params, hidden)
+        logits = Actor(params._n_actions()).apply(params.actor_params, hidden)
+        assert isinstance(logits, jax.Array)
+
         if temperature == 0.0:
             action = jnp.argmax(logits, axis=1)
         else:
@@ -62,18 +73,19 @@ class NetworkSpec(abc.ABC):
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
         return action, logits, key
 
-    @partial(jax.jit, static_argnames=["self", "n_actions"])
+    @partial(jax.jit, static_argnames=["self"])
     def get_logits_and_value(
         self,
-        n_actions: int,
         params: AgentParams,
         x: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
         hidden = self.make().apply(params.network_params, x)
-        logits: jax.Array = Actor(n_actions).apply(params.actor_params, hidden)
+        logits = Actor(params._n_actions()).apply(params.actor_params, hidden)
+        value = Critic().apply(params.critic_params, hidden)
 
-        value = Critic().apply(params.critic_params, hidden).squeeze(-1)
-        return logits, value
+        assert isinstance(logits, jax.Array)
+        assert isinstance(value, jax.Array)
+        return logits, value.squeeze(-1)
 
 
 @dataclasses.dataclass(frozen=True)

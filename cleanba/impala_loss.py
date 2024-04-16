@@ -15,12 +15,12 @@ from numpy.typing import NDArray
 class ImpalaLossConfig:
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
-    vf_coef: float = 0.5  # coefficient of the value function
+    vf_coef: float = 0.25  # coefficient of the value function
 
     # Interpolate between VTrace (1.0) and monte-carlo function (0.0) estimates, for the estimate of targets, used in
     # both the value and policy losses. It's the parameter in Remark 2 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf)
-    vtrace_lambda: float = 0.95
+    vtrace_lambda: float = 1.0
 
     # Maximum importance ratio for the VTrace value estimates. This is \overline{rho} in eq. 1 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf). \overline{c} is hardcoded to 1 in rlax.

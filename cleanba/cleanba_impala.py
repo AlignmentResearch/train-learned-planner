@@ -121,7 +121,7 @@ class Args:
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
-    loss: ImpalaLossConfig = ImpalaLossConfig(vf_coef=0.5)
+    loss: ImpalaLossConfig = ImpalaLossConfig()
 
     net: NetworkSpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 
@@ -133,8 +133,8 @@ class Args:
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     num_minibatches: int = 4  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
-    max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
-    rmsprop_eps: float = 0.01
+    max_grad_norm: float = 0.0625  # the maximum norm for the gradient clipping
+    rmsprop_eps: float = 1.5625e-05
     rmsprop_decay: float = 0.99
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
@@ -317,8 +317,6 @@ def rollout(
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
-    assert isinstance(envs.single_action_space, gym.spaces.Discrete)
-    n_possible_actions = int(envs.single_action_space.n)
 
     log_stats = LoggingStats.new_empty()
     # Counters for episode length and episode return
@@ -367,7 +365,7 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time):
-                        a_t, logits_t, key = args.net.get_action(n_possible_actions, params, obs_t, key)
+                        a_t, logits_t, key = args.net.get_action(params, obs_t, key)
 
                     with time_and_append(log_stats.device2host_time):
                         cpu_action = np.array(a_t)
@@ -489,9 +487,7 @@ if __name__ == "__main__":
             return args.learning_rate * frac
 
         key, agent_params_subkey = jax.random.split(key, 2)
-        agent_params = args.net.init_params(
-            envs.single_action_space.n, agent_params_subkey, np.array([envs.single_observation_space.sample()])
-        )
+        agent_params = args.net.init_params(envs, agent_params_subkey, np.array([envs.single_observation_space.sample()]))
 
         agent_state = TrainState.create(
             apply_fn=None,
@@ -513,7 +509,7 @@ if __name__ == "__main__":
             partial(
                 single_device_update,
                 num_batches=args.num_minibatches * args.gradient_accumulation_steps,
-                get_logits_and_value=partial(args.net.get_logits_and_value, envs.single_action_space.n),
+                get_logits_and_value=args.net.get_logits_and_value,
                 impala_cfg=args.loss,
             ),
             axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS,

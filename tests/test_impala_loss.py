@@ -195,12 +195,8 @@ class ZeroActionNetworkSpec(NetworkSpec):
     def make(self) -> nn.Module:
         return ZeroActionNetwork()
 
-    @partial(jax.jit, static_argnames=["self", "n_actions"])
-    def get_action(
-        self, n_actions: int, params: AgentParams, next_obs: jax.Array, key: jax.Array | None
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        assert n_actions == 2
-
+    @partial(jax.jit, static_argnames=["self"])
+    def get_action(self, params: AgentParams, next_obs: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
         actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
         logits = jnp.stack(
             [
@@ -213,7 +209,7 @@ class ZeroActionNetworkSpec(NetworkSpec):
 
     @partial(jax.jit, static_argnames=["self"])
     def get_logits_and_value(self, params: AgentParams, x: jax.Array) -> tuple[jax.Array, jax.Array]:
-        return self.get_action(2, params, x, None)[1], x  # type: ignore
+        return self.get_action(params, x, None)[1], x  # type: ignore
 
 
 @pytest.mark.parametrize("truncation_probability", [0.0, 0.5])

@@ -36,7 +36,6 @@ class EvalConfig:
 
                 while not np.all(eps_done):
                     action, _, key = get_action(
-                        n_actions=envs.single_action_space.n,
                         params=agent_state,
                         next_obs=obs,
                         key=key,
