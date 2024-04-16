@@ -314,6 +314,15 @@ def rollout(
         num_envs=args.local_num_envs,
     ).make()
 
+    eval_envs: list[tuple[str, EvalConfig]] = list(args.eval_envs.items())
+    # Spread various eval envs among the threads
+    this_thread_eval_cfg = [
+        eval_envs[i] for i in range(actor_id, len(args.eval_envs), runtime_info.world_size * args.num_actor_threads)
+    ]
+    this_thread_eval_keys = list(
+        jax.random.split(jax.random.PRNGKey(args.train_env.seed + actor_id), len(this_thread_eval_cfg))
+    )
+
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
@@ -463,11 +472,16 @@ def rollout(
             )
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
+        if update % args.eval_frequency == 0:
+            for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
+                print("Evaluating ", eval_name)
+                this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
+                log_dict = env_config.run(args.net.get_action, params, key=eval_key)
+                for k, v in log_dict.items():
+                    writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
-if __name__ == "__main__":
-    args = farconf.parse_cli(["--from-py-fn=cleanba.cleanba_impala:Args"] + sys.argv[1:], Args)
-    pprint(args)
 
+def train(args: Args):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
@@ -641,12 +655,12 @@ if __name__ == "__main__":
                         )
                     writer.add_scalar("eval/saved_model_idx", saved_model_version, global_step)
 
-                for eval_name, eval_cfg in args.eval_envs.items():
-                    key, eval_key = jax.random.split(key, 2)
-                    log_dict: dict[str, float] = eval_cfg.run(args.net.get_action, unreplicated_params, key=eval_key)
-
-                    for k, v in log_dict.items():
-                        writer.add_scalar(f"{eval_name}/{k}", v, global_step)
-
             if learner_policy_version >= runtime_info.num_updates:
                 break
+
+
+if __name__ == "__main__":
+    args = farconf.parse_cli(sys.argv[1:], Args)
+    pprint(args)
+
+    train(args)
