@@ -28,7 +28,6 @@ class NetworkSpec(abc.ABC):
     def make(self) -> nn.Module:
         ...
 
-    @partial(jax.jit, static_argnames=["self", "n_actions"])
     def init_params(self, n_actions: int, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
         net_key, actor_key, critic_key = jax.random.split(key, 3)
 
@@ -36,8 +35,8 @@ class NetworkSpec(abc.ABC):
         net_params = net_obj.init(net_key, example_obs)
         net_out_shape = jax.eval_shape(net_obj.apply, net_params, example_obs)
 
-        actor_params = Actor(n_actions).init(actor_key, jnp.zeros(net_out_shape))
-        critic_params = Critic().init(critic_key, jnp.zeros(net_out_shape))
+        actor_params = Actor(n_actions).init(actor_key, jnp.zeros(net_out_shape.shape))
+        critic_params = Critic().init(critic_key, jnp.zeros(net_out_shape.shape))
         return AgentParams(net_params, actor_params, critic_params)
 
     @partial(jax.jit, static_argnames=["self", "n_actions"])
