@@ -126,8 +126,17 @@ def impala_loss(
     total_loss += args.ent_coef * ent_loss
 
     # Useful metrics to know
-    max_ratio = jnp.max(jnp.abs(rhos_tm1))
-    metrics_dict = dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
+    targets_tm1 = vtrace_returns.errors + v_tm1
+    metrics_dict = dict(
+        pg_loss=pg_loss,
+        v_loss=v_loss,
+        ent_loss=ent_loss,
+        max_ratio=jnp.max(rhos_tm1),
+        min_ratio=jnp.min(rhos_tm1),
+        avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
+        var_explained=1 - np.var(vtrace_returns.errors, ddof=1) / np.var(targets_tm1, ddof=1),
+        proportion_of_boxes=np.mean(minibatch.r_t > 0),
+    )
     return total_loss, metrics_dict
 
 
