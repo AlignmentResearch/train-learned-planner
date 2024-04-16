@@ -237,7 +237,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
     cleanba_impala.rollout(
         key=key,
         args=args,
-        runtime_info=cleanba_impala.RuntimeInformation(0, [], 0, 0, 0, 0, 0, 0, 0, [], []),
+        runtime_info=cleanba_impala.RuntimeInformation(0, [], 0, 1, 0, 0, 0, 0, 0, [], []),
         rollout_queue=rollout_queue,
         params_queue=params_queue,
         writer=None,  # OK because device_thread_id != 0
