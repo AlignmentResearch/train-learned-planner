@@ -88,22 +88,24 @@ class NetworkSpec(abc.ABC):
         return logits, value.squeeze(-1)
 
 
-class NormConfig(nn.Module, abc.ABC):
-    pass
+class NormConfig(abc.ABC):
+    @abc.abstractmethod
+    def __call__(self, x: jax.Array) -> jax.Array:
+        ...
 
 
+@dataclasses.dataclass(frozen=True)
 class RMSNorm(NormConfig):
     eps: float = 1e-8
 
-    @nn.compact
-    def __call__(self, x):
+    def __call__(self, x: jax.Array) -> jax.Array:
         norm = jnp.square(x).mean(axis=-1, keepdims=True)
         return x * jax.lax.rsqrt(norm + self.eps)
 
 
+@dataclasses.dataclass
 class IdentityNorm(NormConfig):
-    @nn.compact
-    def __call__(self, x):
+    def __call__(self, x: jax.Array) -> jax.Array:
         return x
 
 
@@ -153,10 +155,11 @@ class AtariCNN(nn.Module):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
         for channels in self.cfg.channels:
-            x = ConvSequence(channels)(x, norm=norm)
+            x = ConvSequence(channels)(x, norm=self.cfg.norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
+            x = self.cfg.norm(x)
             x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
             x = nn.relu(x)
         return x
