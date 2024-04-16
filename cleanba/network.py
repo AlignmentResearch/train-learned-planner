@@ -103,7 +103,7 @@ class RMSNorm(NormConfig):
         return x * jax.lax.rsqrt(norm + self.eps)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class IdentityNorm(NormConfig):
     def __call__(self, x: jax.Array) -> jax.Array:
         return x
