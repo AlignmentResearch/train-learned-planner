@@ -98,8 +98,9 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
         self.action_space = gym.spaces.Discrete(2)  # Two actions so we can test importance ratios
         self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
 
-        self.per_step_truncation_probability = 2 ** (np.log2(cfg.truncation_probability) / self.cfg.max_episode_steps)
-        print(self.per_step_truncation_probability)
+        self.per_step_non_truncation_probability = 2 ** np.maximum(
+            -100000.0, (np.log2(1 - cfg.truncation_probability) / self.cfg.max_episode_steps)
+        )
 
     def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
         # Pretend that we took the optimal action (there is only one action)
@@ -107,8 +108,8 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
 
         self._t += 1
         terminated = truncated = False
-        if self.np_random.uniform(0.0, 1.0) < self.per_step_truncation_probability:
-            terminated = True
+        if self.np_random.uniform(0.0, 1.0) < (1 - self.per_step_non_truncation_probability):
+            terminated = False
             truncated = True
 
         # This goes after the previous if so takes precedence.
