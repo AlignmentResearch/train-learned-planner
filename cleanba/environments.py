@@ -1,6 +1,7 @@
 import abc
 import dataclasses
 import os
+import random
 import warnings
 from functools import partial
 from pathlib import Path
@@ -12,7 +13,9 @@ import numpy as np
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
 
-from cleanba.config import random_seed
+
+def random_seed() -> int:
+    return random.randint(0, 2**31 - 2)
 
 
 @dataclasses.dataclass
@@ -89,7 +92,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
 
 @dataclasses.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
-    env_id: ClassVar[str] = "Sokoban-v0"
+    env_id: str = "Sokoban-v0"
 
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
@@ -105,7 +108,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
     def __post_init__(self):
-        assert self.env_id is not None
+        assert self.env_id == "Sokoban-v0"
 
         if self.difficulty == "hard":
             assert self.split is None

@@ -136,6 +136,7 @@ class ResidualBlock(nn.Module):
 
 class ConvSequence(nn.Module):
     channels: int
+    max_pool: bool = True
 
     @nn.compact
     def __call__(self, x, norm):
@@ -177,3 +178,71 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, x):
         return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
+
+
+@dataclasses.dataclass(frozen=True)
+class SokobanResNetConfig(NetworkSpec):
+    channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
+    kernel_sizes: tuple[int, ...] = (8, 4, 4, 4, 4, 4, 4, 4, 4)
+    strides: tuple[int, ...] = (4, 2, 1, 1, 1, 1, 1, 1, 1)
+    multiplicity: int = 2
+    norm: NormConfig = IdentityNorm()
+
+    mlp_hiddens: tuple[int, ...] = (256,)
+
+    def make(self) -> nn.Module:
+        return SokobanResNet(self)
+
+
+class SokobanResNet(nn.Module):
+    cfg: SokobanResNetConfig
+
+    @nn.compact
+    def __call__(self, x):
+        x = jnp.transpose(x, (0, 2, 3, 1))
+        x = x / (255.0)
+        for chan, kern, stride in zip(self.cfg.channels, self.cfg.kernel_sizes, self.cfg.strides):
+            x = SokobanConvSequence(
+                channels=chan,
+                kernel_size=kern,
+                strides=stride,
+                multiplicity=self.cfg.multiplicity,
+            )(x, self.cfg.norm)
+        x = nn.relu(x)
+        x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
+        for hidden in self.cfg.mlp_hiddens:
+            x = self.cfg.norm(x)
+            x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+            x = nn.relu(x)
+        return x
+
+
+class SokobanResidualBlock(nn.Module):
+    channels: int
+    kernel_size: int
+    multiplicity: int
+
+    @nn.compact
+    def __call__(self, x, norm):
+        inputs = x
+        for _ in range(self.multiplicity):
+            x = norm(x)
+            x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size))(x)
+            x = nn.relu(x)
+        return x + inputs
+
+
+class SokobanConvSequence(nn.Module):
+    channels: int
+    kernel_size: int
+    strides: int
+    multiplicity: int
+
+    @nn.compact
+    def __call__(self, x, norm):
+        x = norm(x)
+        x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size), strides=(self.strides, self.strides))(x)
+        x = nn.relu(x)
+        x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
+        x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
+        return x

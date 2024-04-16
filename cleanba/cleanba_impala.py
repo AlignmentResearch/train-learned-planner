@@ -24,7 +24,8 @@ from names_generator import generate_name
 from rich.pretty import pprint
 from typing_extensions import Self
 
-from cleanba.config import Args, random_seed
+from cleanba.config import Args
+from cleanba.environments import random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -462,6 +463,16 @@ def train(args: Args):
                         learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
                         eps=args.rmsprop_eps,
                         decay=args.rmsprop_decay,
+                    )
+                    if args.optimizer == "rmsprop"
+                    else (
+                        optax.inject_hyperparams(optax.adam)(
+                            learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                            b1=0.9,
+                            b2=0.95,
+                            eps=args.rmsprop_eps,
+                            eps_root=0.0,
+                        )
                     ),
                 ),
                 every_k_schedule=args.gradient_accumulation_steps,
@@ -529,13 +540,14 @@ def train(args: Args):
                     sharded_storages.append(sharded_storage)
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
-            (
-                agent_state,
-                metrics_dict,
-            ) = multi_device_update(
-                agent_state,
-                sharded_storages,
-            )
+            for _ in range(args.train_epochs):
+                (
+                    agent_state,
+                    metrics_dict,
+                ) = multi_device_update(
+                    agent_state,
+                    sharded_storages,
+                )
             unreplicated_params = unreplicate(agent_state.params)
             for d_idx, d_id in enumerate(args.actor_device_ids):
                 device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])

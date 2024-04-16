@@ -4,16 +4,12 @@ from dataclasses import field
 from pathlib import Path
 from typing import List
 
-from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig
+from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
 )
-from cleanba.network import AtariCNNSpec, NetworkSpec
-
-
-def random_seed() -> int:
-    return random.randint(0, 2**31 - 2)
+from cleanba.network import AtariCNNSpec, NetworkSpec, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -46,10 +42,12 @@ class Args:
     learning_rate: float = 0.0006  # the learning rate of the optimizer
     local_num_envs: int = 64  # the number of parallel game environments for every actor device
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
+    train_epochs: int = 1  # Repetitions of going through the collected training
     anneal_lr: bool = True  # Toggle learning rate annealing for policy and value networks
     num_minibatches: int = 4  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     max_grad_norm: float = 0.0625  # the maximum norm for the gradient clipping
+    optimizer: str = "rmsprop"
     rmsprop_eps: float = 1.5625e-05
     rmsprop_decay: float = 0.99
 
@@ -119,6 +117,6 @@ def sokoban_resnet() -> Args:
         save_model=False,
         log_frequency=20,
         sync_frequency=int(1e20),
-        net=AtariCNNSpec(),
+        net=SokobanResNetConfig(),
         total_timesteps=int(1e9),
     )
