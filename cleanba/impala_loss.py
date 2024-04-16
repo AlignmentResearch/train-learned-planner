@@ -144,12 +144,11 @@ def tree_flatten_and_concat(x) -> jax.Array:
 def single_device_update(
     agent_state: TrainState,
     sharded_storages: List[Rollout],
-    key: jax.Array,
     *,
     get_logits_and_value: Callable,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
-) -> tuple[TrainState, jax.Array, dict[str, jax.Array]]:
+) -> tuple[TrainState, dict[str, jax.Array]]:
     def update_minibatch(agent_state: TrainState, minibatch: Rollout):
         (loss, metrics_dict), grads = jax.value_and_grad(impala_loss, has_aux=True)(
             agent_state.params,
@@ -182,4 +181,4 @@ def single_device_update(
 
     aux_dict = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
     aux_dict = jax.tree.map(jnp.mean, aux_dict)
-    return (agent_state, key, aux_dict)
+    return (agent_state, aux_dict)

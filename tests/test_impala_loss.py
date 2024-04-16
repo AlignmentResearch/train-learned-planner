@@ -1,9 +1,11 @@
 import dataclasses
 import queue
 from functools import partial
+from types import SimpleNamespace
 from typing import Any, Callable, SupportsFloat
 
 import distrax
+import flax.linen as nn
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
@@ -15,6 +17,7 @@ from numpy.typing import NDArray
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
 from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
+from cleanba.network import AgentParams, NetworkSpec
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -181,18 +184,36 @@ def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int 
     assert np.allclose(out, np.zeros_like(out), atol=1e-6)
 
 
-@jax.jit
-def _get_zero_action(params, next_obs, key):
-    assert params == {}
-    actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
-    logits = jnp.stack(
-        [
-            next_obs,  # Use next_obs itself to vary logits in a repeatable way
-            jnp.zeros((next_obs.shape[0],), dtype=jnp.float32),
-        ],
-        axis=1,
-    )
-    return actions, logits, key
+class ZeroActionNetwork(nn.Module):
+    @nn.compact
+    def __call__(self, x):
+        return x
+
+
+@dataclasses.dataclass(frozen=True)
+class ZeroActionNetworkSpec(NetworkSpec):
+    def make(self) -> nn.Module:
+        return ZeroActionNetwork()
+
+    @partial(jax.jit, static_argnames=["self", "n_actions"])
+    def get_action(
+        self, n_actions: int, params: AgentParams, next_obs: jax.Array, key: jax.Array | None
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        assert n_actions == 2
+
+        actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
+        logits = jnp.stack(
+            [
+                next_obs,  # Use next_obs itself to vary logits in a repeatable way
+                jnp.zeros((next_obs.shape[0],), dtype=jnp.float32),
+            ],
+            axis=1,
+        )
+        return actions, logits, key
+
+    @partial(jax.jit, static_argnames=["self"])
+    def get_logits_and_value(self, params: AgentParams, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+        return self.get_action(2, params, x, None)[1], x  # type: ignore
 
 
 @pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
@@ -202,6 +223,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
             max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability
         ),
         eval_envs={},
+        net=ZeroActionNetworkSpec(),
         loss=ImpalaLossConfig(
             gamma=0.9,
             vtrace_lambda=1.0,
@@ -227,7 +249,6 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         learner_devices=jax.local_devices(),
         device_thread_id=1,
         actor_device=None,  # Currently unused
-        get_action=_get_zero_action,
     )
 
     for iteration in range(100):
@@ -272,7 +293,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         # Now check that the impala loss works here, i.e. an integration test
         (total_loss, metrics_dict) = impala_loss(
             params={},
-            get_logits_and_value=lambda params, obs: (_get_zero_action(params, obs, None)[1], obs),
+            get_logits_and_value=args.net.get_logits_and_value,
             args=ImpalaLossConfig(gamma=gamma),
             minibatch=transition,
         )

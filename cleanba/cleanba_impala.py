@@ -16,6 +16,7 @@ from typing import Any, Iterator, List, Sequence
 import farconf
 import flax
 import flax.linen as nn
+import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -37,6 +38,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
+from cleanba.network import AtariCNNSpec, NetworkSpec
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -123,6 +125,8 @@ class Args:
 
     loss: ImpalaLossConfig = ImpalaLossConfig(vf_coef=0.5)
 
+    net: NetworkSpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
+
     # Algorithm specific arguments
     total_timesteps: int = 100_000_000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
@@ -132,8 +136,6 @@ class Args:
     num_minibatches: int = 4  # the number of mini-batches
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
-    channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
-    hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
     rmsprop_eps: float = 0.01
     rmsprop_decay: float = 0.99
 
@@ -210,89 +212,6 @@ def initialize_multi_device(args: Args) -> Iterator[RuntimeInformation]:
     MUST_STOP_PROGRAM = True
     if distributed:
         jax.distributed.shutdown()
-
-
-class ResidualBlock(nn.Module):
-    channels: int
-
-    @nn.compact
-    def __call__(self, x):
-        inputs = x
-        x = nn.relu(x)
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        x = nn.relu(x)
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        return x + inputs
-
-
-class ConvSequence(nn.Module):
-    channels: int
-
-    @nn.compact
-    def __call__(self, x):
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
-        x = ResidualBlock(self.channels)(x)
-        x = ResidualBlock(self.channels)(x)
-        return x
-
-
-class Network(nn.Module):
-    channels: Sequence[int]
-    hiddens: Sequence[int]
-
-    @nn.compact
-    def __call__(self, x):
-        x = jnp.transpose(x, (0, 2, 3, 1))
-        x = x / (255.0)
-        for channels in self.channels:
-            x = ConvSequence(channels)(x)
-        x = nn.relu(x)
-        x = x.reshape((x.shape[0], -1))
-        for hidden in self.hiddens:
-            x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-            x = nn.relu(x)
-        return x
-
-
-class Critic(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        return nn.Dense(1, kernel_init=orthogonal(1), bias_init=constant(0.0))(x)
-
-
-class Actor(nn.Module):
-    action_dim: int
-
-    @nn.compact
-    def __call__(self, x):
-        return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
-
-
-@flax.struct.dataclass
-class AgentParams:
-    network_params: flax.core.FrozenDict
-    actor_params: flax.core.FrozenDict
-    critic_params: flax.core.FrozenDict
-
-    def __contains__(self, item):
-        return item in (f.name for f in dataclasses.fields(self))
-
-
-@jax.jit
-def get_action(
-    params: flax.core.FrozenDict,
-    next_obs: jax.Array,
-    key: jax.Array,
-):
-    hidden: jax.Array = Network(args.channels, args.hiddens).apply(params.network_params, next_obs)
-    logits: jax.Array = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
-    # sample action: Gumbel-softmax trick
-    # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-    key, subkey = jax.random.split(key)
-    u = jax.random.uniform(subkey, shape=logits.shape)
-    action = jnp.argmax(logits - jnp.log(-jnp.log(u)), axis=1)
-    return action, logits, key
 
 
 @jax.jit
@@ -388,8 +307,6 @@ def rollout(
     learner_devices: list[jax.Device],
     device_thread_id: int,
     actor_device,
-    *,
-    get_action,
 ):
     actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
 
@@ -402,6 +319,8 @@ def rollout(
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
     start_time = time.time()
+    assert isinstance(envs.single_action_space, gym.spaces.Discrete)
+    n_possible_actions = int(envs.single_action_space.n)
 
     log_stats = LoggingStats.new_empty()
     # Counters for episode length and episode return
@@ -450,7 +369,7 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time):
-                        a_t, logits_t, key = get_action(params, obs_t, key)
+                        a_t, logits_t, key = args.net.get_action(n_possible_actions, params, obs_t, key)
 
                     with time_and_append(log_stats.device2host_time):
                         cpu_action = np.array(a_t)
@@ -562,10 +481,8 @@ if __name__ == "__main__":
 
         # seeding
         random.seed(args.seed)
-        np.random.seed(args.seed)
-        key = jax.random.PRNGKey(args.seed)
-        key, network_key, actor_key, critic_key = jax.random.split(key, 4)
-        learner_keys = jax.device_put_replicated(key, runtime_info.learner_devices)
+        np.random.seed(random_seed())
+        key = jax.random.PRNGKey(random_seed())
 
         def linear_schedule(count):
             # anneal learning rate linearly after one training iteration which contains
@@ -573,23 +490,14 @@ if __name__ == "__main__":
             frac = 1.0 - (count // (args.num_minibatches)) / runtime_info.num_updates
             return args.learning_rate * frac
 
-        network = Network(args.channels, args.hiddens)
-        actor = Actor(action_dim=envs.single_action_space.n)
-        critic = Critic()
-        network_params = network.init(network_key, np.array([envs.single_observation_space.sample()]))
+        key, agent_params_subkey = jax.random.split(key, 2)
+        agent_params = args.net.init_params(
+            envs.single_action_space.n, agent_params_subkey, np.array([envs.single_observation_space.sample()])
+        )
+
         agent_state = TrainState.create(
             apply_fn=None,
-            params=AgentParams(
-                network_params,
-                actor.init(
-                    actor_key,
-                    network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-                ),
-                critic.init(
-                    critic_key,
-                    network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-                ),
-            ),
+            params=agent_params,
             tx=optax.MultiSteps(
                 optax.chain(
                     optax.clip_by_global_norm(args.max_grad_norm),
@@ -602,34 +510,12 @@ if __name__ == "__main__":
                 every_k_schedule=args.gradient_accumulation_steps,
             ),
         )
-        print(network.tabulate(network_key, np.array([envs.single_observation_space.sample()])))
-        print(
-            actor.tabulate(
-                actor_key,
-                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-            )
-        )
-        print(
-            critic.tabulate(
-                critic_key,
-                network.apply(network_params, np.array([envs.single_observation_space.sample()])),
-            )
-        )
-
-        def get_logits_and_value(
-            params: flax.core.FrozenDict,
-            x: jax.Array,
-        ):
-            hidden = Network(args.channels, args.hiddens).apply(params.network_params, x)
-            raw_logits = Actor(envs.single_action_space.n).apply(params.actor_params, hidden)
-            value = Critic().apply(params.critic_params, hidden).squeeze(-1)
-            return raw_logits, value
 
         multi_device_update = jax.pmap(
             partial(
                 single_device_update,
                 num_batches=args.num_minibatches * args.gradient_accumulation_steps,
-                get_logits_and_value=get_logits_and_value,
+                get_logits_and_value=partial(args.net.get_logits_and_value, envs.single_action_space.n),
                 impala_cfg=args.loss,
             ),
             axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -660,7 +546,6 @@ if __name__ == "__main__":
                         d_idx * args.num_actor_threads + thread_id,
                         runtime_info.local_devices[d_id],
                     ),
-                    kwargs=dict(get_action=get_action),
                 ).start()
 
         rollout_queue_get_time = deque(maxlen=10)
@@ -690,12 +575,10 @@ if __name__ == "__main__":
             training_time_start = time.time()
             (
                 agent_state,
-                learner_keys,
                 metrics_dict,
             ) = multi_device_update(
                 agent_state,
                 sharded_storages,
-                learner_keys,
             )
             unreplicated_params = unreplicate(agent_state.params)
             for d_idx, d_id in enumerate(args.actor_device_ids):
