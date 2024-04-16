@@ -139,7 +139,7 @@ class Args:
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
-    num_actor_threads: int = 4  # The number of environment threads per actor device
+    num_actor_threads: int = 2  # The number of environment threads per actor device
     actor_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that actor workers will use
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
