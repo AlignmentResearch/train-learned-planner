@@ -12,6 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Iterator, List
 
+import chex
 import farconf
 import flax
 import jax
@@ -33,6 +34,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
+from cleanba.network import label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -444,14 +446,16 @@ def train(args: Args):
         np.random.seed(random_seed())
         key = jax.random.PRNGKey(random_seed())
 
-        def linear_schedule(count):
+        def linear_schedule(learning_rate: float, count: chex.Numeric) -> chex.Numeric:
             # anneal learning rate linearly after one training iteration which contains
             # (args.num_minibatches) gradient updates
             frac = 1.0 - (count // (args.num_minibatches)) / runtime_info.num_updates
-            return args.learning_rate * frac
+            return learning_rate * frac
 
         key, agent_params_subkey = jax.random.split(key, 2)
         agent_params = args.net.init_params(envs, agent_params_subkey, np.array([envs.single_observation_space.sample()]))
+
+        learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params)
 
         agent_state = TrainState.create(
             apply_fn=None,
@@ -459,20 +463,31 @@ def train(args: Args):
             tx=optax.MultiSteps(
                 optax.chain(
                     optax.clip_by_global_norm(args.max_grad_norm),
-                    optax.inject_hyperparams(rmsprop_pytorch_style)(
-                        learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        eps=args.rmsprop_eps,
-                        decay=args.rmsprop_decay,
-                    )
-                    if args.optimizer == "rmsprop"
-                    else (
-                        optax.inject_hyperparams(optax.adam)(
-                            learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                            b1=0.9,
-                            b2=0.95,
-                            eps=args.rmsprop_eps,
-                            eps_root=0.0,
-                        )
+                    optax.multi_transform(
+                        transforms={
+                            k: (
+                                optax.inject_hyperparams(rmsprop_pytorch_style)(
+                                    learning_rate=partial(linear_schedule, args.learning_rate * lr)
+                                    if args.anneal_lr
+                                    else args.learning_rate * lr,
+                                    eps=args.rmsprop_eps,
+                                    decay=args.rmsprop_decay,
+                                )
+                                if args.optimizer == "rmsprop"
+                                else (
+                                    optax.inject_hyperparams(optax.adam)(
+                                        learning_rate=partial(linear_schedule, args.learning_rate * lr)
+                                        if args.anneal_lr
+                                        else args.learning_rate * lr,
+                                        b1=0.9,
+                                        b2=0.95,
+                                        eps=args.rmsprop_eps,
+                                        eps_root=0.0,
+                                    )
+                                )
+                            )
+                            for k, lr in learning_rates.items()
+                        }
                     ),
                 ),
                 every_k_schedule=args.gradient_accumulation_steps,
