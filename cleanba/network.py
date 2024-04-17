@@ -1,6 +1,7 @@
 import abc
 import dataclasses
 from functools import partial
+from typing import Any, Callable, Literal, SupportsFloat
 
 import flax
 import flax.linen as nn
@@ -9,7 +10,8 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.linen.initializers import constant, orthogonal
+from flax.linen.initializers import constant, kaiming_normal, orthogonal, variance_scaling
+from flax.typing import Shape
 
 
 @flax.struct.dataclass
@@ -119,6 +121,32 @@ class AtariCNNSpec(NetworkSpec):
         return AtariCNN(self)
 
 
+NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
+    relu=np.sqrt(2.0),
+    identity=1.0,
+    action_softmax=0.02,  # We want the actions to be pretty random at the start, so use a small scale
+)
+
+
+def yang_initializer(layer_type: Literal["input", "hidden", "output"], nonlinearity: str) -> jax.nn.initializers.Initializer:
+    nonlinearity_gain = float(NONLINEARITY_GAINS[nonlinearity])
+
+    def init(key: jax.Array, shape: Shape, dtype: Any = jnp.float_) -> jax.Array:
+        dtype = jax.dtypes.canonicalize_dtype(dtype)
+        fan_in = np.prod(shape[:-1])
+
+        if layer_type in ["input", "hidden"]:
+            stddev = nonlinearity_gain / np.sqrt(fan_in)
+        elif layer_type == "output":
+            stddev = nonlinearity_gain / fan_in
+        else:
+            raise ValueError(f"Unknown {layer_type=}")
+
+        return jax.random.normal(key, shape, dtype) * stddev
+
+    return init
+
+
 class ResidualBlock(nn.Module):
     channels: int
 
@@ -161,7 +189,7 @@ class AtariCNN(nn.Module):
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
-            x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+            x = nn.Dense(hidden, kernel_init=yang_initializer("hidden", "relu"), bias_init=constant(0.0))(x)
             x = nn.relu(x)
         return x
 
@@ -169,7 +197,8 @@ class AtariCNN(nn.Module):
 class Critic(nn.Module):
     @nn.compact
     def __call__(self, x):
-        return nn.Dense(1, kernel_init=orthogonal(1), bias_init=constant(0.0))(x)
+        init = yang_initializer("output", "identity")
+        return nn.Dense(1, kernel_init=init, bias_init=init)(x)
 
 
 class Actor(nn.Module):
@@ -177,7 +206,12 @@ class Actor(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        return nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(x)
+        init = yang_initializer("output", "action_softmax")
+        # Bias here is useless, because softmax is invariant to baseline.
+        return nn.Dense(self.action_dim, kernel_init=init, use_bias=False)(x)
+
+
+# %%
 
 
 @dataclasses.dataclass(frozen=True)
@@ -201,12 +235,9 @@ class SokobanResNet(nn.Module):
     def __call__(self, x):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
-        for chan, kern, stride in zip(self.cfg.channels, self.cfg.kernel_sizes, self.cfg.strides):
+        for layer_i, (chan, kern, stride) in enumerate(zip(self.cfg.channels, self.cfg.kernel_sizes, self.cfg.strides)):
             x = SokobanConvSequence(
-                channels=chan,
-                kernel_size=kern,
-                strides=stride,
-                multiplicity=self.cfg.multiplicity,
+                channels=chan, kernel_size=kern, strides=stride, multiplicity=self.cfg.multiplicity, is_input=layer_i == 0
             )(x, self.cfg.norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
@@ -227,9 +258,18 @@ class SokobanResidualBlock(nn.Module):
     def __call__(self, x, norm):
         inputs = x
         for _ in range(self.multiplicity):
-            x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size))(x)
+            x = norm(x)
+            x = nn.Conv(
+                self.channels,
+                kernel_size=(self.kernel_size, self.kernel_size),
+                kernel_init=yang_initializer("hidden", "relu"),
+                bias_init=yang_initializer("hidden", "relu"),
+            )(x)
             x = nn.relu(x)
-        return norm(x + inputs)
+        return x + inputs
+
+
+INPUT_SENTINEL: str = "xXx_Input_xXx"
 
 
 class SokobanConvSequence(nn.Module):
@@ -237,12 +277,60 @@ class SokobanConvSequence(nn.Module):
     kernel_size: int
     strides: int
     multiplicity: int
+    is_input: bool
 
     @nn.compact
     def __call__(self, x, norm):
-        x = nn.Conv(self.channels, kernel_size=(self.kernel_size, self.kernel_size), strides=(self.strides, self.strides))(x)
-        x = nn.relu(x)
         x = norm(x)
+        x = nn.Conv(
+            self.channels,
+            kernel_size=(self.kernel_size, self.kernel_size),
+            strides=(self.strides, self.strides),
+            kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+            bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+            name=INPUT_SENTINEL if self.is_input else None,
+        )(x)
+        x = nn.relu(x)
         x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
         x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
         return x
+
+
+def _fan_in_for_params(params: dict[str, dict[str, Any] | jax.Array]) -> dict[str, dict[str, Any] | str]:
+    out: dict[str, dict[str, Any] | str] = {}
+    for k, v in params.items():
+        if k == INPUT_SENTINEL:
+            out[k] = "input"
+
+        elif isinstance(v, jax.Array):
+            if k == "bias":
+                out[k] = "bias"
+            elif k == "kernel":
+                fan_in = int(np.prod(v.shape[:-1]))
+                out[k] = f"fan_in_{fan_in}"
+            else:
+                raise ValueError(f"Unknown parameter name {k=}")
+        else:
+            assert isinstance(v, dict)
+            out[k] = _fan_in_for_params(v)
+    return out
+
+
+def label_and_learning_rate_for_params(params: AgentParams) -> tuple[dict[str, float], AgentParams]:
+    param_labels: AgentParams = jax.tree.map(_fan_in_for_params, params, is_leaf=lambda v: isinstance(v, dict))
+    key_set: set[str] = set(jax.tree.leaves(param_labels))
+
+    possible_keys: dict[str, None] = {k: None for k in key_set}
+    learning_rates: dict[str, float] = {}
+
+    possible_keys.pop("input")
+    learning_rates["input"] = 1.0
+
+    possible_keys.pop("bias")
+    learning_rates["bias"] = 1.0
+
+    for k in possible_keys:
+        fan_in = int(k.removeprefix("fan_in_"))
+        learning_rates[k] = 1 / fan_in
+
+    return learning_rates, param_labels
