@@ -487,7 +487,8 @@ def train(args: Args):
                                 )
                             )
                             for k, lr in learning_rates.items()
-                        }
+                        },
+                        param_labels=agent_param_labels,
                     ),
                 ),
                 every_k_schedule=args.gradient_accumulation_steps,
