@@ -68,39 +68,55 @@ def test_impala_loss_zero_when_accurate(
     obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
-    (total_loss, (pg_loss, baseline_loss, ent_loss, _)) = impala_loss(
+    (total_loss, metrics_dict) = impala_loss(
         params=(),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
             done_t=done_tm1,
+            truncated_t=np.zeros_like(done_tm1),
             a_t=a_t,
             logits_t=logits_t,
             r_t=rewards,
         ),
     )
 
-    assert np.allclose(pg_loss, 0.0)
-    assert np.allclose(baseline_loss, 0.0)
-    assert np.allclose(ent_loss, 0.0)
+    assert np.allclose(metrics_dict["pg_loss"], 0.0)
+    assert np.allclose(metrics_dict["v_loss"], 0.0)
+    assert np.allclose(metrics_dict["ent_loss"], 0.0)
     assert np.allclose(total_loss, 0.0)
 
 
 class TrivialEnv(gym.Env[NDArray, np.int64]):
     def __init__(self, cfg: "TrivialEnvConfig"):
+        """
+        truncation_probability: the probability that an entire *episode* is truncated prematurely
+        """
         self.cfg = cfg
         self.reward_range = (0.1, 2.0)
         self.action_space = gym.spaces.Discrete(2)  # Two actions so we can test importance ratios
         self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
+
+        self.per_step_non_truncation_probability = 2 ** np.maximum(
+            -100000.0, (np.log2(1 - cfg.truncation_probability) / self.cfg.max_episode_steps)
+        )
 
     def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
         # Pretend that we took the optimal action (there is only one action)
         reward = self._rewards[self._t]
 
         self._t += 1
-        terminated = self._t == len(self._rewards)
-        return (self._returns[self._t], reward, terminated, False, {})
+        terminated = truncated = False
+        if self.np_random.uniform(0.0, 1.0) < (1 - self.per_step_non_truncation_probability):
+            terminated = False
+            truncated = True
+
+        # This goes after the previous if so takes precedence.
+        if self._t == len(self._rewards):
+            terminated = True
+            truncated = False
+        return (self._returns[self._t], reward, terminated, truncated, {})
 
     def reset(
         self,
@@ -128,6 +144,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
 @dataclasses.dataclass
 class TrivialEnvConfig(EnvConfig):
     gamma: float = 0.9
+    truncation_probability: float = 0.5
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
@@ -136,7 +153,7 @@ class TrivialEnvConfig(EnvConfig):
 
 
 def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int = 7, gamma: float = 0.9):
-    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma).make()
+    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma, truncation_probability=0.0).make()
 
     returns = []
     rewards = []
@@ -178,9 +195,12 @@ def _get_zero_action(params, next_obs, key):
     return actions, logits, key
 
 
-def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
+@pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
+def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
     args = cleanba_impala.Args(
-        train_env=TrivialEnvConfig(max_episode_steps=10, num_envs=0, gamma=gamma),
+        train_env=TrivialEnvConfig(
+            max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability
+        ),
         eval_envs={},
         loss=ImpalaLossConfig(
             gamma=0.9,
@@ -250,7 +270,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
-        (total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)) = impala_loss(
+        (total_loss, metrics_dict) = impala_loss(
             params={},
             get_logits_and_value=lambda params, obs: (_get_zero_action(params, obs, None)[1], obs),
             args=ImpalaLossConfig(gamma=gamma),
@@ -258,7 +278,7 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy())
 
-        assert np.abs(pg_loss) < 1e-6
-        assert np.allclose(baseline_loss, 0.0)
-        assert np.allclose(ent_loss, logit_negentropy)
-        assert np.allclose(max_ratio, 1.0)
+        assert np.abs(metrics_dict["pg_loss"]) < 1e-6
+        assert np.allclose(metrics_dict["v_loss"], 0.0)
+        assert np.allclose(metrics_dict["ent_loss"], logit_negentropy)
+        assert np.allclose(metrics_dict["max_ratio"], 1.0)

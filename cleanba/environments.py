@@ -183,7 +183,10 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         else:
             raise NotImplementedError(f"{type(obs_space)=}")
 
+        self.num_envs = env.num_envs
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
+        self.single_action_space = env.single_action_space
+        self.action_space = env.action_space
 
     def reset_wait(self, **kwargs) -> tuple[Any, dict]:
         obs, info = super().reset_wait(**kwargs)
