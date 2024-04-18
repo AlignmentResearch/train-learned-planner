@@ -115,7 +115,7 @@ def sokoban_resnet() -> Args:
         eval_frequency=400_000,
         seed=1234,
         save_model=False,
-        log_frequency=20,
+        log_frequency=10,
         sync_frequency=int(1e20),
         net=SokobanResNetConfig(),
         total_timesteps=int(1e9),
