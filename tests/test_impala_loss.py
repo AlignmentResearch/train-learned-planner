@@ -3,6 +3,7 @@ import queue
 from functools import partial
 from typing import Any, Callable, SupportsFloat
 
+import distrax
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
@@ -13,7 +14,7 @@ from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, Transition, impala_loss
+from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -64,21 +65,19 @@ def test_impala_loss_zero_when_accurate(
     for i in range(len(rewards) - 1, -1, -1):
         correct_returns[i] = rewards[i] + ((~done_tm1[i]) * gamma) * correct_returns[i + 1]
 
-    obs_t = correct_returns[1:]  #  Mimic how actual rollouts collect observations
+    obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
-    (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
+    (total_loss, (pg_loss, baseline_loss, ent_loss, _)) = impala_loss(
         params=(),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
         args=ImpalaLossConfig(gamma=gamma),
-        minibatch=Transition(
+        minibatch=Rollout(
             obs_t=jnp.array(obs_t),
-            done_tm1=done_tm1,
+            done_t=done_tm1,
             a_t=a_t,
             logits_t=logits_t,
-            r_tm1=rewards,
-            trunc_tm1=None,  # type: ignore
-            term_tm1=None,  # type: ignore
+            r_t=rewards,
         ),
     )
 
@@ -92,7 +91,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
     def __init__(self, cfg: "TrivialEnvConfig"):
         self.cfg = cfg
         self.reward_range = (0.1, 2.0)
-        self.action_space = gym.spaces.Discrete(1)
+        self.action_space = gym.spaces.Discrete(2)  # Two actions so we can test importance ratios
         self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
 
     def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
@@ -169,8 +168,14 @@ def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int 
 def _get_zero_action(params, next_obs, key):
     assert params == {}
     actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
-    logits = jnp.zeros((next_obs.shape[0], 1), dtype=jnp.float32)
-    return next_obs, actions, logits, key
+    logits = jnp.stack(
+        [
+            next_obs,  # Use next_obs itself to vary logits in a repeatable way
+            jnp.zeros((next_obs.shape[0],), dtype=jnp.float32),
+        ],
+        axis=1,
+    )
+    return actions, logits, key
 
 
 def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
@@ -221,11 +226,14 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert isinstance(global_step, int)
         assert isinstance(actor_policy_version, int)
         assert isinstance(update, int)
-        assert isinstance(sharded_transition, cleanba_impala.Transition)
+        assert isinstance(sharded_transition, cleanba_impala.Rollout)
         assert isinstance(params_queue_get_time, float)
         assert device_thread_id == 1
 
         assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
+        assert sharded_transition.r_t.shape == (1, num_timesteps, num_envs)
+        assert sharded_transition.a_t.shape == (1, num_timesteps, num_envs)
+        assert sharded_transition.logits_t.shape == (1, num_timesteps, num_envs, 2)
 
         transition = cleanba_impala.unreplicate(sharded_transition)
 
@@ -233,8 +241,8 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         v_tm1 = transition.obs_t[:-1]
 
         # We have to use 1: with these because they represent the reward/discount of the *previous* step.
-        r_t = transition.r_tm1[1:]
-        discount_t = (~transition.done_tm1[1:]) * gamma
+        r_t = transition.r_t
+        discount_t = (~transition.done_t) * gamma
 
         rho_tm1 = np.ones((num_timesteps, num_envs))
 
@@ -242,14 +250,15 @@ def test_loss_of_rollout(num_envs: int = 5, gamma: float = 0.9, num_timesteps: i
         assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
-        (total_loss, (pg_loss, baseline_loss, ent_loss)) = impala_loss(
-            params=(),
-            get_logits_and_value=lambda params, obs: (jnp.zeros((obs.shape[-1], 1)), obs),
+        (total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)) = impala_loss(
+            params={},
+            get_logits_and_value=lambda params, obs: (_get_zero_action(params, obs, None)[1], obs),
             args=ImpalaLossConfig(gamma=gamma),
             minibatch=transition,
         )
+        logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy())
 
-        assert np.allclose(pg_loss, 0.0)
+        assert np.abs(pg_loss) < 1e-6
         assert np.allclose(baseline_loss, 0.0)
-        assert np.allclose(ent_loss, 0.0)
-        assert np.allclose(total_loss, 0.0)
+        assert np.allclose(ent_loss, logit_negentropy)
+        assert np.allclose(max_ratio, 1.0)

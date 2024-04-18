@@ -128,3 +128,7 @@ RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$'
     && [ -z "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     && [ -z "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     ; }; then exit 1; fi
+
+
+FROM main as atari
+RUN pip uninstall -y envpool && pip install envpool && rm -rf "${HOME}/.cache"

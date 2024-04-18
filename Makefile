@@ -16,7 +16,7 @@ default: release/main
 RELEASE_PREFIX ?= latest
 BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 
-.build/with-reqs/${BUILD_PREFIX}/%:
+.build/with-reqs/${BUILD_PREFIX}/%: requirements.txt
 	mkdir -p .build/with-reqs/${BUILD_PREFIX}
 	docker pull "${APPLICATION_URL}:${BUILD_PREFIX}-$*" || true
 	docker build --platform "linux/amd64" \

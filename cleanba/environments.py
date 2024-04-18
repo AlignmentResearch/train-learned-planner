@@ -1,9 +1,10 @@
 import abc
 import dataclasses
 import os
+import warnings
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, ClassVar, List, Literal, Optional, Tuple, Union
 
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
@@ -17,7 +18,7 @@ from cleanba.config import random_seed
 @dataclasses.dataclass
 class EnvConfig(abc.ABC):
     max_episode_steps: int
-    num_envs: int
+    num_envs: int = 0  # gets overwritten anyways
     seed: int = dataclasses.field(default_factory=random_seed)
 
     @property
@@ -26,10 +27,41 @@ class EnvConfig(abc.ABC):
         ...
 
 
+@dataclasses.dataclass
 class EnvpoolEnvConfig(EnvConfig):
+    env_id: str | None = None
+
     num_threads: int = 0
     thread_affinity_offset: int = -1
     max_num_players: int = 1
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        # Import envpool only when needed so we can run on Mac OS
+        import envpool
+
+        if self.env_id is None:
+            raise ValueError("env_id is None, I don't know what kind of environment to build.")
+
+        dummy_spec = envpool.make_spec(self.env_id)
+        special_kwargs = dict(
+            batch_size=self.num_envs,
+        )
+        SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
+        env_kwargs = {}
+        for k in dummy_spec._config_keys:
+            if not (k in special_kwargs or k in SPECIAL_KEYS):
+                try:
+                    env_kwargs[k] = getattr(self, k)
+                except AttributeError as e:
+                    warnings.warn(f"Could not get environment setting: {e}")
+
+        vec_envs_fn = partial(
+            EnvpoolVectorEnv,
+            self.num_envs,
+            partial(envpool.make_gymnasium, self.env_id, **special_kwargs, **env_kwargs),
+        )
+        return vec_envs_fn
 
 
 class EnvpoolVectorEnv(gym.vector.VectorEnv):
@@ -57,6 +89,8 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
 
 @dataclasses.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
+    env_id: ClassVar[str] = "Sokoban-v0"
+
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
@@ -71,6 +105,8 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
     def __post_init__(self):
+        assert self.env_id is not None
+
         if self.difficulty == "hard":
             assert self.split is None
         else:
@@ -97,26 +133,6 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
         if len(not_end_txt) > 0:
             raise ValueError(f"{levels_dir=} does not exist or some of its files don't end in .txt: {not_end_txt}")
         return str(levels_dir)
-
-    @property
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        # Import envpool only when needed so we can run on Mac OS
-        import envpool
-
-        env_id: str = "Sokoban-v0"
-        dummy_spec = envpool.make_spec(env_id)
-        special_kwargs = dict(
-            batch_size=self.num_envs,
-        )
-        SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
-        env_kwargs = {k: getattr(self, k) for k in dummy_spec._config_keys if not (k in special_kwargs or k in SPECIAL_KEYS)}
-
-        vec_envs_fn = partial(
-            EnvpoolVectorEnv,
-            self.num_envs,
-            partial(envpool.make_gymnasium, "Sokoban-v0", **special_kwargs, **env_kwargs),
-        )
-        return vec_envs_fn
 
 
 @dataclasses.dataclass
@@ -244,3 +260,20 @@ class BoxobanConfig(BaseSokobanEnvConfig):
             ),
         )
         return make_fn
+
+
+ATARI_MAX_FRAMES = int(
+    108000 / 4
+)  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
+# This equals 27k, which is the default max_episode_steps for Atari in Envpool
+
+
+@dataclasses.dataclass
+class AtariEnv(EnvpoolEnvConfig):
+    max_episode_steps: int = ATARI_MAX_FRAMES  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
+    episodic_life: bool = False  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
+    repeat_action_probability: float = 0.25  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12
+    # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 12 (no-op is deprecated in favor of sticky action, right?)
+    noop_max: int = 1
+    full_action_space: bool = True  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
+    reward_clip: bool = True
