@@ -12,20 +12,16 @@ from cleanba.network import IdentityNorm, RMSNorm
 
 runs: list[FlamingoRun] = []
 
-train_epochs = [4, 6, 10]
-num_minibatches = [32, 16, 8]
-max_grad_norm = [1.0, 0.3, 0.12, 0.06]
-
 random.seed(12345)
 
-for run_idx in range(9):
+for train_epochs in [4, 6, 10]:
 
     def update_fn(config: Args) -> Args:
         config.train_env.seed = random_seed()
         config.seed = random_seed()
-        config.num_minibatches = random.choice(num_minibatches)
-        config.max_grad_norm = random.choice(max_grad_norm)
-        config.train_epochs = random.choice(train_epochs)
+        config.num_minibatches = 16
+        config.max_grad_norm = 0.12
+        config.train_epochs = train_epochs
 
         config.eval_envs = {}
         config.loss = dataclasses.replace(config.loss, gamma=0.97, vtrace_lambda=0.97, vf_coef=0.5)
