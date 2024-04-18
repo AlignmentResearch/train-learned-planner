@@ -34,7 +34,6 @@ for train_epochs in [4, 6, 10]:
         config.rmsprop_decay = 0.95
         config.rmsprop_eps = 1e-8
         config.total_timesteps = 50_000_000
-        config.train_epochs = 1
 
         return config
 

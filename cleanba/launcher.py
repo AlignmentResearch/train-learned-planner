@@ -145,7 +145,6 @@ def launch_jobs(
     jobs, launch_id = create_jobs(start_number, runs, group=group, job_template_path=job_template_path, wandb_mode=wandb_mode)
     yamls_for_all_jobs = "\n\n---\n\n".join(jobs)
 
-    print(yamls_for_all_jobs)
     if not any(s in sys.argv for s in ["--dryrun", "--dry-run", "-d"]):
         subprocess.run(["kubectl", "create", "-f", "-"], check=True, input=yamls_for_all_jobs.encode())
         print(f"Jobs launched. To delete them run:\nkubectl delete jobs -l launch-id={launch_id}")
