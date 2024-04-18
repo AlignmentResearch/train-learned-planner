@@ -43,7 +43,6 @@ class FlamingoRun:
     commands: list[list[str]]
     CONTAINER_TAG: str = dataclasses.field(default_factory=circleci_container_tag)
     COMMIT_HASH: str = dataclasses.field(default_factory=git_latest_commit)
-    PRIORITY: str = "normal-batch"
     CPU: int | str = 4
     MEMORY: str = "20G"
     GPU: int = 1
@@ -80,7 +79,7 @@ def create_jobs(
     start_number: int,
     runs: Sequence[FlamingoRun],
     group: str,
-    project: str = "learned-planners",
+    project: str = "lp-cleanba",
     entity: str = "farai",
     wandb_mode: str = "online",
     job_template_path: Optional[Path] = None,
@@ -135,7 +134,7 @@ def create_jobs(
 def launch_jobs(
     runs: Sequence[FlamingoRun],
     group: str,
-    project: str = "learned-planners",
+    project: str = "lp-cleanba",
     entity: str = "farai",
     wandb_mode: str = "online",
     job_template_path: Path = None,

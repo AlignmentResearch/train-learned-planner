@@ -44,7 +44,7 @@ spec:
         - name: WANDB_MODE
           value: offline
         - name: WANDB_PROJECT
-          value: learned-planners
+          value: lp-cleanba
         - name: WANDB_ENTITY
           value: farai
         - name: WANDB_RUN_GROUP

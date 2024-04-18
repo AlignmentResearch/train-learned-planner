@@ -600,11 +600,6 @@ def train(args: Args):
                     global_step,
                     f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={learner_policy_version}, training time: {time.time() - training_time_start}s",
                 )
-                writer.add_scalar(
-                    "charts/learning_rate",
-                    agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
-                    global_step,
-                )
                 writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
                 writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
                 writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
