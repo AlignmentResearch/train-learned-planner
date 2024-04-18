@@ -1,0 +1,80 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {NAME}
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+    wandb-group: {WANDB_RUN_GROUP}
+    wandb-project: {WANDB_PROJECT}
+    wandb-job-name: {WANDB_JOB_NAME}
+    wandb-entity: {WANDB_ENTITY}
+    launch-id: {LAUNCH_ID}
+spec:
+  suspend: true
+  backoffLimit: 1  # How many times to try to run the job until giving up
+  template:
+    metadata:
+      generateName: {NAME}
+    spec:
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+      priorityClassName: {PRIORITY}
+      tolerations:
+      - key: "nfs_not_working"
+        operator: "Exists"
+        effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            preference:
+              matchExpressions:
+              - key: nfs_not_working
+                operator: In
+                values:
+                - "true"
+      containers:
+      - name: devbox-container
+        image: "ghcr.io/alignmentresearch/lp-cleanba:{CONTAINER_TAG}"
+        command:
+          - bash
+          - -c
+          - |
+            sudo mkdir -p "{TRAINING_MOUNT}/.sokoban_cache"; sudo chown -R dev:dev "{TRAINING_MOUNT}"; git clone https://github.com/google-deepmind/boxoban-levels "{TRAINING_MOUNT}/.sokoban_cache/boxoban-levels-master"; git pull; git checkout {COMMIT_HASH}; git submodule update --recursive; {COMMAND}
+        resources:
+          requests:
+            cpu: {CPU}
+          limits:
+            memory: {MEMORY}
+            nvidia.com/gpu: {GPU}
+        env:
+        - name: OMP_NUM_THREADS
+          value: {OMP_NUM_THREADS}
+        - name: GIT_ASKPASS
+          value: "true"
+        - name: GITHUB_PAT
+          valueFrom:
+            secretKeyRef:
+              name: github-credentials
+              key: pat
+        - name: GIT_CONFIG_PARAMETERS
+          value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wandb
+              key: api-key
+        - name: WANDB_ENTITY
+          value: {WANDB_ENTITY}
+        - name: WANDB_JOB_NAME
+          value: {WANDB_JOB_NAME}
+        - name: WANDB_PROJECT
+          value: {WANDB_PROJECT}
+        - name: WANDB_RUN_GROUP
+          value: {WANDB_RUN_GROUP}
+        - name: WANDB_MODE
+          value: {WANDB_MODE}
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: docker

@@ -2,8 +2,10 @@ import dataclasses
 from functools import partial
 from typing import Any, Callable, List, NamedTuple
 
+import flax.traverse_util
 import jax
 import jax.numpy as jnp
+import numpy as np
 import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
@@ -46,7 +48,7 @@ def impala_loss(
     get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
     args: ImpalaLossConfig,
     minibatch: Rollout,
-):
+) -> tuple[jax.Array, dict[str, jax.Array]]:
     discount_t = (~minibatch.done_t) * args.gamma
     mask_t = jnp.ones_like(discount_t)  # Don't mask any loss timesteps -- we use them all.
 
@@ -95,24 +97,22 @@ def impala_loss(
 
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(logits_to_update, minibatch.a_t, pg_advs, mask_t))
 
-    baseline_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
+    v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
 
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(logits_to_update, mask_t))
 
     total_loss = args.global_coef * pg_loss
-    total_loss += (args.global_coef * args.vf_coef) * baseline_loss
+    total_loss += (args.global_coef * args.vf_coef) * v_loss
     total_loss += (args.global_coef * args.ent_coef) * ent_loss
-    return total_loss, (pg_loss, baseline_loss, ent_loss, max_ratio)
+    return total_loss, dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
 
 
 SINGLE_DEVICE_UPDATE_DEVICES_AXIS: str = "local_devices"
 
 
-class LossesTuple(NamedTuple):
-    loss: float | jax.Array
-    pg_loss: float | jax.Array
-    v_loss: float | jax.Array
-    entropy_loss: float | jax.Array
+def tree_flatten_and_concat(x) -> jax.Array:
+    leaves, _ = jax.tree.flatten(x)
+    return jnp.concat(list(map(jnp.ravel, leaves)))
 
 
 @partial(jax.jit, static_argnames=["num_batches", "get_logits_and_value", "impala_cfg"])
@@ -124,17 +124,27 @@ def single_device_update(
     get_logits_and_value: Callable,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
-) -> tuple[TrainState, jax.Array, LossesTuple]:
+) -> tuple[TrainState, jax.Array, dict[str, jax.Array]]:
     def update_minibatch(agent_state: TrainState, minibatch: Rollout):
-        loss_and_aux, grads = jax.value_and_grad(impala_loss, has_aux=True)(
+        (loss, metrics_dict), grads = jax.value_and_grad(impala_loss, has_aux=True)(
             agent_state.params,
             get_logits_and_value,
             impala_cfg,
             minibatch,
         )
+        metrics_dict["loss"] = loss
         grads = jax.lax.pmean(grads, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
+
+        flat_param = tree_flatten_and_concat(agent_state.params)
+        metrics_dict["param_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_param)))
+        metrics_dict["param_rms/total"] = metrics_dict["param_rms/avg"] * np.sqrt(np.prod(flat_param.shape))
+
+        flat_grad = tree_flatten_and_concat(grads)
+        metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
+        metrics_dict["grad_rms/total"] = metrics_dict["grad_rms/avg"] * np.sqrt(np.prod(flat_grad.shape))
+
         agent_state = agent_state.apply_gradients(grads=grads)
-        return agent_state, loss_and_aux
+        return agent_state, metrics_dict
 
     storage = jax.tree.map(lambda *x: jnp.hstack(x), *sharded_storages)
     storage_by_minibatches = jax.tree.map(lambda x: jnp.array(jnp.split(x, num_batches, axis=1)), storage)
@@ -145,14 +155,6 @@ def single_device_update(
         storage_by_minibatches,
     )
 
-    (loss, (pg_loss, v_loss, entropy_loss, _)) = jax.lax.pmean(
-        loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS
-    )
-    losses = LossesTuple(
-        loss=loss.mean(),
-        pg_loss=pg_loss.mean(),
-        v_loss=v_loss.mean(),
-        entropy_loss=entropy_loss.mean(),
-    )
-    assert losses.loss.shape == ()
-    return (agent_state, key, losses)
+    aux_dict = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
+    aux_dict = jax.tree.map(jnp.mean, aux_dict)
+    return (agent_state, key, aux_dict)

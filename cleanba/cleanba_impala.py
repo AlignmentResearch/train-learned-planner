@@ -35,6 +35,7 @@ from cleanba.impala_loss import (
     ImpalaLossConfig,
     Rollout,
     single_device_update,
+    tree_flatten_and_concat,
 )
 from cleanba.optimizer import rmsprop_pytorch_style
 
@@ -133,6 +134,8 @@ class Args:
     max_grad_norm: float = 40.0  # the maximum norm for the gradient clipping
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
+    rmsprop_eps: float = 0.01
+    rmsprop_decay: float = 0.99
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
@@ -292,18 +295,13 @@ def get_action(
     return action, logits, key
 
 
-def flatten_tree(x) -> jax.Array:
-    leaves, _ = jax.tree.flatten(x)
-    return jnp.concat(list(map(jnp.ravel, leaves)))
-
-
 @jax.jit
 def log_parameter_differences(params) -> dict[str, jax.Array]:
     max_params = jax.tree.map(lambda x: np.max(x, axis=0), params)
     min_params = jax.tree.map(lambda x: np.min(x, axis=0), params)
 
-    flat_max_params = flatten_tree(max_params)
-    flat_min_params = flatten_tree(min_params)
+    flat_max_params = tree_flatten_and_concat(max_params)
+    flat_min_params = tree_flatten_and_concat(min_params)
     abs_diff = jnp.abs(flat_max_params - flat_min_params)
     return dict(
         max_diff=jnp.max(abs_diff),
@@ -533,8 +531,12 @@ def rollout(
 
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step)
+            writer.add_scalar(
+                f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step
+            )
+            writer.add_scalar(
+                f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step
+            )
 
             writer.add_scalar(
                 f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
@@ -591,8 +593,8 @@ if __name__ == "__main__":
                     optax.clip_by_global_norm(args.max_grad_norm),
                     optax.inject_hyperparams(rmsprop_pytorch_style)(
                         learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        eps=0.01,
-                        decay=0.99,
+                        eps=args.rmsprop_eps,
+                        decay=args.rmsprop_decay,
                     ),
                 ),
                 every_k_schedule=args.gradient_accumulation_steps,
@@ -687,7 +689,7 @@ if __name__ == "__main__":
             (
                 agent_state,
                 learner_keys,
-                loss,
+                metrics_dict,
             ) = multi_device_update(
                 agent_state,
                 sharded_storages,
@@ -734,10 +736,13 @@ if __name__ == "__main__":
                     agent_state.opt_state[2][1].hyperparams["learning_rate"][-1].item(),
                     global_step,
                 )
-                writer.add_scalar("losses/value_loss", loss.v_loss[0].item(), global_step)
-                writer.add_scalar("losses/policy_loss", loss.pg_loss[0].item(), global_step)
-                writer.add_scalar("losses/entropy", loss.entropy_loss[0].item(), global_step)
-                writer.add_scalar("losses/loss", loss.loss[0].item(), global_step)
+                writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
+                writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
+                writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
+                writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
+
+                for name, value in metrics_dict.items():
+                    writer.add_scalar(name, value[0].item(), global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:
