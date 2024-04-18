@@ -216,13 +216,13 @@ class Actor(nn.Module):
 
 @dataclasses.dataclass(frozen=True)
 class SokobanResNetConfig(NetworkSpec):
-    channels: tuple[int, ...] = (64, 64, 64, 64, 64, 64, 64, 64, 64)
-    kernel_sizes: tuple[int, ...] = (4, 4, 4, 4, 4, 4, 4, 4, 4)
-    strides: tuple[int, ...] = (1, 1, 1, 1, 1, 1, 1, 1, 1)
+    channels: tuple[int, ...] = (64, 64)
+    kernel_sizes: tuple[int, ...] = (4, 4)
+    strides: tuple[int, ...] = (1, 1)
     multiplicity: int = 3
     norm: NormConfig = IdentityNorm()
 
-    mlp_hiddens: tuple[int, ...] = (256,)
+    mlp_hiddens: tuple[int, ...] = (256, 256)
 
     def make(self) -> nn.Module:
         return SokobanResNet(self)
@@ -243,8 +243,12 @@ class SokobanResNet(nn.Module):
         assert x.shape[-1] == 64 * 10 * 10
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
-            x = nn.Dense(hidden, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-            x = nn.relu(x)
+            x = nn.Dense(
+                hidden,
+                kernel_init=yang_initializer("hidden", "relu"),
+                bias_init=yang_initializer("hidden", "relu"),
+            )(x)
+            x = nn.tanh(x)
         return x
 
 
