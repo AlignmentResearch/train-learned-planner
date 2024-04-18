@@ -216,10 +216,10 @@ class Actor(nn.Module):
 
 @dataclasses.dataclass(frozen=True)
 class SokobanResNetConfig(NetworkSpec):
-    channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
-    kernel_sizes: tuple[int, ...] = (8, 4, 4, 4, 4, 4, 4, 4, 4)
+    channels: tuple[int, ...] = (64, 64, 64, 64, 64, 64, 64, 64, 64)
+    kernel_sizes: tuple[int, ...] = (4, 4, 4, 4, 4, 4, 4, 4, 4)
     strides: tuple[int, ...] = (1, 1, 1, 1, 1, 1, 1, 1, 1)
-    multiplicity: int = 2
+    multiplicity: int = 3
     norm: NormConfig = IdentityNorm()
 
     mlp_hiddens: tuple[int, ...] = (256,)
@@ -239,7 +239,6 @@ class SokobanResNet(nn.Module):
             x = SokobanConvSequence(
                 channels=chan, kernel_size=kern, strides=stride, multiplicity=self.cfg.multiplicity, is_input=layer_i == 0
             )(x, self.cfg.norm)
-        x = nn.relu(x)
         x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
         assert x.shape[-1] == 64 * 10 * 10
         for hidden in self.cfg.mlp_hiddens:
@@ -258,6 +257,7 @@ class SokobanResidualBlock(nn.Module):
     def __call__(self, x, norm):
         inputs = x
         for _ in range(self.multiplicity):
+            x = nn.relu(x)
             x = norm(x)
             x = nn.Conv(
                 self.channels,
@@ -265,7 +265,6 @@ class SokobanResidualBlock(nn.Module):
                 kernel_init=yang_initializer("hidden", "relu"),
                 bias_init=yang_initializer("hidden", "relu"),
             )(x)
-            x = nn.relu(x)
         return x + inputs
 
 
@@ -281,17 +280,15 @@ class SokobanConvSequence(nn.Module):
 
     @nn.compact
     def __call__(self, x, norm):
-        x = norm(x)
-        x = nn.Conv(
-            self.channels,
-            kernel_size=(self.kernel_size, self.kernel_size),
-            strides=(self.strides, self.strides),
-            kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
-            bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
-            name=INPUT_SENTINEL if self.is_input else None,
-        )(x)
-        x = nn.relu(x)
-        x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
+        if self.is_input:
+            x = nn.Conv(
+                self.channels,
+                kernel_size=(self.kernel_size, self.kernel_size),
+                strides=(self.strides, self.strides),
+                kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+                bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+                name=INPUT_SENTINEL if self.is_input else None,
+            )(x)
         x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
         return x
 
