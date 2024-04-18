@@ -18,8 +18,8 @@ def get_action_and_value(
     network_params: flax.core.FrozenDict,
     actor_params: flax.core.FrozenDict,
     obs: np.ndarray,
-    key: jax.random.PRNGKey,
-) -> tuple[jnp.ndarray, jax.random.PRNGKey]:
+    key: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
     hidden = network.apply(network_params, obs)
     logits = actor.apply(actor_params, hidden)
     assert len(logits.shape) == 2
@@ -83,12 +83,12 @@ class EvalConfig:
                 all_episode_lengths.append(episode_lengths)
 
             return dict(
-                episode_returns_mean=np.mean(all_episode_returns),
-                episode_returns_max=np.max(all_episode_returns),
-                episode_returns_min=np.min(all_episode_returns),
-                episode_lengths_mean=np.mean(all_episode_lengths),
-                episode_lengths_max=np.max(all_episode_lengths),
-                episode_lengths_min=np.min(all_episode_lengths),
+                episode_returns_mean=float(np.mean(all_episode_returns)),
+                episode_returns_max=float(np.max(all_episode_returns)),
+                episode_returns_min=float(np.min(all_episode_returns)),
+                episode_lengths_mean=float(np.mean(all_episode_lengths)),
+                episode_lengths_max=float(np.max(all_episode_lengths)),
+                episode_lengths_min=float(np.min(all_episode_lengths)),
             )
         finally:
             envs.close()

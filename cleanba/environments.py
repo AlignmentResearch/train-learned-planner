@@ -20,8 +20,9 @@ class EnvConfig(abc.ABC):
     num_envs: int
     seed: int = dataclasses.field(default_factory=random_seed)
 
+    @property
     @abc.abstractmethod
-    def make(self) -> gym.vector.VectorEnv:
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
         ...
 
 
@@ -32,7 +33,8 @@ class EnvpoolEnvConfig(EnvConfig):
 
 
 class EnvpoolVectorEnv(gym.vector.VectorEnv):
-    def __init__(self, num_envs: int, envs):
+    def __init__(self, num_envs: int, envs_fn: Callable[[], Any]):
+        envs = envs_fn()
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
@@ -96,7 +98,8 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
             raise ValueError(f"{levels_dir=} does not exist or some of its files don't end in .txt: {not_end_txt}")
         return str(levels_dir)
 
-    def make(self) -> gym.vector.VectorEnv:
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
         # Import envpool only when needed so we can run on Mac OS
         import envpool
 
@@ -108,9 +111,12 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
         SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
         env_kwargs = {k: getattr(self, k) for k in dummy_spec._config_keys if not (k in special_kwargs or k in SPECIAL_KEYS)}
 
-        envs = envpool.make_gymnasium("Sokoban-v0", **special_kwargs, **env_kwargs)
-        vec_envs = EnvpoolVectorEnv(self.num_envs, envs)
-        return vec_envs
+        vec_envs_fn = partial(
+            EnvpoolVectorEnv,
+            self.num_envs,
+            partial(envpool.make_gymnasium, "Sokoban-v0", **special_kwargs, **env_kwargs),
+        )
+        return vec_envs_fn
 
 
 @dataclasses.dataclass
@@ -148,11 +154,6 @@ class BaseSokobanEnvConfig(EnvConfig):
             penalty_for_step=self.reward_step,
         )
 
-    @property
-    @abc.abstractmethod
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        ...
-
 
 class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
     def __init__(self, env: gym.vector.VectorEnv):
@@ -168,13 +169,13 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
 
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
 
-    def reset_wait(self, **kwargs):
+    def reset_wait(self, **kwargs) -> tuple[Any, dict]:
         obs, info = super().reset_wait(**kwargs)
         return np.moveaxis(obs, 3, 1), info
 
-    def step_wait(self):
-        obs, *others = super().step_wait()
-        return (np.moveaxis(obs, 3, 1), *others)
+    def step_wait(self) -> tuple[Any, NDArray, NDArray, NDArray, dict]:
+        obs, reward, terminated, truncated, info = super().step_wait()
+        return np.moveaxis(obs, 3, 1), reward, terminated, truncated, info
 
     @classmethod
     def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv]) -> gym.vector.VectorEnv:
@@ -190,7 +191,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
     num_gen_steps: int | None = None
 
     @property
-    def make(self) -> Callable[[], gym.Env]:
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
         kwargs = self.env_kwargs()
         for k in ["dim_room", "num_boxes", "num_gen_steps"]:
             if (a := getattr(self, k)) is not None:
@@ -218,7 +219,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
     @property
-    def make(self) -> Callable[[], gym.Env]:
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
         if self.difficulty == "hard":
             if self.split is not None:
                 raise ValueError("`hard` levels have no splits")
