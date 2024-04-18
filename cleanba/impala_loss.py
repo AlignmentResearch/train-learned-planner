@@ -2,7 +2,6 @@ import dataclasses
 from functools import partial
 from typing import Any, Callable, List, NamedTuple
 
-import flax.traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -15,12 +14,12 @@ from numpy.typing import NDArray
 class ImpalaLossConfig:
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
-    vf_coef: float = 0.5  # coefficient of the value function
+    vf_coef: float = 0.25  # coefficient of the value function
 
     # Interpolate between VTrace (1.0) and monte-carlo function (0.0) estimates, for the estimate of targets, used in
     # both the value and policy losses. It's the parameter in Remark 2 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf)
-    vtrace_lambda: float = 0.95
+    vtrace_lambda: float = 1.0
 
     # Maximum importance ratio for the VTrace value estimates. This is \overline{rho} in eq. 1 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf). \overline{c} is hardcoded to 1 in rlax.
@@ -127,8 +126,17 @@ def impala_loss(
     total_loss += args.ent_coef * ent_loss
 
     # Useful metrics to know
-    max_ratio = jnp.max(jnp.abs(rhos_tm1))
-    metrics_dict = dict(pg_loss=pg_loss, v_loss=v_loss, ent_loss=ent_loss, max_ratio=max_ratio)
+    targets_tm1 = vtrace_returns.errors + v_tm1
+    metrics_dict = dict(
+        pg_loss=pg_loss,
+        v_loss=v_loss,
+        ent_loss=ent_loss,
+        max_ratio=jnp.max(rhos_tm1),
+        min_ratio=jnp.min(rhos_tm1),
+        avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
+        var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
+        proportion_of_boxes=np.mean(minibatch.r_t > 0),
+    )
     return total_loss, metrics_dict
 
 
@@ -144,12 +152,11 @@ def tree_flatten_and_concat(x) -> jax.Array:
 def single_device_update(
     agent_state: TrainState,
     sharded_storages: List[Rollout],
-    key: jax.Array,
     *,
     get_logits_and_value: Callable,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
-) -> tuple[TrainState, jax.Array, dict[str, jax.Array]]:
+) -> tuple[TrainState, dict[str, jax.Array]]:
     def update_minibatch(agent_state: TrainState, minibatch: Rollout):
         (loss, metrics_dict), grads = jax.value_and_grad(impala_loss, has_aux=True)(
             agent_state.params,
@@ -182,4 +189,4 @@ def single_device_update(
 
     aux_dict = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
     aux_dict = jax.tree.map(jnp.mean, aux_dict)
-    return (agent_state, key, aux_dict)
+    return (agent_state, aux_dict)
