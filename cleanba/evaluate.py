@@ -1,5 +1,4 @@
 import dataclasses
-import random
 from functools import partial
 
 import flax
@@ -7,7 +6,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.config import random_seed
 from cleanba.environments import EnvConfig
 
 
