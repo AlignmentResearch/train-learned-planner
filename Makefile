@@ -99,7 +99,8 @@ envpool-docker: envpool-docker/envpool-ci
 
 # Section 3: project commands
 
-.PHONY: lint format typecheck
+.PHONY: lint format typecheck mactest
+
 lint:
 	ruff --fix .
 
@@ -108,3 +109,7 @@ format:
 
 typecheck:
 	pyright .
+
+
+mactest:
+	pytest -k 'not test_environment_basics[cfg2]'
