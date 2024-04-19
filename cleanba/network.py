@@ -347,6 +347,9 @@ def _fan_in_for_params(params: dict[str, dict[str, Any] | jax.Array]) -> dict[st
             elif k == "kernel":
                 fan_in = int(np.prod(v.shape[:-1]))
                 out[k] = f"fan_in_{fan_in}"
+            elif k == "scale":
+                # Layernorm / RMSNorm scales are treated like inputs
+                out[k] = "input"
             else:
                 raise ValueError(f"Unknown parameter name {k=}")
         else:

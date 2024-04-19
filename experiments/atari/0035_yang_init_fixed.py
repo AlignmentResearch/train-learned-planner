@@ -42,7 +42,7 @@ for norm in [IdentityNorm(), RMSNorm()]:
                         [["python", "-m", "cleanba.cleanba_impala", *cli]],
                         CONTAINER_TAG="6caee83-atari",
                         CPU=8,
-                        MEMORY="50G",
+                        MEMORY="7G",
                         GPU=1,
                         PRIORITY="low-batch",
                     )
