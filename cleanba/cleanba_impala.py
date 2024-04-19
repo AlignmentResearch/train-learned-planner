@@ -311,7 +311,7 @@ def rollout(
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
                         # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                        params.network_params["params"]["Dense_0"][
+                        params.actor_params["params"]["Output"][
                             "kernel"
                         ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
                         actor_policy_version += 1

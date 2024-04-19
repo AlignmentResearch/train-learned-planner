@@ -24,7 +24,7 @@ class AgentParams:
         return item in (f.name for f in dataclasses.fields(self))
 
     def _n_actions(self) -> int:
-        return self.actor_params["params"]["Dense_0"]["kernel"].shape[-1]  # type: ignore
+        return self.actor_params["params"]["Output"]["kernel"].shape[-1]  # type: ignore
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,6 +125,7 @@ NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
     relu=np.sqrt(2.0),
     identity=1.0,
     action_softmax=0.02,  # We want the actions to be pretty random at the start, so use a small scale
+    tanh=5 / 3,
 )
 
 
@@ -208,7 +209,7 @@ class Actor(nn.Module):
     def __call__(self, x):
         init = yang_initializer("output", "action_softmax")
         # Bias here is useless, because softmax is invariant to baseline.
-        return nn.Dense(self.action_dim, kernel_init=init, use_bias=False)(x)
+        return nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
 
 
 # %%
@@ -216,13 +217,13 @@ class Actor(nn.Module):
 
 @dataclasses.dataclass(frozen=True)
 class SokobanResNetConfig(NetworkSpec):
-    channels: tuple[int, ...] = (64, 64)
-    kernel_sizes: tuple[int, ...] = (4, 4)
-    strides: tuple[int, ...] = (1, 1)
-    multiplicity: int = 3
+    channels: tuple[int, ...] = (64, 64, 64) * 3
+    kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
+    strides: tuple[int, ...] = (1, 1, 1) * 3
+    multiplicity: int = 1
     norm: NormConfig = IdentityNorm()
 
-    mlp_hiddens: tuple[int, ...] = (256, 256)
+    mlp_hiddens: tuple[int, ...] = ()
 
     def make(self) -> nn.Module:
         return SokobanResNet(self)
@@ -245,8 +246,8 @@ class SokobanResNet(nn.Module):
             x = self.cfg.norm(x)
             x = nn.Dense(
                 hidden,
-                kernel_init=yang_initializer("hidden", "relu"),
-                bias_init=yang_initializer("hidden", "relu"),
+                kernel_init=yang_initializer("hidden", "tanh"),
+                bias_init=yang_initializer("hidden", "tanh"),
             )(x)
             x = nn.tanh(x)
         return x
