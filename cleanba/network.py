@@ -29,6 +29,8 @@ class AgentParams:
 
 @dataclasses.dataclass(frozen=True)
 class NetworkSpec(abc.ABC):
+    yang_init: bool = False
+
     @abc.abstractmethod
     def make(self) -> nn.Module:
         ...
@@ -44,8 +46,8 @@ class NetworkSpec(abc.ABC):
         net_params = net_obj.init(net_key, example_obs)
         net_out_shape = jax.eval_shape(net_obj.apply, net_params, example_obs)
 
-        actor_params = Actor(n_actions).init(actor_key, jnp.zeros(net_out_shape.shape))
-        critic_params = Critic().init(critic_key, jnp.zeros(net_out_shape.shape))
+        actor_params = Actor(n_actions, yang_init=self.yang_init).init(actor_key, jnp.zeros(net_out_shape.shape))
+        critic_params = Critic(yang_init=self.yang_init).init(critic_key, jnp.zeros(net_out_shape.shape))
         out = AgentParams(net_params, actor_params, critic_params)  # type: ignore
 
         assert out._n_actions() == n_actions
@@ -62,7 +64,7 @@ class NetworkSpec(abc.ABC):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         hidden = self.make().apply(params.network_params, next_obs)
 
-        logits = Actor(params._n_actions()).apply(params.actor_params, hidden)
+        logits = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
         assert isinstance(logits, jax.Array)
 
         if temperature == 0.0:
@@ -82,8 +84,8 @@ class NetworkSpec(abc.ABC):
         x: jax.Array,
     ) -> tuple[jax.Array, jax.Array]:
         hidden = self.make().apply(params.network_params, x)
-        logits = Actor(params._n_actions()).apply(params.actor_params, hidden)
-        value = Critic().apply(params.critic_params, hidden)
+        logits = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
+        value = Critic(yang_init=self.yang_init).apply(params.critic_params, hidden)
 
         assert isinstance(logits, jax.Array)
         assert isinstance(value, jax.Array)
@@ -150,30 +152,48 @@ def yang_initializer(layer_type: Literal["input", "hidden", "output"], nonlinear
 
 class ResidualBlock(nn.Module):
     channels: int
+    yang_init: bool
 
     @nn.compact
     def __call__(self, x, norm):
+        if self.yang_init:
+            bias_init = kernel_init = yang_initializer("input", "relu")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+            bias_init = nn.initializers.zeros_init()
+
         inputs = x
         x = nn.relu(x)
         x = norm(x)
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
+        x = nn.Conv(self.channels, kernel_size=(3, 3), kernel_init=kernel_init, bias_init=bias_init)(x)
         x = nn.relu(x)
         x = norm(x)
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
+        x = nn.Conv(self.channels, kernel_size=(3, 3), kernel_init=kernel_init, bias_init=bias_init)(x)
         return x + inputs
 
 
 class ConvSequence(nn.Module):
     channels: int
     max_pool: bool = True
+    is_input: bool = False
+    yang_init: bool = False
 
     @nn.compact
     def __call__(self, x, norm):
         x = norm(x)
-        x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
+        if self.yang_init:
+            x = nn.Conv(
+                self.channels,
+                kernel_size=(3, 3),
+                kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+                bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
+                name=INPUT_SENTINEL,
+            )(x)
+        else:
+            x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
         x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
-        x = ResidualBlock(self.channels)(x, norm=norm)
-        x = ResidualBlock(self.channels)(x, norm=norm)
+        x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
+        x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
         return x
 
 
@@ -184,30 +204,43 @@ class AtariCNN(nn.Module):
     def __call__(self, x):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
-        for channels in self.cfg.channels:
-            x = ConvSequence(channels)(x, norm=self.cfg.norm)
+        for layer_i, channels in enumerate(self.cfg.channels):
+            x = ConvSequence(channels, yang_init=self.cfg.yang_init, is_input=(layer_i == 0))(x, norm=self.cfg.norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
-            x = nn.Dense(hidden, kernel_init=yang_initializer("hidden", "relu"), bias_init=constant(0.0))(x)
+            if self.cfg.yang_init:
+                x = nn.Dense(hidden, kernel_init=yang_initializer("hidden", "relu"), bias_init=constant(0.0))(x)
+            else:
+                x = nn.Dense(hidden)(x)
             x = nn.relu(x)
         return x
 
 
 class Critic(nn.Module):
+    yang_init: bool
+
     @nn.compact
     def __call__(self, x):
-        init = yang_initializer("output", "identity")
-        return nn.Dense(1, kernel_init=init, bias_init=init)(x)
+        if self.yang_init:
+            bias_init = kernel_init = yang_initializer("output", "identity")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+            bias_init = nn.initializers.zeros_init()
+        return nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
 
 
 class Actor(nn.Module):
     action_dim: int
+    yang_init: bool
 
     @nn.compact
     def __call__(self, x):
-        init = yang_initializer("output", "action_softmax")
+        if self.yang_init:
+            init = yang_initializer("output", "action_softmax")
+        else:
+            init = nn.initializers.lecun_normal()
         # Bias here is useless, because softmax is invariant to baseline.
         return nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
 
