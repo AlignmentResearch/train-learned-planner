@@ -476,7 +476,7 @@ def train(args: Args):
                 else (
                     optax.inject_hyperparams(optax.adam)(
                         learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        b1=0.9,
+                        b1=args.adam_b1,
                         b2=args.rmsprop_decay,
                         eps=args.rmsprop_eps,
                         eps_root=0.0,

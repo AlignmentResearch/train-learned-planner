@@ -47,6 +47,7 @@ class Args:
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     max_grad_norm: float = 0.0625  # the maximum norm for the gradient clipping
     optimizer: str = "rmsprop"
+    adam_b1: float = 0.9
     rmsprop_eps: float = 1.5625e-05
     rmsprop_decay: float = 0.99
     optimizer_yang: bool = False
