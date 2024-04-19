@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from experiments.launcher import FlamingoRun, launch_jobs
+from cleanba.launcher import FlamingoRun, launch_jobs
 
 runs: list[FlamingoRun] = [
     FlamingoRun(
@@ -19,7 +19,6 @@ runs: list[FlamingoRun] = [
                 "sync_frequency=1000000000",
                 "loss.vf_coef=0.25",
                 "loss.vtrace_lambda=1.0",
-                "loss.global_coef=1.0",
                 "max_grad_norm=0.0625",
                 "rmsprop_decay=0.99",
                 "rmsprop_eps=1.5625e-05",
