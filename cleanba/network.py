@@ -237,10 +237,10 @@ class Critic(nn.Module):
     @nn.compact
     def __call__(self, x):
         if self.yang_init:
-            bias_init = kernel_init = yang_initializer("output", "identity")
+            kernel_init = yang_initializer("output", "identity")
         else:
             kernel_init = nn.initializers.lecun_normal()
-            bias_init = nn.initializers.zeros_init()
+        bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
         x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, name="Output")(x)
         bias = self.variables["params"]["Output"]["bias"]
