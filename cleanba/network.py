@@ -242,8 +242,9 @@ class Critic(nn.Module):
             kernel_init = nn.initializers.lecun_normal()
             bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
-        return x, {"critic_ms": jnp.mean(jnp.square(x))}
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, name="Output")(x)
+        bias = self.variables["params"]["Output"]["bias"]
+        return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
 
 class Actor(nn.Module):
@@ -260,7 +261,7 @@ class Actor(nn.Module):
         # Bias here is useless, because softmax is invariant to baseline.
         x = self.norm(x)
         x = nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
-        return x, {"actor_ms": jnp.mean(jnp.square(x))}
+        return x, {"actor_ma": jnp.mean(jnp.abs(x))}
 
 
 # %%
