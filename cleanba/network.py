@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant
-from flax.typing import Shape
+from flax.typing import Axes, Shape
 
 
 @flax.struct.dataclass
@@ -100,11 +100,15 @@ class NormConfig(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class RMSNorm(NormConfig):
-    eps: float = 1e-8
+    eps: float = 1e-6
+    use_scale: bool = True
+    reduction_axes: Axes = -1
+    feature_axes: Axes = -1
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        norm = jnp.square(x).mean(axis=-1, keepdims=True)
-        return x * jax.lax.rsqrt(norm + self.eps)
+        return nn.RMSNorm(
+            epsilon=self.eps, use_scale=self.use_scale, reduction_axes=self.reduction_axes, feature_axes=self.feature_axes
+        )(x)
 
 
 @dataclasses.dataclass(frozen=True)
