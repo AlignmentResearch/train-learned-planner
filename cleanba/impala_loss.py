@@ -41,7 +41,7 @@ class Rollout(NamedTuple):
 
 def impala_loss(
     params,
-    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array]],
+    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array, dict[str, jax.Array]]],
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
@@ -69,7 +69,9 @@ def impala_loss(
     # done_t = truncated_t | terminated_t
     discount_t = (~minibatch.done_t) * args.gamma
 
-    nn_logits_from_obs, nn_value_from_obs = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
+    nn_logits_from_obs, nn_value_from_obs, nn_metrics = jax.vmap(get_logits_and_value, in_axes=(None, 0))(
+        params, minibatch.obs_t
+    )
 
     # There's one extra timestep at the end for `obs_t` than logits and the rest of objects in `minibatch`, so we need
     # to cut these values to size.
@@ -135,7 +137,8 @@ def impala_loss(
         min_ratio=jnp.min(rhos_tm1),
         avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
         var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
-        proportion_of_boxes=np.mean(minibatch.r_t > 0),
+        proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
+        **nn_metrics,
     )
     return total_loss, metrics_dict
 
@@ -153,7 +156,7 @@ def single_device_update(
     agent_state: TrainState,
     sharded_storages: List[Rollout],
     *,
-    get_logits_and_value: Callable,
+    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array, dict[str, jax.Array]]],
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
 ) -> tuple[TrainState, dict[str, jax.Array]]:

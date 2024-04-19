@@ -64,7 +64,7 @@ class NetworkSpec(abc.ABC):
     ) -> tuple[jax.Array, jax.Array, jax.Array]:
         hidden = self.make().apply(params.network_params, next_obs)
 
-        logits = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
+        logits, _ = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
         assert isinstance(logits, jax.Array)
 
         if temperature == 0.0:
@@ -82,14 +82,14 @@ class NetworkSpec(abc.ABC):
         self,
         params: AgentParams,
         x: jax.Array,
-    ) -> tuple[jax.Array, jax.Array]:
+    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
         hidden = self.make().apply(params.network_params, x)
-        logits = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
-        value = Critic(yang_init=self.yang_init).apply(params.critic_params, hidden)
+        logits, logits_metrics = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
+        value, value_metrics = Critic(yang_init=self.yang_init).apply(params.critic_params, hidden)
 
         assert isinstance(logits, jax.Array)
         assert isinstance(value, jax.Array)
-        return logits, value.squeeze(-1)
+        return logits, value.squeeze(-1), {**logits_metrics, **value_metrics}
 
 
 class NormConfig(abc.ABC):
@@ -236,7 +236,8 @@ class Critic(nn.Module):
         else:
             kernel_init = nn.initializers.lecun_normal()
             bias_init = nn.initializers.zeros_init()
-        return nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
+        out = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
+        return out, {"critic_ms": jnp.mean(jnp.square(out))}
 
 
 class Actor(nn.Module):
@@ -250,7 +251,8 @@ class Actor(nn.Module):
         else:
             init = nn.initializers.lecun_normal()
         # Bias here is useless, because softmax is invariant to baseline.
-        return nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
+        out = nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
+        return out, {"actor_ms": jnp.mean(jnp.square(out))}
 
 
 # %%
