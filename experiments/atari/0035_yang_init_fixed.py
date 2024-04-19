@@ -39,7 +39,7 @@ for optimizer in ["rmsprop", "adam"]:
             runs.append(
                 FlamingoRun(
                     [["python", "-m", "cleanba.cleanba_impala", *cli]],
-                    CONTAINER_TAG="e5a58c4-main",
+                    CONTAINER_TAG="6caee83-atari",
                     CPU=8,
                     MEMORY="50G",
                     GPU=1,
