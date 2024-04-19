@@ -457,35 +457,39 @@ def train(args: Args):
 
         learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params)
 
+        if args.optimizer_yang:
+            transform_chain = [
+                optax.multi_transform(
+                    transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
+                ),
+            ]
+        else:
+            transform_chain = []
+        transform_chain += [
+            optax.clip_by_global_norm(args.max_grad_norm),
+            (
+                optax.inject_hyperparams(rmsprop_pytorch_style)(
+                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                    eps=args.rmsprop_eps,
+                    decay=args.rmsprop_decay,
+                )
+                if args.optimizer == "rmsprop"
+                else (
+                    optax.inject_hyperparams(optax.adam)(
+                        learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                        b1=0.9,
+                        b2=args.rmsprop_decay,
+                        eps=args.rmsprop_eps,
+                        eps_root=0.0,
+                    )
+                )
+            ),
+        ]
+
         agent_state = TrainState.create(
             apply_fn=None,
             params=agent_params,
-            tx=optax.MultiSteps(
-                optax.chain(
-                    optax.multi_transform(
-                        transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
-                    ),
-                    optax.clip_by_global_norm(args.max_grad_norm),
-                    (
-                        optax.inject_hyperparams(rmsprop_pytorch_style)(
-                            learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                            eps=args.rmsprop_eps,
-                            decay=args.rmsprop_decay,
-                        )
-                        if args.optimizer == "rmsprop"
-                        else (
-                            optax.inject_hyperparams(optax.adam)(
-                                learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                                b1=0.9,
-                                b2=args.rmsprop_decay,
-                                eps=args.rmsprop_eps,
-                                eps_root=0.0,
-                            )
-                        )
-                    ),
-                ),
-                every_k_schedule=args.gradient_accumulation_steps,
-            ),
+            tx=optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps),
         )
 
         multi_device_update = jax.pmap(

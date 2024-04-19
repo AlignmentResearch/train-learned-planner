@@ -50,6 +50,7 @@ class Args:
     optimizer: str = "rmsprop"
     rmsprop_eps: float = 1.5625e-05
     rmsprop_decay: float = 0.99
+    optimizer_yang: bool = False
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 
