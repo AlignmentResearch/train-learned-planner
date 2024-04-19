@@ -120,6 +120,7 @@ class IdentityNorm(NormConfig):
 @dataclasses.dataclass(frozen=True)
 class AtariCNNSpec(NetworkSpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
+    strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
     norm: NormConfig = RMSNorm()
 
@@ -181,6 +182,7 @@ class ConvSequence(nn.Module):
     max_pool: bool = True
     is_input: bool = False
     yang_init: bool = False
+    strides: int = 2
 
     @nn.compact
     def __call__(self, x, norm):
@@ -195,7 +197,7 @@ class ConvSequence(nn.Module):
             )(x)
         else:
             x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2), padding="SAME")
+        x = nn.max_pool(x, window_shape=(3, 3), strides=(self.strides, self.strides), padding="SAME")
         x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
         x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
         return x
@@ -208,8 +210,10 @@ class AtariCNN(nn.Module):
     def __call__(self, x):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
-        for layer_i, channels in enumerate(self.cfg.channels):
-            x = ConvSequence(channels, yang_init=self.cfg.yang_init, is_input=(layer_i == 0))(x, norm=self.cfg.norm)
+        for layer_i, (channels, strides) in enumerate(zip(self.cfg.channels, self.cfg.strides)):
+            x = ConvSequence(channels, yang_init=self.cfg.yang_init, is_input=(layer_i == 0), strides=strides)(
+                x, norm=self.cfg.norm
+            )
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
