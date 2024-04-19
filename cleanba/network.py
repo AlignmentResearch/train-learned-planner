@@ -27,71 +27,6 @@ class AgentParams:
         return self.actor_params["params"]["Output"]["kernel"].shape[-1]  # type: ignore
 
 
-@dataclasses.dataclass(frozen=True)
-class NetworkSpec(abc.ABC):
-    yang_init: bool = False
-
-    @abc.abstractmethod
-    def make(self) -> nn.Module:
-        ...
-
-    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
-        action_space = envs.single_action_space
-        assert isinstance(action_space, gym.spaces.Discrete)
-        n_actions = int(action_space.n)
-
-        net_key, actor_key, critic_key = jax.random.split(key, 3)
-
-        net_obj = self.make()
-        net_params = net_obj.init(net_key, example_obs)
-        net_out_shape = jax.eval_shape(net_obj.apply, net_params, example_obs)
-
-        actor_params = Actor(n_actions, yang_init=self.yang_init).init(actor_key, jnp.zeros(net_out_shape.shape))
-        critic_params = Critic(yang_init=self.yang_init).init(critic_key, jnp.zeros(net_out_shape.shape))
-        out = AgentParams(net_params, actor_params, critic_params)  # type: ignore
-
-        assert out._n_actions() == n_actions
-        return out
-
-    @partial(jax.jit, static_argnames=["self", "temperature"])
-    def get_action(
-        self,
-        params: AgentParams,
-        next_obs: jax.Array,
-        key: jax.Array,
-        *,
-        temperature: float = 1.0,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        hidden = self.make().apply(params.network_params, next_obs)
-
-        logits, _ = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
-        assert isinstance(logits, jax.Array)
-
-        if temperature == 0.0:
-            action = jnp.argmax(logits, axis=1)
-        else:
-            # sample action: Gumbel-softmax trick
-            # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
-            key, subkey = jax.random.split(key)
-            u = jax.random.uniform(subkey, shape=logits.shape)
-            action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return action, logits, key
-
-    @partial(jax.jit, static_argnames=["self"])
-    def get_logits_and_value(
-        self,
-        params: AgentParams,
-        x: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
-        hidden = self.make().apply(params.network_params, x)
-        logits, logits_metrics = Actor(params._n_actions(), yang_init=self.yang_init).apply(params.actor_params, hidden)
-        value, value_metrics = Critic(yang_init=self.yang_init).apply(params.critic_params, hidden)
-
-        assert isinstance(logits, jax.Array)
-        assert isinstance(value, jax.Array)
-        return logits, value.squeeze(-1), {**logits_metrics, **value_metrics}
-
-
 class NormConfig(abc.ABC):
     @abc.abstractmethod
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -118,11 +53,80 @@ class IdentityNorm(NormConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class NetworkSpec(abc.ABC):
+    yang_init: bool = False
+    norm: NormConfig = IdentityNorm()
+
+    @abc.abstractmethod
+    def make(self) -> nn.Module:
+        ...
+
+    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
+        action_space = envs.single_action_space
+        assert isinstance(action_space, gym.spaces.Discrete)
+        n_actions = int(action_space.n)
+
+        net_key, actor_key, critic_key = jax.random.split(key, 3)
+
+        net_obj = self.make()
+        net_params = net_obj.init(net_key, example_obs)
+        net_out_shape = jax.eval_shape(net_obj.apply, net_params, example_obs)
+
+        actor_params = Actor(n_actions, yang_init=self.yang_init, norm=self.norm).init(
+            actor_key, jnp.zeros(net_out_shape.shape)
+        )
+        critic_params = Critic(yang_init=self.yang_init, norm=self.norm).init(critic_key, jnp.zeros(net_out_shape.shape))
+        out = AgentParams(net_params, actor_params, critic_params)  # type: ignore
+
+        assert out._n_actions() == n_actions
+        return out
+
+    @partial(jax.jit, static_argnames=["self", "temperature"])
+    def get_action(
+        self,
+        params: AgentParams,
+        next_obs: jax.Array,
+        key: jax.Array,
+        *,
+        temperature: float = 1.0,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
+        hidden = self.make().apply(params.network_params, next_obs)
+
+        logits, _ = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(params.actor_params, hidden)
+        assert isinstance(logits, jax.Array)
+
+        if temperature == 0.0:
+            action = jnp.argmax(logits, axis=1)
+        else:
+            # sample action: Gumbel-softmax trick
+            # see https://stats.stackexchange.com/questions/359442/sampling-from-a-categorical-distribution
+            key, subkey = jax.random.split(key)
+            u = jax.random.uniform(subkey, shape=logits.shape)
+            action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
+        return action, logits, key
+
+    @partial(jax.jit, static_argnames=["self"])
+    def get_logits_and_value(
+        self,
+        params: AgentParams,
+        x: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
+        hidden = self.make().apply(params.network_params, x)
+        logits, logits_metrics = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(
+            params.actor_params, hidden
+        )
+        value, value_metrics = Critic(yang_init=self.yang_init, norm=self.norm).apply(params.critic_params, hidden)
+
+        assert isinstance(logits, jax.Array)
+        assert isinstance(value, jax.Array)
+        return logits, value.squeeze(-1), {**logits_metrics, **value_metrics}
+
+
+@dataclasses.dataclass(frozen=True)
 class AtariCNNSpec(NetworkSpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
-    norm: NormConfig = RMSNorm()
 
     def make(self) -> "AtariCNN":
         return AtariCNN(self)
@@ -228,6 +232,7 @@ class AtariCNN(nn.Module):
 
 class Critic(nn.Module):
     yang_init: bool
+    norm: NormConfig
 
     @nn.compact
     def __call__(self, x):
@@ -236,13 +241,15 @@ class Critic(nn.Module):
         else:
             kernel_init = nn.initializers.lecun_normal()
             bias_init = nn.initializers.zeros_init()
-        out = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
-        return out, {"critic_ms": jnp.mean(jnp.square(out))}
+        x = self.norm(x)
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init)(x)
+        return x, {"critic_ms": jnp.mean(jnp.square(x))}
 
 
 class Actor(nn.Module):
     action_dim: int
     yang_init: bool
+    norm: NormConfig
 
     @nn.compact
     def __call__(self, x):
@@ -251,8 +258,9 @@ class Actor(nn.Module):
         else:
             init = nn.initializers.lecun_normal()
         # Bias here is useless, because softmax is invariant to baseline.
-        out = nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
-        return out, {"actor_ms": jnp.mean(jnp.square(out))}
+        x = self.norm(x)
+        x = nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
+        return x, {"actor_ms": jnp.mean(jnp.square(x))}
 
 
 # %%
@@ -264,7 +272,6 @@ class SokobanResNetConfig(NetworkSpec):
     kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
     strides: tuple[int, ...] = (1, 1, 1) * 3
     multiplicity: int = 1
-    norm: NormConfig = IdentityNorm()
 
     mlp_hiddens: tuple[int, ...] = ()
 
