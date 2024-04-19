@@ -371,7 +371,16 @@ def _fan_in_for_params(params: dict[str, dict[str, Any] | jax.Array]) -> dict[st
     return out
 
 
-def label_and_learning_rate_for_params(params: AgentParams) -> tuple[dict[str, float], AgentParams]:
+def label_and_learning_rate_for_params(
+    params: AgentParams, base_fan_in: int = 32 * 3 * 3
+) -> tuple[dict[str, float], AgentParams]:
+    """
+    Scale learning rate following the maximal-update parameterization learning rate tuning (table 3,
+    https://arxiv.org/pdf/2203.03466.pdf#page=5).
+
+    Instead of just using 1/fan_in we scale the scaled parameter by some 'base' fan-in, which is the one it would have
+    when the neural network is at its 'base' width.
+    """
     param_labels: AgentParams = jax.tree.map(_fan_in_for_params, params, is_leaf=lambda v: isinstance(v, dict))
     key_set: set[str] = set(jax.tree.leaves(param_labels))
 
@@ -386,6 +395,6 @@ def label_and_learning_rate_for_params(params: AgentParams) -> tuple[dict[str, f
 
     for k in possible_keys:
         fan_in = int(k.removeprefix("fan_in_"))
-        learning_rates[k] = 1 / fan_in
+        learning_rates[k] = base_fan_in / fan_in
 
     return learning_rates, param_labels

@@ -456,7 +456,7 @@ def train(args: Args):
         agent_params = args.net.init_params(envs, agent_params_subkey, np.array([envs.single_observation_space.sample()]))
 
         if args.optimizer_yang:
-            learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params)
+            learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)
             transform_chain = [
                 optax.multi_transform(
                     transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
