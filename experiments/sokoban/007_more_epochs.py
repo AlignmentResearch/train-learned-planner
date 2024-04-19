@@ -1,14 +1,13 @@
 import dataclasses
 import random
 from pathlib import Path
-from typing import Any
 
 from farconf import update_fns_to_cli
 
 from cleanba.config import Args, sokoban_resnet
-from cleanba.environments import SokobanConfig, random_seed
+from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
-from cleanba.network import IdentityNorm, RMSNorm
+from cleanba.network import RMSNorm
 
 runs: list[FlamingoRun] = []
 

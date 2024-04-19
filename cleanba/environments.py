@@ -5,7 +5,7 @@ import random
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, ClassVar, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import gym_sokoban  # noqa: F401
 import gymnasium as gym

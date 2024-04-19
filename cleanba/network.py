@@ -1,7 +1,7 @@
 import abc
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Literal, SupportsFloat
+from typing import Any, Literal, SupportsFloat
 
 import flax
 import flax.linen as nn
@@ -10,7 +10,7 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.linen.initializers import constant, kaiming_normal, orthogonal, variance_scaling
+from flax.linen.initializers import constant
 from flax.typing import Shape
 
 

@@ -2,24 +2,13 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
-import optax
 import rlax
-from chex import Numeric
-from flax.training.train_state import TrainState
 
 from cleanba.config import sokoban_resnet
-from cleanba.environments import EnvpoolBoxobanConfig, SokobanConfig
 from cleanba.impala_loss import (
-    SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
-    ImpalaLossConfig,
     Rollout,
-    impala_loss,
-    single_device_update,
-    tree_flatten_and_concat,
 )
-from cleanba.network import AgentParams, IdentityNorm, RMSNorm, SokobanResNetConfig, label_and_learning_rate_for_params
 
 
 def unreplicate(tree):
@@ -33,7 +22,7 @@ args = sokoban_resnet()
 envs = dataclasses.replace(args.train_env, num_envs=64).make()
 
 obs_t, _ = envs.reset()
-params = jax.jit(args.net.init_params, static_argnums=(0,))(envs, jax.random.PRNGKey(1234), obs)
+params = jax.jit(args.net.init_params, static_argnums=(0,))(envs, jax.random.PRNGKey(1234), obs_t)
 
 # %%
 key = jax.random.PRNGKey(1234)

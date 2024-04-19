@@ -6,7 +6,7 @@ from farconf import update_fns_to_cli
 from cleanba.config import Args, sokoban_resnet
 from cleanba.environments import SokobanConfig
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
-from cleanba.network import IdentityNorm, RMSNorm
+from cleanba.network import IdentityNorm
 
 runs: list[FlamingoRun] = []
 

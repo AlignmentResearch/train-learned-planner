@@ -1,7 +1,4 @@
 import collections
-import dataclasses
-import os
-from functools import partial
 from pathlib import Path
 
 import flax
@@ -10,22 +7,17 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-import rlax
 import torch.utils.data
 from chex import Numeric
 from flax.training.train_state import TrainState
 
-from cleanba.config import sokoban_resnet
 from cleanba.environments import SokobanConfig
 from cleanba.impala_loss import (
-    SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
     ImpalaLossConfig,
     Rollout,
     impala_loss,
-    single_device_update,
-    tree_flatten_and_concat,
 )
-from cleanba.network import AgentParams, IdentityNorm, RMSNorm, SokobanResNetConfig, label_and_learning_rate_for_params
+from cleanba.network import IdentityNorm, SokobanResNetConfig, label_and_learning_rate_for_params
 
 
 def unreplicate(tree):
@@ -140,17 +132,17 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
     def loss_fn(params, get_logits_and_value, cfg: ImpalaLossConfig, minibatch: Rollout):
         mask_t = jnp.float32(~minibatch.truncated_t)
         assert len(mask_t.shape) == 2 and mask_t.shape[0] == 20, mask_t.shape
-        discount_t = (~minibatch.done_t) * cfg.gamma
+        # discount_t = (~minibatch.done_t) * cfg.gamma
 
         nn_logits_from_obs, nn_value_from_obs = jax.vmap(get_logits_and_value, in_axes=(None, 0))(params, minibatch.obs_t)
-        nn_logits_t = nn_logits_from_obs[:-1]
+        # nn_logits_t = nn_logits_from_obs[:-1]
         del nn_logits_from_obs
 
-        v_t = jnp.zeros_like(nn_value_from_obs[1:])  # KEY: make next state value estimate equal to 0
+        # v_t = jnp.zeros_like(nn_value_from_obs[1:])  # KEY: make next state value estimate equal to 0
         v_tm1 = nn_value_from_obs[:-1]
         del nn_value_from_obs
 
-        rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
+        # rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
 
         errors = minibatch.r_t - v_tm1
         # errors = jax.vmap(partial(rlax.vtrace, lambda_=cfg.vtrace_lambda), in_axes=1, out_axes=1)(
