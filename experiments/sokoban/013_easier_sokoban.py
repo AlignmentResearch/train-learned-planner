@@ -7,7 +7,7 @@ from farconf import update_fns_to_cli
 from cleanba.config import Args, sokoban_resnet
 from cleanba.environments import SokobanConfig, random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
-from cleanba.network import AtariCNNSpec, IdentityNorm, RMSNorm, SokobanResNetConfig
+from cleanba.network import AtariCNNSpec, IdentityNorm
 
 yang = True
 minibatch_size = 32
@@ -15,16 +15,16 @@ n_envs = 256  # the paper says 200 actors
 assert n_envs % minibatch_size == 0
 
 clis = []
-for norm in [IdentityNorm(), RMSNorm()]:
+for norm in [IdentityNorm()]:  # , RMSNorm()]:
     for yang in [True, False]:
         for network in [
-            AtariCNNSpec(yang, norm),
-            SokobanResNetConfig(yang, norm, last_activation="tanh", mlp_hiddens=(256,)),
-            SokobanResNetConfig(yang, norm, last_activation="tanh", mlp_hiddens=(256, 256)),
-            SokobanResNetConfig(yang, norm, last_activation="relu", mlp_hiddens=(256,)),
+            AtariCNNSpec(yang, norm, channels=(32, 32, 64, 64, 64, 64, 64, 64, 64), strides=(1, 1, 1, 1, 1, 1, 1, 1, 1)),
+            # SokobanResNetConfig(yang, norm, last_activation="tanh", mlp_hiddens=(256,)),
+            # SokobanResNetConfig(yang, norm, last_activation="tanh", mlp_hiddens=(256, 256)),
+            # SokobanResNetConfig(yang, norm, last_activation="relu", mlp_hiddens=(256,)),
         ]:
             for env_seed, learn_seed in [(random_seed(), random_seed()), (random_seed(), random_seed())]:
-                for dim_room, num_boxes in [(5, 1), (6, 1), (7, 1)]:
+                for dim_room, num_boxes in [(7, 1), (8, 1), (9, 1), (10, 1)]:
 
                     def update_fn(config: Args) -> Args:
                         config.train_env = SokobanConfig(
@@ -69,21 +69,22 @@ for norm in [IdentityNorm(), RMSNorm()]:
                     clis.append(cli)
 
 runs: list[FlamingoRun] = []
-for i in range(0, len(clis), 4):
+RUNS_PER_MACHINE = 3
+for i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
-            [["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(4, len(clis) - i))],
+            [["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))],
             CONTAINER_TAG="e5a58c4-main",
             CPU=14,
             MEMORY="70G",
             GPU=1,
             PRIORITY="normal-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".24"',
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".32"',
         )
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "2")
 
 if __name__ == "__main__":
     launch_jobs(

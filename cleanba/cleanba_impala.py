@@ -351,16 +351,18 @@ def rollout(
                         )
                         obs_t = obs_t_plus_1
 
-                        log_stats.episode_returns.extend(episode_returns[done_t])
-                        returned_episode_returns[done_t] = episode_returns[done_t]
                         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
                         # the true return.
                         non_clipped_reward = info_t.get("reward", r_t)
+
                         episode_returns[:] += non_clipped_reward
+                        log_stats.episode_returns.extend(episode_returns[done_t])
+                        returned_episode_returns[done_t] = episode_returns[done_t]
                         episode_returns[:] *= ~done_t
+
+                        episode_lengths[:] += 1
                         log_stats.episode_lengths.extend(episode_lengths[done_t])
                         returned_episode_lengths[done_t] = episode_lengths[done_t]
-                        episode_lengths[:] += 1
                         episode_lengths[:] *= ~done_t
 
             with time_and_append(log_stats.storage_time):
