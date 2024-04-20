@@ -78,7 +78,7 @@ for i in range(0, len(clis), 4):
             MEMORY="70G",
             GPU=1,
             PRIORITY="normal-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION=".24",
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".24"',
         )
     )
 
