@@ -304,7 +304,6 @@ class SokobanResNet(nn.Module):
         for layer_i, (chan, kern) in enumerate(zip(self.cfg.channels[1:], self.cfg.kernel_sizes[1:])):
             x = SokobanResidualBlock(chan, kern, self.cfg.yang_init)(x, self.cfg.norm)
         x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
-        assert x.shape[-1] == 64 * 10 * 10
 
         for hidden in self.cfg.mlp_hiddens:
             if self.cfg.yang_init:
@@ -313,7 +312,12 @@ class SokobanResNet(nn.Module):
                 kernel_init = nn.initializers.lecun_normal()
                 bias_init = nn.initializers.zeros_init()
             x = nn.Dense(hidden, kernel_init=kernel_init, bias_init=bias_init)(x)
-            x = nn.tanh(x)
+            if self.cfg.last_activation == "tanh":
+                x = nn.tanh(x)
+            elif self.cfg.last_activation == "relu":
+                x = nn.tanh(x)
+            else:
+                raise ValueError(f"Unknown {self.cfg.last_activation=}")
 
         return x
 

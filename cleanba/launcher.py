@@ -48,6 +48,7 @@ class FlamingoRun:
     GPU: int = 1
     TRAINING_MOUNT: Path = Path("/training")
     PRIORITY: str = "normal-batch"
+    XLA_PYTHON_CLIENT_MEM_FRACTION: str = ".99"
 
     def format_args(self) -> dict[str, str | int]:
         return {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if f.name != "cfg"}
