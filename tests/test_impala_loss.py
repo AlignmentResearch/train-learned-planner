@@ -72,7 +72,7 @@ def test_impala_loss_zero_when_accurate(
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
     (total_loss, metrics_dict) = impala_loss(
         params=(),
-        get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs),
+        get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs, {}),
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
@@ -110,14 +110,15 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
 
         self._t += 1
         terminated = truncated = False
-        if self.np_random.uniform(0.0, 1.0) < (1 - self.per_step_non_truncation_probability):
-            terminated = False
-            truncated = True
+        if self._t > 1:
+            if self.np_random.uniform(0.0, 1.0) < (1 - self.per_step_non_truncation_probability):
+                terminated = False
+                truncated = True
 
-        # This goes after the previous if so takes precedence.
-        if self._t == len(self._rewards):
-            terminated = True
-            truncated = False
+            # This goes after the previous if so takes precedence.
+            if self._t == len(self._rewards):
+                terminated = True
+                truncated = False
         return (self._returns[self._t], reward, terminated, truncated, {})
 
     def reset(
@@ -130,7 +131,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
             seed = self.cfg.seed
         super().reset(seed=seed, options=options)
 
-        num_timesteps = int(self.np_random.integers(1, self.cfg.max_episode_steps, size=()))
+        num_timesteps = int(self.np_random.integers(2, self.cfg.max_episode_steps, size=()))
         self._t = 0
         self._rewards = self.np_random.uniform(self.reward_range[0], self.reward_range[1], size=num_timesteps)
 
@@ -207,15 +208,15 @@ class ZeroActionNetworkSpec(NetworkSpec):
         return actions, logits, key
 
     @partial(jax.jit, static_argnames=["self"])
-    def get_logits_and_value(self, params: AgentParams, x: jax.Array) -> tuple[jax.Array, jax.Array]:
-        return self.get_action(params, x, None)[1], x  # type: ignore
+    def get_logits_and_value(self, params: AgentParams, x: jax.Array) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
+        return self.get_action(params, x, None)[1], x, {}  # type: ignore
 
 
 @pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
 def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
     args = cleanba_impala.Args(
         train_env=TrivialEnvConfig(
-            max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability
+            max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability, seed=4
         ),
         eval_envs={},
         net=ZeroActionNetworkSpec(),
@@ -226,6 +227,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         num_steps=num_timesteps,
         concurrency=False,
         local_num_envs=num_envs,
+        seed=3,
     )
 
     params_queue = queue.Queue(maxsize=5)
@@ -292,7 +294,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
             args=ImpalaLossConfig(gamma=gamma),
             minibatch=transition,
         )
-        logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy())
+        logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy() * (~transition.truncated_t))
 
         assert np.abs(metrics_dict["pg_loss"]) < 1e-6
         assert np.allclose(metrics_dict["v_loss"], 0.0)

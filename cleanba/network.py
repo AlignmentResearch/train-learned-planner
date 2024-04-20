@@ -271,10 +271,10 @@ class Actor(nn.Module):
 class SokobanResNetConfig(NetworkSpec):
     channels: tuple[int, ...] = (64, 64, 64) * 3
     kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
-    strides: tuple[int, ...] = (1, 1, 1) * 3
-    multiplicity: int = 1
 
     mlp_hiddens: tuple[int, ...] = ()
+
+    last_activation: Literal["relu", "tanh"] = "relu"
 
     def make(self) -> nn.Module:
         return SokobanResNet(self)
@@ -287,66 +287,68 @@ class SokobanResNet(nn.Module):
     def __call__(self, x):
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x / (255.0)
-        for layer_i, (chan, kern, stride) in enumerate(zip(self.cfg.channels, self.cfg.kernel_sizes, self.cfg.strides)):
-            x = SokobanConvSequence(
-                channels=chan, kernel_size=kern, strides=stride, multiplicity=self.cfg.multiplicity, is_input=layer_i == 0
-            )(x, self.cfg.norm)
+
+        if self.cfg.yang_init:
+            kernel_init = bias_init = yang_initializer("input", "relu")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+            bias_init = nn.initializers.zeros_init()
+        x = nn.Conv(
+            self.cfg.channels[0],
+            kernel_size=(self.cfg.kernel_sizes[0], self.cfg.kernel_sizes[0]),
+            kernel_init=kernel_init,
+            bias_init=bias_init,
+            name=INPUT_SENTINEL,
+        )(x)
+
+        for layer_i, (chan, kern) in enumerate(zip(self.cfg.channels[1:], self.cfg.kernel_sizes[1:])):
+            x = SokobanResidualBlock(chan, kern, self.cfg.yang_init)(x, self.cfg.norm)
         x = x.reshape((x.shape[0], np.prod(x.shape[-3:])))
         assert x.shape[-1] == 64 * 10 * 10
+
         for hidden in self.cfg.mlp_hiddens:
-            x = self.cfg.norm(x)
-            x = nn.Dense(
-                hidden,
-                kernel_init=yang_initializer("hidden", "tanh"),
-                bias_init=yang_initializer("hidden", "tanh"),
-            )(x)
+            if self.cfg.yang_init:
+                kernel_init = bias_init = yang_initializer("hidden", self.cfg.last_activation)
+            else:
+                kernel_init = nn.initializers.lecun_normal()
+                bias_init = nn.initializers.zeros_init()
+            x = nn.Dense(hidden, kernel_init=kernel_init, bias_init=bias_init)(x)
             x = nn.tanh(x)
+
         return x
 
 
 class SokobanResidualBlock(nn.Module):
     channels: int
     kernel_size: int
-    multiplicity: int
+    yang_init: bool
 
     @nn.compact
     def __call__(self, x, norm):
+        if self.yang_init:
+            kernel_init = bias_init = yang_initializer("hidden", "relu")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+            bias_init = nn.initializers.zeros_init()
+
         inputs = x
-        for _ in range(self.multiplicity):
-            x = nn.relu(x)
-            x = norm(x)
-            x = nn.Conv(
-                self.channels,
-                kernel_size=(self.kernel_size, self.kernel_size),
-                kernel_init=yang_initializer("hidden", "relu"),
-                bias_init=yang_initializer("hidden", "relu"),
-            )(x)
-        return x + inputs
+        x = nn.Conv(
+            self.channels, kernel_size=(self.kernel_size, self.kernel_size), kernel_init=kernel_init, bias_init=bias_init
+        )(x)
+        x = norm(x)
+        x = nn.relu(x)
+        x = nn.Conv(
+            self.channels, kernel_size=(self.kernel_size, self.kernel_size), kernel_init=kernel_init, bias_init=bias_init
+        )(x)
+        x = norm(x)
+
+        x = inputs + x
+        x = nn.relu(x)
+
+        return x
 
 
 INPUT_SENTINEL: str = "xXx_Input_xXx"
-
-
-class SokobanConvSequence(nn.Module):
-    channels: int
-    kernel_size: int
-    strides: int
-    multiplicity: int
-    is_input: bool
-
-    @nn.compact
-    def __call__(self, x, norm):
-        if self.is_input:
-            x = nn.Conv(
-                self.channels,
-                kernel_size=(self.kernel_size, self.kernel_size),
-                strides=(self.strides, self.strides),
-                kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
-                bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
-                name=INPUT_SENTINEL if self.is_input else None,
-            )(x)
-        x = SokobanResidualBlock(self.channels, self.kernel_size, self.multiplicity)(x, norm=norm)
-        return x
 
 
 def _fan_in_for_params(params: dict[str, dict[str, Any] | jax.Array]) -> dict[str, dict[str, Any] | str]:
