@@ -455,7 +455,7 @@ def train(args: Args):
             return args.learning_rate * frac
 
         key, agent_params_subkey = jax.random.split(key, 2)
-        agent_params = args.net.init_params(envs, agent_params_subkey, np.array([envs.single_observation_space.sample()]))
+        agent_params = args.net.init_params(envs, agent_params_subkey)
 
         if args.optimizer_yang:
             learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)

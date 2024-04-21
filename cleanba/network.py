@@ -61,12 +61,14 @@ class NetworkSpec(abc.ABC):
     def make(self) -> nn.Module:
         ...
 
-    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array, example_obs: np.ndarray) -> AgentParams:
+    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> AgentParams:
         action_space = envs.single_action_space
         assert isinstance(action_space, gym.spaces.Discrete)
         n_actions = int(action_space.n)
 
         net_key, actor_key, critic_key = jax.random.split(key, 3)
+
+        example_obs = np.array(envs.single_observation_space.sample())[None, ...]
 
         net_obj = self.make()
         net_params = net_obj.init(net_key, example_obs)
