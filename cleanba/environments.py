@@ -164,6 +164,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             reset_seed=self.seed,
             reset=self.reset,
             asynchronous=self.asynchronous,
+            min_episode_steps=self.min_episode_steps,
         )
 
     def env_reward_kwargs(self):

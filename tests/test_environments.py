@@ -9,9 +9,23 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
 @pytest.mark.parametrize(
     "cfg",
     [
-        BoxobanConfig(MAX_EPISODE_STEPS, NUM_ENVS, SEED, tinyworld_obs=True, asynchronous=False),
+        BoxobanConfig(
+            MAX_EPISODE_STEPS,
+            NUM_ENVS,
+            SEED,
+            tinyworld_obs=True,
+            asynchronous=False,
+            min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
+        ),
         SokobanConfig(
-            MAX_EPISODE_STEPS, NUM_ENVS, SEED, tinyworld_obs=True, dim_room=(10, 10), num_boxes=1, asynchronous=False
+            max_episode_steps=MAX_EPISODE_STEPS,
+            num_envs=NUM_ENVS,
+            seed=SEED,
+            tinyworld_obs=True,
+            dim_room=(10, 10),
+            num_boxes=1,
+            asynchronous=False,
+            min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
         ),
         EnvpoolBoxobanConfig(MAX_EPISODE_STEPS, NUM_ENVS, SEED, min_episode_steps=MAX_EPISODE_STEPS * 3 // 4),
     ],
