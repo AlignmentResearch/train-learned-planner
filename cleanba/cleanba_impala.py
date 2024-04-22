@@ -301,7 +301,7 @@ def rollout(
             with time_and_append(log_stats.params_queue_get_time):
                 num_steps_with_bootstrap = args.num_steps
 
-                if update >= args.actor_update_cutoff or (update - 1) % args.actor_update_frequency == 0:
+                if update > args.actor_update_cutoff or (update - 1) % args.actor_update_frequency == 0:
                     # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
                     # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
                     # behind the learner's policy version
@@ -564,7 +564,7 @@ def train(args: Args):
                     sharded_storages,
                 )
             unreplicated_params = unreplicate(agent_state.params)
-            if update >= args.actor_update_cutoff or update % args.actor_update_frequency == 0:
+            if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
                 for d_idx, d_id in enumerate(args.actor_device_ids):
                     device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
                     for thread_id in range(args.num_actor_threads):
