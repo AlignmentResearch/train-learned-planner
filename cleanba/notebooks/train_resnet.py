@@ -13,7 +13,6 @@ import numpy as np
 import optax
 import rlax
 import torch.utils.data
-from chex import Numeric
 from flax.training.train_state import TrainState
 
 import cleanba.cleanba_impala as cleanba_impala
@@ -46,6 +45,8 @@ def collect_rollouts(args: Args, num_rollouts: int = 2, seed: int = 12345) -> li
     param_queue = queue.Queue(num_rollouts)
     for _ in range(num_rollouts):
         param_queue.put_nowait(rollout_params)
+
+    args = dataclasses.replace(args, queue_timeout=1)
 
     rollout_queue = queue.Queue(num_rollouts + 2)
     cleanba_impala.rollout(
@@ -101,7 +102,7 @@ args = dataclasses.replace(
         difficulty="unfiltered",
     ),
     eval_envs={},
-    net=SokobanResNetConfig(yang_init=True, norm=RMSNorm(), mlp_hiddens=(256,)),
+    net=SokobanResNetConfig(yang_init=True, norm=RMSNorm(), mlp_hiddens=(256,), channels=(32,)),
     local_num_envs=256,
     num_steps=20,
     log_frequency=1000000000,
@@ -123,7 +124,11 @@ if len(rollout_files) < NUM_ROLLOUTS:
             leaves = jax.tree.leaves(r)
             f.write(flax.serialization.to_bytes(leaves))
 
-print(f"{len(rollout_files)=}")
+print(f"Before: {len(rollout_files)=}")
+# %%
+
+rollout_files = list(ROLLOUT_PATH.iterdir())
+print(f"After: {len(rollout_files)=}")
 
 # %% Create training and test datasets
 
@@ -171,11 +176,31 @@ train_data = RolloutDataset(_train_data_names)
 test_data = RolloutDataset(_all_data[len(_train_data_names) :])
 print(f"{len(train_data)=}, {len(test_data)=}")
 
+# %% Check variance of untrained NN
+
+args.net = dataclasses.replace(args.net, yang_init=False)
+
+net = SokobanResNetConfig(
+    yang_init=True,
+    norm=RMSNorm(eps=1e-06, use_scale=True, reduction_axes=-1, feature_axes=-1),
+    channels=(64,) * 9,
+    kernel_sizes=(4,) * 9,
+    mlp_hiddens=(256,),
+    last_activation="relu",
+)
+
+params = jax.jit(net.init_params, static_argnums=(0,))(
+    dataclasses.replace(args.train_env, num_envs=1).make(), jax.random.PRNGKey(1235)
+)
+
+x = rollout_collate_fn([train_data[i] for i in range(256)])
+logits, value, _ = jax.vmap(net.get_logits_and_value, in_axes=(None, 0))(params, x.obs_t)
+
+logits_std = np.mean(np.std(logits, axis=(0, 1)))
+print(f"{logits_std=}, {np.std(value)=}")
+
+
 # %% Initialize parameters
-
-
-def learning_rate_schedule(steps: Numeric) -> Numeric:
-    return 0.01
 
 
 def adam_with_parameters(learning_rate, b1=0.95, b2=0.99, eps=1e-8, eps_root=0.0) -> optax.GradientTransformation:
@@ -194,10 +219,11 @@ train_state = TrainState.create(
     tx=optax.MultiSteps(
         optax.chain(
             # optax.clip_by_global_norm(0.0625),
-            optax.multi_transform(
-                transforms={k: adam_with_parameters(lr) for k, lr in learning_rates.items()},
-                param_labels=param_labels,
-            ),
+            # optax.multi_transform(
+            #     transforms={k: adam_with_parameters(lr * 0.001) for k, lr in learning_rates.items()},
+            #     param_labels=param_labels,
+            # ),
+            adam_with_parameters(0.001)
         ),
         every_k_schedule=1,
     ),
@@ -241,7 +267,7 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
                 lambda_=cfg.vtrace_lambda,
                 clip_rho_threshold=cfg.clip_rho_threshold,
                 clip_pg_rho_threshold=cfg.clip_pg_rho_threshold,
-                stop_target_gradients=True,
+                stop_target_gradients=False,
             ),
             in_axes=1,
             out_axes=1,
@@ -259,9 +285,15 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
 
         # end copy original impala
 
-        errors_ms = v_loss
+        errors_ms = jnp.sum(jnp.square(vtrace_returns.errors) * mask_t)
         targets_tm1 = vtrace_returns.errors + v_tm1
-        targets_ms = jnp.mean(jnp.square(targets_tm1) * mask_t)
+        targets_ms = jnp.sum(jnp.square(targets_tm1) * mask_t)
+
+        errors_mean = jnp.sum(vtrace_returns.errors * mask_t)
+        targets_mean = jnp.sum(targets_tm1 * mask_t)
+        mask_count = jnp.sum(mask_t)
+        fve = 1.0 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1)
+
         # It doesn't matter what the denominator for these two is so long as it's the same for every batch. We're just
         # going to add all of the batches and divide
 
@@ -269,7 +301,15 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
         mean_positive = jnp.sum(v_tm1 * positive_mask) / jnp.sum(positive_mask)
         mean_negative = jnp.sum(v_tm1 * (~positive_mask)) / jnp.sum(~positive_mask)
         return total_loss, dict(
-            errors_ms=errors_ms, targets_ms=targets_ms, mean_negative=mean_negative, mean_positive=mean_positive
+            errors_ms=errors_ms,
+            targets_ms=targets_ms,
+            mean_negative=mean_negative,
+            mean_positive=mean_positive,
+            nn_var=jnp.var(v_t),
+            errors_mean=errors_mean,
+            targets_mean=targets_mean,
+            mask_count=mask_count,
+            fve2=fve,
         )
 
     (loss, metrics_dict), grads = jax.value_and_grad(loss_fn, has_aux=True)(
@@ -289,13 +329,22 @@ train_loader = torch.utils.data.DataLoader(
 )
 
 
+def populate_fve(metrics):
+    count = metrics["mask_count"]
+
+    metrics["errors_var"] = (metrics["errors_ms"] - 1 / count * metrics["errors_mean"] ** 2) / (count - 1)
+    metrics["targets_var"] = (metrics["targets_ms"] - 1 / count * metrics["targets_mean"] ** 2) / (count - 1)
+    metrics["fve"] = 1.0 - metrics["errors_var"] / metrics["targets_var"]
+    metrics["errors_ms"] /= count
+    metrics["targets_ms"] /= count
+    metrics["errors_mean"] /= count
+    metrics["targets_mean"] /= count
+
+
 def evaluate(train_state, num_evaluate=5):
     test_loader = torch.utils.data.DataLoader(
         test_data, batch_size=BATCH_SIZE, shuffle=False, collate_fn=rollout_collate_fn, num_workers=0
     )
-
-    errors_ms = 0.0
-    targets_ms = 0.0
 
     out = collections.defaultdict(list)
 
@@ -304,16 +353,12 @@ def evaluate(train_state, num_evaluate=5):
         rollout = next(it)
         _, metrics = update_minibatch(train_state, rollout)
 
-        errors_ms += float(metrics.pop("errors_ms"))
-        targets_ms += float(metrics.pop("targets_ms"))
-
         for k, v in metrics.items():
             out[k].append(v)
 
-    out_metrics = {k: float(np.mean(v)) for k, v in out.items()}
-    out_metrics["fve"] = 1.0 - errors_ms / targets_ms
-    out_metrics["errors_ms"] = errors_ms / num_evaluate
-    out_metrics["targets_ms"] = targets_ms / num_evaluate
+    sum_relevant = {"errors_ms", "targets_ms", "errors_mean", "targets_mean", "mask_count"}
+    out_metrics = {k: float(np.sum(v) if k in sum_relevant else np.mean(v)) for k, v in out.items()}
+    populate_fve(out_metrics)
     return out_metrics
 
 
@@ -330,11 +375,11 @@ def add_metrics(d: dict[str, jax.Array]):
 metrics_dict = {}
 for i, rollout in enumerate(train_loader):
     if metrics_dict:
-        metrics_dict["fve"] = 1.0 - metrics_dict["errors_ms"] / metrics_dict["targets_ms"]
+        populate_fve(metrics_dict)
     add_metrics(metrics_dict)  # Do it here, so we load the next points immediately.
     assert isinstance(rollout, Rollout)
     if i % 100 == 99:
-        print(f"{i=}, loss={np.mean(metrics['loss'][-10:])}")
+        print(f"{i=}, loss={np.mean(metrics['loss'][-20:])}, fve={np.mean(metrics['fve'][-20:])}")
         # rich.pretty.pprint(evaluate(train_state, num_evaluate=5))
 
     train_state, metrics_dict = update_minibatch(train_state, rollout)
@@ -343,16 +388,50 @@ for i, rollout in enumerate(train_loader):
 
 window = np.ones((50,)) / 50
 
-_, axes = plt.subplots(2, 1)
+_, axes = plt.subplots(3, 1, figsize=(8, 12))
 
 steps_per_step = BATCH_SIZE * 20
 ax = axes[0]
-for metric in ["fve"]:
-    ax.plot(np.arange(len(metrics[metric])) * steps_per_step, metrics[metric], label=metric)
+for metric in ["fve", "fve2"]:
+    ax.plot(np.arange(len(metrics[metric])) * steps_per_step, metrics[metric], label=metric, alpha=0.3)
 ax.legend()
 
 ax = axes[1]
-ax.set_ylim(-0.1, 10)
-for metric in ["loss", "errors_ms", "targets_ms"]:
-    ax.plot(np.arange(len(metrics[metric])) * steps_per_step, metrics[metric], label=metric)
+ax.set_ylim(-0.1, 1)
+for metric in ["loss", "errors_var", "targets_var"]:
+    ax.plot(np.arange(len(metrics[metric])) * steps_per_step, metrics[metric], label=metric, alpha=0.3)
 ax.legend()
+
+ax = axes[2]
+for metric in ["nn_var"]:
+    ax.plot(np.arange(len(metrics[metric])) * steps_per_step, metrics[metric], label=metric, alpha=0.3)
+ax.legend()
+
+
+# %% Test FVE formula above
+
+x = np_random.normal(size=(20,)) + 2
+y = np_random.normal(size=(20,)) - 7
+
+ratio = np.var(x, ddof=1) / np.var(y, ddof=1)
+
+ARBITRARY = 1
+
+x_sq = np.sum(np.square(x)) / ARBITRARY
+y_sq = np.sum(np.square(y)) / ARBITRARY
+x_mean = np.sum(x) / ARBITRARY
+y_mean = np.sum(y) / ARBITRARY
+
+N = len(x)
+
+varx = ARBITRARY / (N - 1) * (x_sq - ARBITRARY / N * x_mean**2)
+
+assert np.allclose(np.var(x, ddof=1), varx), (np.var(x, ddof=1), varx)
+
+
+factor_for_mean = -1 / N
+prop_var_x = x_sq + factor_for_mean * x_mean**2
+prop_var_y = y_sq + factor_for_mean * y_mean**2
+
+ratio2 = prop_var_x / prop_var_y
+assert np.allclose(ratio, ratio2), (ratio, ratio2)

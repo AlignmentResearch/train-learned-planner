@@ -142,12 +142,20 @@ NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
 )
 
 
-def yang_initializer(layer_type: Literal["input", "hidden", "output"], nonlinearity: str) -> jax.nn.initializers.Initializer:
+def yang_initializer(
+    layer_type: Literal["input", "hidden", "output"],
+    nonlinearity: str,
+    base_fan_in: int = 24,
+) -> jax.nn.initializers.Initializer:
     nonlinearity_gain = float(NONLINEARITY_GAINS[nonlinearity])
 
     def init(key: jax.Array, shape: Shape, dtype: Any = jnp.float_) -> jax.Array:
         dtype = jax.dtypes.canonicalize_dtype(dtype)
         fan_in = np.prod(shape[:-1])
+
+        fan_in = max(1.0, fan_in / base_fan_in)
+
+        print(f"Param with {shape=}, {fan_in=}")
 
         if layer_type in ["input", "hidden"]:
             stddev = nonlinearity_gain / np.sqrt(fan_in)
@@ -240,9 +248,10 @@ class Critic(nn.Module):
     def __call__(self, x):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
+            bias_init = yang_initializer("output", "identity")
         else:
             kernel_init = nn.initializers.lecun_normal()
-        bias_init = nn.initializers.constant(-1.72)
+            bias_init = nn.initializers.constant(0.0)
         x = self.norm(x)
         x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, name="Output")(x)
         bias = self.variables["params"]["Output"]["bias"]
@@ -287,8 +296,10 @@ class SokobanResNet(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        # Normalize x
+        x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
         x = jnp.transpose(x, (0, 2, 3, 1))
-        x = x / (255.0)
+        x = self.cfg.norm(x)
 
         if self.cfg.yang_init:
             kernel_init = bias_init = yang_initializer("input", "relu")
