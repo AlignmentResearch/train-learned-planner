@@ -301,23 +301,22 @@ def rollout(
             with time_and_append(log_stats.params_queue_get_time):
                 num_steps_with_bootstrap = args.num_steps
 
-                # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
-                # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
-                # behind the learner's policy version
-                if args.concurrency:
-                    if update != 2:
-                        params = params_queue.get(timeout=args.queue_timeout)
-                        # NOTE: block here is important because otherwise this thread will call
-                        # the jitted `get_action` function that hangs until the params are ready.
-                        # This blocks the `get_action` function in other actor threads.
-                        # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                        params.actor_params["params"]["Output"][
-                            "kernel"
-                        ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
-                        actor_policy_version += 1
-                else:
-                    params = params_queue.get(timeout=args.queue_timeout)
-                    actor_policy_version += 1
+                if (update - 1) % args.actor_update_frequency == 0:
+                    # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
+                    # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
+                    # behind the learner's policy version
+                    if args.concurrency:
+                        if update != 2:
+                            params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
+                            # NOTE: block here is important because otherwise this thread will call
+                            # the jitted `get_action` function that hangs until the params are ready.
+                            # This blocks the `get_action` function in other actor threads.
+                            # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
+                            params.actor_params["params"]["Output"][
+                                "kernel"
+                            ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
+                    else:
+                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
             with time_and_append(log_stats.rollout_time):
                 for _ in range(1, num_steps_with_bootstrap + 1):
@@ -426,6 +425,8 @@ def rollout(
             )
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
+            writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
+
         if update % args.eval_frequency == 0:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
@@ -507,6 +508,7 @@ def train(args: Args):
         params_queues = []
         rollout_queues = []
 
+        learner_policy_version = 0
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
         for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -514,7 +516,7 @@ def train(args: Args):
             for thread_id in range(args.num_actor_threads):
                 params_queues.append(queue.Queue(maxsize=1))
                 rollout_queues.append(queue.Queue(maxsize=1))
-                params_queues[-1].put(device_params)
+                params_queues[-1].put((device_params, learner_policy_version))
                 threading.Thread(
                     target=rollout,
                     args=(
@@ -531,7 +533,6 @@ def train(args: Args):
                 ).start()
 
         rollout_queue_get_time = deque(maxlen=10)
-        learner_policy_version = 0
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
         global_step = 0
@@ -563,10 +564,13 @@ def train(args: Args):
                     sharded_storages,
                 )
             unreplicated_params = unreplicate(agent_state.params)
-            for d_idx, d_id in enumerate(args.actor_device_ids):
-                device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
-                for thread_id in range(args.num_actor_threads):
-                    params_queues[d_idx * args.num_actor_threads + thread_id].put(device_params, timeout=args.queue_timeout)
+            if update % args.actor_update_frequency == 0:
+                for d_idx, d_id in enumerate(args.actor_device_ids):
+                    device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
+                    for thread_id in range(args.num_actor_threads):
+                        params_queues[d_idx * args.num_actor_threads + thread_id].put(
+                            (device_params, learner_policy_version), timeout=args.queue_timeout
+                        )
 
             # Copy the parameters from the first device to all other learner devices
             if learner_policy_version % args.sync_frequency == 0:
@@ -605,6 +609,8 @@ def train(args: Args):
 
                 for name, value in metrics_dict.items():
                     writer.add_scalar(name, value[0].item(), global_step)
+
+                writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:

@@ -137,7 +137,7 @@ class AtariCNNSpec(NetworkSpec):
 NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
     relu=np.sqrt(2.0),
     identity=1.0,
-    action_softmax=0.02,  # We want the actions to be pretty random at the start, so use a small scale
+    action_softmax=1.0,
     tanh=5 / 3,
 )
 

@@ -29,6 +29,8 @@ class ImpalaLossConfig:
     # (https://arxiv.org/pdf/1802.01561.pdf)
     clip_pg_rho_threshold: float = 1.0
 
+    normalize_advantage: bool = False
+
 
 class Rollout(NamedTuple):
     obs_t: jax.Array
@@ -114,7 +116,10 @@ def impala_loss(
 
     # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
     # are implicit in `pg_advs`.
-    pg_advs = vtrace_returns.pg_advantage
+    norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
+        jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
+    )
+    pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
     # Value loss: MSE of VTrace-estimated errors

@@ -29,6 +29,7 @@ class Args:
     save_model: bool = True  # whether to save model into the wandb run folder
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
     sync_frequency: int = 400
+    actor_update_frequency: int = 1
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
