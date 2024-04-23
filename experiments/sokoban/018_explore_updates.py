@@ -6,13 +6,13 @@ from pathlib import Path
 from farconf import update_fns_to_cli
 
 from cleanba.config import Args, sokoban_resnet
-from cleanba.environments import SokobanConfig, random_seed
+from cleanba.environments import EnvpoolBoxobanConfig, SokobanConfig, random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 from cleanba.network import AtariCNNSpec, RMSNorm, SokobanResNetConfig
 
 clis = []
 
-for _ in range(48):
+for _ in range(100):
     env_seed, learn_seed = random_seed(), random_seed()
 
     learning_rate = 10 ** random.uniform(-4, -2)
@@ -50,26 +50,43 @@ for _ in range(48):
                 mlp_hiddens=(256,),
                 max_pool=False,
             ),
+            AtariCNNSpec(
+                yang_init=yang_init,
+                norm=norm,
+                channels=(64,) * num_layers,
+                strides=(1,) * num_layers,
+                mlp_hiddens=(256,),
+                max_pool=True,
+            ),
         ]
     )
 
-    max_episode_steps = random.choice([20, 60, 88, 120])
+    max_episode_steps = 20
 
     train_epochs = random.choice([1, 2])
 
-    for dim_room, total_timesteps in [(7, int(1e7)), (8, int(3e7)), (10, int(6e7))]:
+    for dim_room, total_timesteps in [(7, int(1e7)), (8, int(3e7)), (10, int(6e7)), (100, int(6e7))]:
 
         def update_fn(config: Args) -> Args:
-            config.train_env = SokobanConfig(
-                max_episode_steps=max_episode_steps,
-                num_envs=1,
-                seed=env_seed,
-                min_episode_steps=max_episode_steps * 3 // 4,
-                tinyworld_obs=True,
-                asynchronous=True,
-                dim_room=(dim_room, dim_room),
-                num_boxes=1,
-            )
+            if dim_room == 100:
+                config.train_env = EnvpoolBoxobanConfig(
+                    max_episode_steps=max_episode_steps,
+                    num_envs=1,
+                    seed=env_seed,
+                    min_episode_steps=max_episode_steps * 3 // 4,
+                    cache_path=Path("/training/.sokoban_cache"),
+                )
+            else:
+                config.train_env = SokobanConfig(
+                    max_episode_steps=max_episode_steps,
+                    num_envs=1,
+                    seed=env_seed,
+                    min_episode_steps=max_episode_steps * 3 // 4,
+                    tinyworld_obs=True,
+                    asynchronous=True,
+                    dim_room=(dim_room, dim_room),
+                    num_boxes=1,
+                )
             config.eval_envs = {}
             config.actor_update_frequency = update_freq
 
@@ -115,12 +132,12 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             MEMORY="70G",
             GPU=1,
             PRIORITY="normal-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".40"',
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".45"',
         )
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "2")
 
 if __name__ == "__main__":
     launch_jobs(
