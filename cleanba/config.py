@@ -31,7 +31,7 @@ class Args:
     sync_frequency: int = 400
 
     actor_update_frequency: int = 1
-    actor_update_cutoff: int = 300
+    actor_update_cutoff: int = int(1e20)
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
