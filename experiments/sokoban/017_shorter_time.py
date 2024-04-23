@@ -23,8 +23,8 @@ update_freq = 8
 
 clis = []
 for env_seed, learn_seed in [(random_seed(), random_seed()), (random_seed(), random_seed())]:
-    for learning_rate in [1e-4, 4e-4, 1e-3]:
-        for ent_coef in [0.01]:
+    for learning_rate in [1e-3]:
+        for update_cutoff in [1000, 2000]:  # [40, 80, 160, 320, 640]:
             for network in [
                 # SokobanResNetConfig(yang, norm, last_activation="tanh", mlp_hiddens=(256,)),
                 SokobanResNetConfig(yang, norm, last_activation="relu", mlp_hiddens=(256,)),
@@ -44,6 +44,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()), (random_seed(), ran
                         )
                         config.eval_envs = {}
                         config.actor_update_frequency = update_freq
+                        config.actor_update_cutoff = update_cutoff
 
                         config.local_num_envs = n_envs
                         config.train_epochs = 1
@@ -58,7 +59,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()), (random_seed(), ran
                             vtrace_lambda=1.0,
                             vf_coef=0.1,
                             gamma=0.97,
-                            ent_coef=ent_coef,
+                            ent_coef=0.01,
                             normalize_advantage=False,
                         )
                         config.max_grad_norm = 1.0
@@ -92,7 +93,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "3")
+GROUP: str = group_from_fname(__file__, "nodead")
 
 if __name__ == "__main__":
     launch_jobs(
