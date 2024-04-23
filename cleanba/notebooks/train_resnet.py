@@ -23,7 +23,7 @@ from cleanba.impala_loss import (
     Rollout,
     impala_loss,
 )
-from cleanba.network import RMSNorm, SokobanResNetConfig, label_and_learning_rate_for_params
+from cleanba.network import AtariCNNSpec, RMSNorm, SokobanResNetConfig, label_and_learning_rate_for_params
 
 
 def unreplicate(tree):
@@ -44,7 +44,7 @@ def collect_rollouts(args: Args, num_rollouts: int = 2, seed: int = 12345) -> li
     )
     param_queue = queue.Queue(num_rollouts)
     for _ in range(num_rollouts):
-        param_queue.put_nowait(rollout_params)
+        param_queue.put_nowait((rollout_params, 2))
 
     args = dataclasses.replace(args, queue_timeout=1)
 
@@ -114,7 +114,7 @@ ROLLOUT_PATH.mkdir(exist_ok=True, parents=True)
 
 rollout_files = list(ROLLOUT_PATH.iterdir())
 
-NUM_ROLLOUTS = 3000
+NUM_ROLLOUTS = 20
 if len(rollout_files) < NUM_ROLLOUTS:
     rollouts = collect_rollouts(args, num_rollouts=NUM_ROLLOUTS - len(rollout_files))
 
@@ -180,17 +180,18 @@ print(f"{len(train_data)=}, {len(test_data)=}")
 
 args.net = dataclasses.replace(args.net, yang_init=False)
 
-net = SokobanResNetConfig(
-    yang_init=True,
-    norm=RMSNorm(eps=1e-06, use_scale=True, reduction_axes=-1, feature_axes=-1),
-    channels=(64,) * 9,
-    kernel_sizes=(4,) * 9,
-    mlp_hiddens=(256,),
-    last_activation="relu",
-)
+# net = SokobanResNetConfig(
+#     yang_init=True,
+#     norm=RMSNorm(eps=1e-06, use_scale=True, reduction_axes=-1, feature_axes=-1),
+#     channels=(64,) * 9,
+#     kernel_sizes=(4,) * 9,
+#     mlp_hiddens=(256,),
+#     last_activation="relu",
+# )
+net = AtariCNNSpec(yang_init=True, norm=RMSNorm(), channels=(64,) * 9, strides=(1,) * 9, mlp_hiddens=(256,), max_pool=False)
 
 params = jax.jit(net.init_params, static_argnums=(0,))(
-    dataclasses.replace(args.train_env, num_envs=1).make(), jax.random.PRNGKey(1235)
+    dataclasses.replace(args.train_env, num_envs=1).make(), jax.random.PRNGKey(1234)
 )
 
 x = rollout_collate_fn([train_data[i] for i in range(256)])

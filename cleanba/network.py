@@ -10,7 +10,6 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.linen.initializers import constant
 from flax.typing import Axes, Shape
 
 
@@ -129,6 +128,7 @@ class AtariCNNSpec(NetworkSpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
+    max_pool: bool = True
 
     def make(self) -> "AtariCNN":
         return AtariCNN(self)
@@ -204,14 +204,16 @@ class ConvSequence(nn.Module):
         if self.yang_init:
             x = nn.Conv(
                 self.channels,
+                strides=(1, 1) if not self.max_pool else (self.strides, self.strides),
                 kernel_size=(3, 3),
                 kernel_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
                 bias_init=yang_initializer("input" if self.is_input else "hidden", "relu"),
-                name=INPUT_SENTINEL,
+                name=INPUT_SENTINEL if self.is_input else None,
             )(x)
         else:
             x = nn.Conv(self.channels, kernel_size=(3, 3))(x)
-        x = nn.max_pool(x, window_shape=(3, 3), strides=(self.strides, self.strides), padding="SAME")
+        if self.max_pool:
+            x = nn.max_pool(x, window_shape=(3, 3), strides=(self.strides, self.strides), padding="SAME")
         x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
         x = ResidualBlock(self.channels, yang_init=self.yang_init)(x, norm=norm)
         return x
@@ -222,18 +224,21 @@ class AtariCNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
         x = jnp.transpose(x, (0, 2, 3, 1))
-        x = x / (255.0)
+        x = self.cfg.norm(x)
         for layer_i, (channels, strides) in enumerate(zip(self.cfg.channels, self.cfg.strides)):
-            x = ConvSequence(channels, yang_init=self.cfg.yang_init, is_input=(layer_i == 0), strides=strides)(
-                x, norm=self.cfg.norm
-            )
+            x = ConvSequence(
+                channels, yang_init=self.cfg.yang_init, is_input=(layer_i == 0), strides=strides, max_pool=self.cfg.max_pool
+            )(x, norm=self.cfg.norm)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
             if self.cfg.yang_init:
-                x = nn.Dense(hidden, kernel_init=yang_initializer("hidden", "relu"), bias_init=constant(0.0))(x)
+                x = nn.Dense(
+                    hidden, kernel_init=yang_initializer("hidden", "relu"), bias_init=yang_initializer("hidden", "relu")
+                )(x)
             else:
                 x = nn.Dense(hidden)(x)
             x = nn.relu(x)
