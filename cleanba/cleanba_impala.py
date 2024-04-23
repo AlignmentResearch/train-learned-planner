@@ -299,8 +299,8 @@ def rollout(
             % (int(5e6) // (args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size))
             == 0
         ):
-            if np.mean(returned_episode_returns) < -2.0:
-                print(f"Stopping program because {np.mean(returned_episode_returns)=} < -2.0")
+            if np.mean(returned_episode_returns) < -1.8:
+                print(f"Stopping program because {np.mean(returned_episode_returns)=} < -1.8")
                 MUST_STOP_PROGRAM = True
 
         if MUST_STOP_PROGRAM:
