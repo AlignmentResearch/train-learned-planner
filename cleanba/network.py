@@ -135,7 +135,7 @@ class AtariCNNSpec(NetworkSpec):
 
 
 NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
-    relu=np.sqrt(2.0),
+    relu=1.0,  # np.sqrt(2.0),
     identity=1.0,
     action_softmax=1.0,
     tanh=5 / 3,
@@ -145,7 +145,7 @@ NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
 def yang_initializer(
     layer_type: Literal["input", "hidden", "output"],
     nonlinearity: str,
-    base_fan_in: int = 24,
+    base_fan_in: int = 1,
 ) -> jax.nn.initializers.Initializer:
     nonlinearity_gain = float(NONLINEARITY_GAINS[nonlinearity])
 
@@ -160,7 +160,7 @@ def yang_initializer(
         if layer_type in ["input", "hidden"]:
             stddev = nonlinearity_gain / np.sqrt(fan_in)
         elif layer_type == "output":
-            stddev = nonlinearity_gain / fan_in
+            stddev = nonlinearity_gain / np.sqrt(fan_in)
         else:
             raise ValueError(f"Unknown {layer_type=}")
 
@@ -176,7 +176,7 @@ class ResidualBlock(nn.Module):
     @nn.compact
     def __call__(self, x, norm):
         if self.yang_init:
-            bias_init = kernel_init = yang_initializer("input", "relu")
+            bias_init = kernel_init = yang_initializer("hidden", "relu")
         else:
             kernel_init = nn.initializers.lecun_normal()
             bias_init = nn.initializers.zeros_init()
@@ -255,7 +255,7 @@ class Critic(nn.Module):
             kernel_init = yang_initializer("output", "identity")
             bias_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.lecun_normal()
+            kernel_init = nn.initializers.orthogonal(1.0)
             bias_init = nn.initializers.constant(0.0)
         x = self.norm(x)
         x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, name="Output")(x)
@@ -273,10 +273,10 @@ class Actor(nn.Module):
         if self.yang_init:
             init = yang_initializer("output", "action_softmax")
         else:
-            init = nn.initializers.lecun_normal()
+            init = nn.initializers.orthogonal(1.0)
         # Bias here is useless, because softmax is invariant to baseline.
         x = self.norm(x)
-        x = nn.Dense(self.action_dim, kernel_init=init, use_bias=False, name="Output")(x)
+        x = nn.Dense(self.action_dim, kernel_init=init, use_bias=True, name="Output")(x)
         return x, {"actor_ma": jnp.mean(jnp.abs(x))}
 
 
@@ -423,3 +423,101 @@ def label_and_learning_rate_for_params(
         learning_rates[k] = base_fan_in / fan_in
 
     return learning_rates, param_labels
+
+
+# %%
+
+
+@dataclasses.dataclass(frozen=True)
+class GuezResNetConfig(NetworkSpec):
+    channels: tuple[int, ...] = (64, 64, 64) * 3
+    strides: tuple[int, ...] = (1,) * 9
+    kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
+
+    mlp_hiddens: tuple[int, ...] = (256,)
+
+    def make(self) -> nn.Module:
+        return GuezResNet(self)
+
+
+class GuezResidualBlock(nn.Module):
+    channels: int
+    yang_init: bool
+    kernel_size: int
+
+    @nn.compact
+    def __call__(self, x, norm):
+        if self.yang_init:
+            bias_init = kernel_init = yang_initializer("hidden", "relu")
+        else:
+            kernel_init = nn.initializers.orthogonal(np.sqrt(2))
+            bias_init = nn.initializers.zeros_init()
+
+        inputs = x
+        x = nn.relu(x)
+        x = norm(x)
+        ksize = (self.kernel_size, self.kernel_size)
+        x = nn.Conv(self.channels, kernel_size=ksize, kernel_init=kernel_init, bias_init=bias_init, use_bias=True)(x)
+        return x + inputs
+
+
+class GuezConvSequence(nn.Module):
+    channels: int
+    kernel_size: int
+    strides: int
+    is_input: bool = False
+    yang_init: bool = False
+
+    @nn.compact
+    def __call__(self, x, norm):
+        if self.yang_init:
+            kernel_init = yang_initializer("input" if self.is_input else "hidden", "relu")
+        else:
+            kernel_init = nn.initializers.orthogonal(np.sqrt(2.0) if self.is_input else 1.0)
+        bias_init = nn.initializers.zeros_init()
+
+        ksize = (self.kernel_size, self.kernel_size)
+        strides = (self.strides, self.strides)
+
+        x = norm(x)
+        x = nn.Conv(
+            self.channels,
+            ksize,
+            strides,
+            kernel_init=kernel_init,
+            bias_init=bias_init,
+            name=INPUT_SENTINEL if self.is_input else None,
+            use_bias=True,
+        )(x)
+        x = GuezResidualBlock(self.channels, self.yang_init, self.kernel_size)(x, norm)
+        x = GuezResidualBlock(self.channels, self.yang_init, self.kernel_size)(x, norm)
+        return x
+
+
+class GuezResNet(nn.Module):
+    cfg: GuezResNetConfig
+
+    @nn.compact
+    def __call__(self, x):
+        # x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
+        x = jnp.transpose(x, (0, 2, 3, 1))
+        x = self.cfg.norm(x)
+        for layer_i, (channels, strides, ksize) in enumerate(zip(self.cfg.channels, self.cfg.strides, self.cfg.kernel_sizes)):
+            x = GuezConvSequence(
+                channels, kernel_size=ksize, strides=strides, yang_init=self.cfg.yang_init, is_input=(layer_i == 0)
+            )(x, norm=self.cfg.norm)
+        # x = nn.relu(x)
+        x = x.reshape((x.shape[0], -1))
+        for hidden in self.cfg.mlp_hiddens:
+            x = self.cfg.norm(x)
+            if self.cfg.yang_init:
+                x = nn.Dense(
+                    hidden,
+                    kernel_init=yang_initializer("hidden", "relu"),
+                    bias_init=yang_initializer("hidden", "relu"),
+                    use_bias=True,
+                )(x)
+            else:
+                x = nn.Dense(hidden, kernel_init=nn.initializers.orthogonal(np.sqrt(2)))(x)
+            x = nn.relu(x)
+        return x
