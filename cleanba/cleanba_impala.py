@@ -294,6 +294,15 @@ def rollout(
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
+        if (
+            update
+            % (int(4e6) // (args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size))
+            == 0
+        ):
+            if np.mean(returned_episode_returns) < -2.0:
+                print(f"Stopping program because {np.mean(returned_episode_returns)=} < -2.0")
+                MUST_STOP_PROGRAM = True
+
         if MUST_STOP_PROGRAM:
             break
 
@@ -540,7 +549,8 @@ def train(args: Args):
         global_step = 0
         actor_policy_version = 0
 
-        while True:
+        global MUST_STOP_PROGRAM
+        while not MUST_STOP_PROGRAM:
             learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
             sharded_storages = []
