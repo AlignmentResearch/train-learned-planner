@@ -294,30 +294,40 @@ def rollout(
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
+        if (
+            update
+            % (int(5e6) // (args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size))
+            == 0
+        ):
+            if np.mean(returned_episode_returns) < -1.8:
+                print(f"Stopping program because {np.mean(returned_episode_returns)=} < -1.8")
+                MUST_STOP_PROGRAM = True
+
         if MUST_STOP_PROGRAM:
             break
+
+        param_frequency = args.actor_update_frequency if update <= args.actor_update_cutoff else 1
 
         with time_and_append(log_stats.update_time):
             with time_and_append(log_stats.params_queue_get_time):
                 num_steps_with_bootstrap = args.num_steps
 
-                # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
-                # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
-                # behind the learner's policy version
                 if args.concurrency:
-                    if update != 2:
-                        params = params_queue.get(timeout=args.queue_timeout)
+                    # NOTE: `update != 2*args.actor_update_frequency` is actually IMPORTANT — it allows us to start
+                    # running policy collection concurrently with the learning process. It also ensures the actor's
+                    # policy version is only 1 step behind the learner's policy version
+                    if (
+                        (update - 1) % param_frequency == 0 and update != 2 * param_frequency
+                    ) or update == 1 + 2 * param_frequency:
+                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
                         # NOTE: block here is important because otherwise this thread will call
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
                         # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                        params.network_params["params"]["Dense_0"][
-                            "kernel"
-                        ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
-                        actor_policy_version += 1
+                        jax.block_until_ready(params)
                 else:
-                    params = params_queue.get(timeout=args.queue_timeout)
-                    actor_policy_version += 1
+                    if (update - 1) % args.actor_update_frequency == 0:
+                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
             with time_and_append(log_stats.rollout_time):
                 for _ in range(1, num_steps_with_bootstrap + 1):
@@ -351,16 +361,18 @@ def rollout(
                         )
                         obs_t = obs_t_plus_1
 
-                        log_stats.episode_returns.extend(episode_returns[done_t])
-                        returned_episode_returns[done_t] = episode_returns[done_t]
                         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
                         # the true return.
                         non_clipped_reward = info_t.get("reward", r_t)
+
                         episode_returns[:] += non_clipped_reward
+                        log_stats.episode_returns.extend(episode_returns[done_t])
+                        returned_episode_returns[done_t] = episode_returns[done_t]
                         episode_returns[:] *= ~done_t
+
+                        episode_lengths[:] += 1
                         log_stats.episode_lengths.extend(episode_lengths[done_t])
                         returned_episode_lengths[done_t] = episode_lengths[done_t]
-                        episode_lengths[:] += 1
                         episode_lengths[:] *= ~done_t
 
             with time_and_append(log_stats.storage_time):
@@ -424,6 +436,8 @@ def rollout(
             )
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
+            writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
+
         if update % args.eval_frequency == 0:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
@@ -453,39 +467,42 @@ def train(args: Args):
             return args.learning_rate * frac
 
         key, agent_params_subkey = jax.random.split(key, 2)
-        agent_params = args.net.init_params(envs, agent_params_subkey, np.array([envs.single_observation_space.sample()]))
+        agent_params = args.net.init_params(envs, agent_params_subkey)
 
-        learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params)
+        if args.optimizer_yang:
+            learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)
+            transform_chain = [
+                optax.multi_transform(
+                    transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
+                ),
+            ]
+        else:
+            transform_chain = []
+        transform_chain += [
+            optax.clip_by_global_norm(args.max_grad_norm),
+            (
+                optax.inject_hyperparams(rmsprop_pytorch_style)(
+                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                    eps=args.rmsprop_eps,
+                    decay=args.rmsprop_decay,
+                )
+                if args.optimizer == "rmsprop"
+                else (
+                    optax.inject_hyperparams(optax.adam)(
+                        learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
+                        b1=args.adam_b1,
+                        b2=args.rmsprop_decay,
+                        eps=args.rmsprop_eps,
+                        eps_root=0.0,
+                    )
+                )
+            ),
+        ]
 
         agent_state = TrainState.create(
             apply_fn=None,
             params=agent_params,
-            tx=optax.MultiSteps(
-                optax.chain(
-                    optax.multi_transform(
-                        transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
-                    ),
-                    optax.clip_by_global_norm(args.max_grad_norm),
-                    (
-                        optax.inject_hyperparams(rmsprop_pytorch_style)(
-                            learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                            eps=args.rmsprop_eps,
-                            decay=args.rmsprop_decay,
-                        )
-                        if args.optimizer == "rmsprop"
-                        else (
-                            optax.inject_hyperparams(optax.adam)(
-                                learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                                b1=0.9,
-                                b2=args.rmsprop_decay,
-                                eps=args.rmsprop_eps,
-                                eps_root=0.0,
-                            )
-                        )
-                    ),
-                ),
-                every_k_schedule=args.gradient_accumulation_steps,
-            ),
+            tx=optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps),
         )
 
         multi_device_update = jax.pmap(
@@ -502,6 +519,7 @@ def train(args: Args):
         params_queues = []
         rollout_queues = []
 
+        learner_policy_version = 0
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
         for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -509,7 +527,7 @@ def train(args: Args):
             for thread_id in range(args.num_actor_threads):
                 params_queues.append(queue.Queue(maxsize=1))
                 rollout_queues.append(queue.Queue(maxsize=1))
-                params_queues[-1].put(device_params)
+                params_queues[-1].put((device_params, learner_policy_version))
                 threading.Thread(
                     target=rollout,
                     args=(
@@ -526,13 +544,13 @@ def train(args: Args):
                 ).start()
 
         rollout_queue_get_time = deque(maxlen=10)
-        learner_policy_version = 0
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
         global_step = 0
         actor_policy_version = 0
 
-        while True:
+        global MUST_STOP_PROGRAM
+        while not MUST_STOP_PROGRAM:
             learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
             sharded_storages = []
@@ -558,10 +576,13 @@ def train(args: Args):
                     sharded_storages,
                 )
             unreplicated_params = unreplicate(agent_state.params)
-            for d_idx, d_id in enumerate(args.actor_device_ids):
-                device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
-                for thread_id in range(args.num_actor_threads):
-                    params_queues[d_idx * args.num_actor_threads + thread_id].put(device_params, timeout=args.queue_timeout)
+            if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
+                for d_idx, d_id in enumerate(args.actor_device_ids):
+                    device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
+                    for thread_id in range(args.num_actor_threads):
+                        params_queues[d_idx * args.num_actor_threads + thread_id].put(
+                            (device_params, learner_policy_version), timeout=args.queue_timeout
+                        )
 
             # Copy the parameters from the first device to all other learner devices
             if learner_policy_version % args.sync_frequency == 0:
@@ -600,6 +621,8 @@ def train(args: Args):
 
                 for name, value in metrics_dict.items():
                     writer.add_scalar(name, value[0].item(), global_step)
+
+                writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
             if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
                 if args.save_model:

@@ -16,9 +16,6 @@ spec:
         runAsGroup: {GROUP_ID}
       priorityClassName: interactive
       volumes:
-      - name: training
-        persistentVolumeClaim:
-          claimName: learned-planners
       - name: dotfiles
         configMap:
           name: dotfiles
@@ -31,7 +28,7 @@ spec:
           - bash
           - -c
           - |
-            git pull; git checkout {COMMIT_FULL}; git submodule update --recursive; sleep 2d
+            sudo mkdir -p "/training/.sokoban_cache"; sudo chown -R dev:dev "/training"; git clone https://github.com/google-deepmind/boxoban-levels "/training/.sokoban_cache/boxoban-levels-master"; git pull; git checkout {COMMIT_FULL}; git submodule update --recursive; sleep 2d
         resources:
           requests:
             cpu: {CPU}
@@ -64,8 +61,6 @@ spec:
         - name: GIT_CONFIG_PARAMETERS
           value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
         volumeMounts:
-        - name: training
-          mountPath: /training
         - name: dotfiles
           mountPath: /home/dev/.tmux.conf
           subPath: tmux.conf

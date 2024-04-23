@@ -1,5 +1,4 @@
 import dataclasses
-import random
 from dataclasses import field
 from pathlib import Path
 from typing import List
@@ -31,6 +30,9 @@ class Args:
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
     sync_frequency: int = 400
 
+    actor_update_frequency: int = 1
+    actor_update_cutoff: int = int(1e20)
+
     base_run_dir: Path = Path("/tmp/cleanba")
 
     loss: ImpalaLossConfig = ImpalaLossConfig()
@@ -48,8 +50,11 @@ class Args:
     gradient_accumulation_steps: int = 1  # the number of gradient accumulation steps before performing an optimization step
     max_grad_norm: float = 0.0625  # the maximum norm for the gradient clipping
     optimizer: str = "rmsprop"
+    adam_b1: float = 0.9
     rmsprop_eps: float = 1.5625e-05
     rmsprop_decay: float = 0.99
+    optimizer_yang: bool = False
+    base_fan_in: int = 3 * 3 * 32
 
     queue_timeout: float = 300.0  # If any of the actor/learner queues takes at least this many seconds, crash training.
 

@@ -5,7 +5,7 @@ import random
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, ClassVar, List, Literal, Optional, Tuple, Union
+from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
@@ -140,6 +140,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
 
 @dataclasses.dataclass
 class BaseSokobanEnvConfig(EnvConfig):
+    min_episode_steps: int = 60
     tinyworld_obs: bool = False
     tinyworld_render: bool = False
     terminate_on_first_box: bool = False
@@ -163,6 +164,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             reset_seed=self.seed,
             reset=self.reset,
             asynchronous=self.asynchronous,
+            min_episode_steps=self.min_episode_steps,
         )
 
     def env_reward_kwargs(self):
