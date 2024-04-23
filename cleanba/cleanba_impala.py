@@ -297,25 +297,27 @@ def rollout(
         if MUST_STOP_PROGRAM:
             break
 
+        param_frequency = args.actor_update_frequency if update <= args.actor_update_cutoff else 1
+
         with time_and_append(log_stats.update_time):
             with time_and_append(log_stats.params_queue_get_time):
                 num_steps_with_bootstrap = args.num_steps
 
-                if update > args.actor_update_cutoff or (update - 1) % args.actor_update_frequency == 0:
-                    # NOTE: `update != 2` is actually IMPORTANT — it allows us to start running policy collection
-                    # concurrently with the learning process. It also ensures the actor's policy version is only 1 step
-                    # behind the learner's policy version
-                    if args.concurrency:
-                        if update != 2:
-                            params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
-                            # NOTE: block here is important because otherwise this thread will call
-                            # the jitted `get_action` function that hangs until the params are ready.
-                            # This blocks the `get_action` function in other actor threads.
-                            # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                            params.actor_params["params"]["Output"][
-                                "kernel"
-                            ].block_until_ready()  # TODO: check if params.block_until_ready() is enough
-                    else:
+                if args.concurrency:
+                    # NOTE: `update != 2*args.actor_update_frequency` is actually IMPORTANT — it allows us to start
+                    # running policy collection concurrently with the learning process. It also ensures the actor's
+                    # policy version is only 1 step behind the learner's policy version
+                    if (
+                        (update - 1) % param_frequency == 0 and update != 2 * param_frequency
+                    ) or update == 1 + 2 * param_frequency:
+                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
+                        # NOTE: block here is important because otherwise this thread will call
+                        # the jitted `get_action` function that hangs until the params are ready.
+                        # This blocks the `get_action` function in other actor threads.
+                        # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
+                        jax.block_until_ready(params)
+                else:
+                    if (update - 1) % args.actor_update_frequency == 0:
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
             with time_and_append(log_stats.rollout_time):
