@@ -135,10 +135,11 @@ class AtariCNNSpec(NetworkSpec):
 
 
 NONLINEARITY_GAINS: dict[str, SupportsFloat] = dict(
-    relu=1.0,  # np.sqrt(2.0),
+    relu=np.sqrt(2.0),
     identity=1.0,
     action_softmax=1.0,
     tanh=5 / 3,
+    first_guez_conv=0.7712,
 )
 
 
@@ -253,12 +254,11 @@ class Critic(nn.Module):
     def __call__(self, x):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
-            bias_init = yang_initializer("output", "identity")
         else:
             kernel_init = nn.initializers.orthogonal(1.0)
-            bias_init = nn.initializers.constant(0.0)
+        bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, name="Output")(x)
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
         bias = self.variables["params"]["Output"]["bias"]
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
@@ -271,12 +271,12 @@ class Actor(nn.Module):
     @nn.compact
     def __call__(self, x):
         if self.yang_init:
-            init = yang_initializer("output", "action_softmax")
+            kernel_init = yang_initializer("output", "identity")
         else:
-            init = nn.initializers.orthogonal(1.0)
-        # Bias here is useless, because softmax is invariant to baseline.
+            kernel_init = nn.initializers.orthogonal(1.0)
+        bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(self.action_dim, kernel_init=init, use_bias=True, name="Output")(x)
+        x = nn.Dense(self.action_dim, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
         return x, {"actor_ma": jnp.mean(jnp.abs(x))}
 
 
@@ -448,10 +448,10 @@ class GuezResidualBlock(nn.Module):
     @nn.compact
     def __call__(self, x, norm):
         if self.yang_init:
-            bias_init = kernel_init = yang_initializer("hidden", "relu")
+            bias_init = kernel_init = yang_initializer("hidden", "identity")
         else:
             kernel_init = nn.initializers.orthogonal(np.sqrt(2))
-            bias_init = nn.initializers.zeros_init()
+        bias_init = nn.initializers.zeros_init()
 
         inputs = x
         x = nn.relu(x)
@@ -471,7 +471,7 @@ class GuezConvSequence(nn.Module):
     @nn.compact
     def __call__(self, x, norm):
         if self.yang_init:
-            kernel_init = yang_initializer("input" if self.is_input else "hidden", "relu")
+            kernel_init = yang_initializer("input" if self.is_input else "hidden", "first_guez_conv")
         else:
             kernel_init = nn.initializers.orthogonal(np.sqrt(2.0) if self.is_input else 1.0)
         bias_init = nn.initializers.zeros_init()
@@ -506,7 +506,12 @@ class GuezResNet(nn.Module):
             x = GuezConvSequence(
                 channels, kernel_size=ksize, strides=strides, yang_init=self.cfg.yang_init, is_input=(layer_i == 0)
             )(x, norm=self.cfg.norm)
-        # x = nn.relu(x)
+
+        if isinstance(self.cfg.norm, IdentityNorm):
+            x = 2 * nn.relu(x)
+        else:
+            x = nn.relu(x)
+
         x = x.reshape((x.shape[0], -1))
         for hidden in self.cfg.mlp_hiddens:
             x = self.cfg.norm(x)
@@ -514,10 +519,10 @@ class GuezResNet(nn.Module):
                 x = nn.Dense(
                     hidden,
                     kernel_init=yang_initializer("hidden", "relu"),
-                    bias_init=yang_initializer("hidden", "relu"),
+                    bias_init=nn.initializers.zeros_init(),
                     use_bias=True,
                 )(x)
             else:
-                x = nn.Dense(hidden, kernel_init=nn.initializers.orthogonal(np.sqrt(2)))(x)
+                x = nn.Dense(hidden, kernel_init=nn.initializers.normal(np.sqrt(2 / hidden)))(x)
             x = nn.relu(x)
         return x
