@@ -47,7 +47,8 @@ class EvalConfig:
                         key=key,
                         temperature=self.temperature,
                     )
-                    cpu_action = np.asarray(action)
+                    # TODO: remove 1+ which is here to avoid noop
+                    cpu_action = 1 + np.asarray(action)
                     obs, rewards, truncated, terminated, infos = envs.step(cpu_action)
                     episode_returns[~eps_done] += rewards[~eps_done]
                     episode_lengths[~eps_done] += 1
@@ -60,11 +61,7 @@ class EvalConfig:
 
             return dict(
                 episode_returns_mean=float(np.mean(all_episode_returns)),
-                episode_returns_max=float(np.max(all_episode_returns)),
-                episode_returns_min=float(np.min(all_episode_returns)),
                 episode_lengths_mean=float(np.mean(all_episode_lengths)),
-                episode_lengths_max=float(np.max(all_episode_lengths)),
-                episode_lengths_min=float(np.min(all_episode_lengths)),
             )
         finally:
             envs.close()

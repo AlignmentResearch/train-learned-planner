@@ -453,7 +453,7 @@ class GuezResidualBlock(nn.Module):
         if self.yang_init:
             bias_init = kernel_init = yang_initializer("hidden", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(np.sqrt(2))
+            kernel_init = nn.initializers.lecun_normal()
         bias_init = nn.initializers.zeros_init()
 
         inputs = x
@@ -476,7 +476,7 @@ class GuezConvSequence(nn.Module):
         if self.yang_init:
             kernel_init = yang_initializer("input" if self.is_input else "hidden", "first_guez_conv")
         else:
-            kernel_init = nn.initializers.orthogonal(np.sqrt(2.0) if self.is_input else 1.0)
+            kernel_init = nn.initializers.lecun_normal()
         bias_init = nn.initializers.zeros_init()
 
         ksize = (self.kernel_size, self.kernel_size)
@@ -513,7 +513,7 @@ class GuezResNet(nn.Module):
                 channels, kernel_size=ksize, strides=strides, yang_init=self.cfg.yang_init, is_input=(layer_i == 0)
             )(x, norm=self.cfg.norm)
 
-        if isinstance(self.cfg.norm, IdentityNorm):
+        if isinstance(self.cfg.norm, IdentityNorm) and self.cfg.yang_init:
             x = 2 * nn.relu(x)
         else:
             x = nn.relu(x)
@@ -529,6 +529,6 @@ class GuezResNet(nn.Module):
                     use_bias=True,
                 )(x)
             else:
-                x = nn.Dense(hidden, kernel_init=nn.initializers.normal(np.sqrt(2 / hidden)))(x)
+                x = nn.Dense(hidden)(x)
             x = nn.relu(x)
         return x
