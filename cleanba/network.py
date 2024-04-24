@@ -84,16 +84,6 @@ class NetworkSpec(abc.ABC):
         assert out._n_actions() == n_actions
         return out
 
-    @staticmethod
-    def process_logits(logits):
-        if logits.shape[-1] == 4:
-            # Assume we're doing sokoban. Only take 'push' actions.
-            pre_action = jnp.full((*logits.shape[:-1], 1), jnp.inf)
-            post_action = jnp.full((*logits.shape[:-1], 4), jnp.inf)
-            return jnp.concatenate([pre_action, logits, post_action], axis=-1)
-        else:
-            return logits
-
     @partial(jax.jit, static_argnames=["self", "temperature"])
     def get_action(
         self,
@@ -106,7 +96,6 @@ class NetworkSpec(abc.ABC):
         hidden = self.make().apply(params.network_params, next_obs)
 
         logits, _ = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(params.actor_params, hidden)
-        logits = self.process_logits(logits)
         assert isinstance(logits, jax.Array)
 
         if temperature == 0.0:
@@ -129,7 +118,6 @@ class NetworkSpec(abc.ABC):
         logits, logits_metrics = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(
             params.actor_params, hidden
         )
-        logits = self.process_logits(logits)
         value, value_metrics = Critic(yang_init=self.yang_init, norm=self.norm).apply(params.critic_params, hidden)
 
         assert isinstance(logits, jax.Array)

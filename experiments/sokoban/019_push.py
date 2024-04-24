@@ -18,7 +18,7 @@ clis = []
 for env_seed, learn_seed in [(random_seed(), random_seed()), (random_seed(), random_seed())]:
     for yang_optim in [False, True]:
         for norm in [IdentityNorm(), RMSNorm()]:
-            for dim_room, num_boxes in [(10, 1)]:
+            for dim_room, num_boxes in [(7, 1)]:
                 network = GuezResNetConfig(yang_init=True, norm=norm)
 
                 def update_fn(config: Args) -> Args:
