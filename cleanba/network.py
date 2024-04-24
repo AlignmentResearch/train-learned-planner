@@ -444,11 +444,12 @@ def label_and_learning_rate_for_params(
 
 @dataclasses.dataclass(frozen=True)
 class GuezResNetConfig(NetworkSpec):
-    channels: tuple[int, ...] = (64, 64, 64) * 3
+    channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
     strides: tuple[int, ...] = (1,) * 9
-    kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
+    kernel_sizes: tuple[int, ...] = (4,) * 9
 
     mlp_hiddens: tuple[int, ...] = (256,)
+    normalize_input: bool = False
 
     def make(self) -> nn.Module:
         return GuezResNet(self)
@@ -513,7 +514,10 @@ class GuezResNet(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
+        if self.cfg.normalize_input:
+            x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
+            x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
+
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = self.cfg.norm(x)
         for layer_i, (channels, strides, ksize) in enumerate(zip(self.cfg.channels, self.cfg.strides, self.cfg.kernel_sizes)):
