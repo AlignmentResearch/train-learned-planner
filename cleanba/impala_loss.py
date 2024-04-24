@@ -9,6 +9,8 @@ import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
 
+from cleanba.network import AgentParams
+
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig:
@@ -31,6 +33,9 @@ class ImpalaLossConfig:
 
     normalize_advantage: bool = False
 
+    logit_l2_coef: float = 0.0
+    weight_l2_coef: float = 0.0
+
 
 class Rollout(NamedTuple):
     obs_t: jax.Array
@@ -42,7 +47,7 @@ class Rollout(NamedTuple):
 
 
 def impala_loss(
-    params,
+    params: AgentParams,
     get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array, dict[str, jax.Array]]],
     args: ImpalaLossConfig,
     minibatch: Rollout,
@@ -81,7 +86,6 @@ def impala_loss(
     # For the logits, we discard the last one, which makes the time-steps of `nn_logits_from_obs` match exactly with the
     # time-steps from `minibatch.logits_t`
     nn_logits_t = nn_logits_from_obs[:-1]
-    del nn_logits_from_obs
 
     ## Remark 1:
     # v_t does not enter the gradient in any way, because
@@ -131,6 +135,10 @@ def impala_loss(
     total_loss = pg_loss
     total_loss += args.vf_coef * v_loss
     total_loss += args.ent_coef * ent_loss
+    total_loss += args.logit_l2_coef * jnp.sum(jnp.square(nn_logits_from_obs))
+    total_loss += args.weight_l2_coef * sum(
+        jnp.sum(jnp.square(p)) for p in [*jax.tree.leaves(params.actor_params), *jax.tree.leaves(params.critic_params)]
+    )
 
     # Useful metrics to know
     targets_tm1 = vtrace_returns.errors + v_tm1
