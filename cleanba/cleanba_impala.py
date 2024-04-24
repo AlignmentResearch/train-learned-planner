@@ -186,6 +186,7 @@ MUST_STOP_PROGRAM: bool = False
 class LoggingStats:
     episode_returns: list[float]
     episode_lengths: list[float]
+    episode_success: list[float]
     params_queue_get_time: list[float]
     rollout_time: list[float]
     create_rollout_time: list[float]
@@ -285,6 +286,7 @@ def rollout(
     episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
+    returned_episode_success = np.zeros((args.local_num_envs,), dtype=np.bool_)
 
     actor_policy_version = 0
     storage = []
@@ -294,15 +296,6 @@ def rollout(
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
-        if (
-            update
-            % (int(5e6) // (args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size))
-            == 0
-        ):
-            if np.mean(returned_episode_returns) < -1.8:
-                print(f"Stopping program because {np.mean(returned_episode_returns)=} < -1.8")
-                MUST_STOP_PROGRAM = True
-
         if MUST_STOP_PROGRAM:
             break
 
@@ -375,6 +368,9 @@ def rollout(
                         returned_episode_lengths[done_t] = episode_lengths[done_t]
                         episode_lengths[:] *= ~done_t
 
+                        log_stats.episode_success.extend(map(float, term_t[done_t]))
+                        returned_episode_success[done_t] = term_t[done_t]
+
             with time_and_append(log_stats.storage_time):
                 sharded_storage = concat_and_shard_rollout(storage, obs_t, learner_devices)
                 storage.clear()
@@ -426,6 +422,9 @@ def rollout(
             )
             writer.add_scalar(
                 f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step
+            )
+            writer.add_scalar(
+                f"charts/{device_thread_id}/returned_avg_episode_success", np.mean(returned_episode_success), global_step
             )
 
             writer.add_scalar(
