@@ -81,7 +81,7 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=64,
+                    num_envs=256,
                     cache_path=CACHE_PATH,
                     split="valid",
                     difficulty="unfiltered",
@@ -92,10 +92,21 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=64,
+                    num_envs=256,
                     cache_path=CACHE_PATH,
                     split="test",
                     difficulty="unfiltered",
+                ),
+                n_episode_multiple=2,
+            ),
+            train_medium=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="train",
+                    difficulty="medium",
                 ),
                 n_episode_multiple=2,
             ),
@@ -103,20 +114,9 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=64,
+                    num_envs=256,
                     cache_path=CACHE_PATH,
                     split="valid",
-                    difficulty="medium",
-                ),
-                n_episode_multiple=2,
-            ),
-            test_medium=EvalConfig(
-                EnvpoolBoxobanConfig(
-                    max_episode_steps=240,
-                    min_episode_steps=240,
-                    num_envs=64,
-                    cache_path=CACHE_PATH,
-                    split="test",
                     difficulty="medium",
                 ),
                 n_episode_multiple=2,
