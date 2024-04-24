@@ -70,6 +70,7 @@ def sokoban_resnet() -> Args:
     return Args(
         train_env=EnvpoolBoxobanConfig(
             max_episode_steps=120,
+            min_episode_steps=120 * 3 // 4,
             num_envs=1,
             cache_path=CACHE_PATH,
             split="train",
@@ -79,6 +80,7 @@ def sokoban_resnet() -> Args:
             valid_unfiltered=EvalConfig(
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
+                    min_episode_steps=240,
                     num_envs=64,
                     cache_path=CACHE_PATH,
                     split="valid",
@@ -89,6 +91,7 @@ def sokoban_resnet() -> Args:
             test_unfiltered=EvalConfig(
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
+                    min_episode_steps=240,
                     num_envs=64,
                     cache_path=CACHE_PATH,
                     split="test",
@@ -99,6 +102,7 @@ def sokoban_resnet() -> Args:
             valid_medium=EvalConfig(
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
+                    min_episode_steps=240,
                     num_envs=64,
                     cache_path=CACHE_PATH,
                     split="valid",
@@ -109,6 +113,7 @@ def sokoban_resnet() -> Args:
             test_medium=EvalConfig(
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
+                    min_episode_steps=240,
                     num_envs=64,
                     cache_path=CACHE_PATH,
                     split="test",
