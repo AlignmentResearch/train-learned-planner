@@ -306,12 +306,12 @@ def rollout(
                 num_steps_with_bootstrap = args.num_steps
 
                 if args.concurrency:
-                    # NOTE: `update != 2*args.actor_update_frequency` is actually IMPORTANT — it allows us to start
+                    # NOTE: `update - 1 != args.actor_update_frequency` is actually IMPORTANT — it allows us to start
                     # running policy collection concurrently with the learning process. It also ensures the actor's
                     # policy version is only 1 step behind the learner's policy version
-                    if (
-                        (update - 1) % param_frequency == 0 and update != 2 * param_frequency
-                    ) or update == 1 + 2 * param_frequency:
+                    if ((update - 1) % param_frequency == 0 and (update - 1) != param_frequency) or (
+                        (update - 2) == param_frequency
+                    ):
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
                         # NOTE: block here is important because otherwise this thread will call
                         # the jitted `get_action` function that hangs until the params are ready.
