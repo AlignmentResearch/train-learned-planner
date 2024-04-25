@@ -82,7 +82,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             clis.append(cli)
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = 2
+RUNS_PER_MACHINE = 1
 for i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
