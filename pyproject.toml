@@ -60,6 +60,7 @@ dependencies = [
     "moviepy ~=1.0.3",
     "rlax ~=0.1.5",
     "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
+    "ray[tune] ~=2.11.0",
 ]
 [project.optional-dependencies]
 dev = [

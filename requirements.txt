@@ -14,8 +14,14 @@ absl-py==2.1.0
     #   rlax
     #   tensorboard
     #   tensorflow-probability
+aiosignal==1.3.1
+    # via ray
 appdirs==1.4.4
     # via wandb
+attrs==23.2.0
+    # via
+    #   jsonschema
+    #   referencing
 cachetools==5.3.3
     # via google-auth
 certifi==2024.2.2
@@ -33,7 +39,9 @@ chex==0.1.86
     #   optax
     #   rlax
 click==8.1.7
-    # via wandb
+    # via
+    #   ray
+    #   wandb
 cloudpickle==3.0.0
     # via
     #   gym
@@ -71,11 +79,18 @@ farconf @ git+https://github.com/AlignmentResearch/farconf.git
 filelock==3.13.3
     # via
     #   huggingface-hub
+    #   ray
     #   virtualenv
 flax==0.8.2
     # via lp-cleanba (pyproject.toml)
+frozenlist==1.4.1
+    # via
+    #   aiosignal
+    #   ray
 fsspec==2024.3.1
-    # via etils
+    # via
+    #   etils
+    #   ray
 gast==0.5.4
     # via tensorflow-probability
 gitdb==4.0.11
@@ -125,6 +140,10 @@ iniconfig==2.0.0
     #   optax
     #   orbax-checkpoint
     #   rlax
+jsonschema==4.21.1
+    # via ray
+jsonschema-specifications==2023.12.1
+    # via jsonschema
 markdown==3.6
     # via tensorboard
 markdown-it-py==3.0.0
@@ -144,6 +163,7 @@ msgpack==1.0.8
     # via
     #   flax
     #   orbax-checkpoint
+    #   ray
 names-generator==0.1.0
     # via lp-cleanba (pyproject.toml)
 nest-asyncio==1.6.0
@@ -172,6 +192,8 @@ numpy==1.26.4
     #   opt-einsum
     #   optax
     #   orbax-checkpoint
+    #   pandas
+    #   pyarrow
     #   rlax
     #   scipy
     #   tensorboard
@@ -194,7 +216,10 @@ packaging==24.0
     # via
     #   huggingface-hub
     #   pytest
+    #   ray
     #   tensorboardx
+pandas==2.2.2
+    # via ray
 pathtools==0.1.2
     # via wandb
 pillow==10.3.0
@@ -210,11 +235,14 @@ proglog==0.1.10
 protobuf==4.25.3
     # via
     #   orbax-checkpoint
+    #   ray
     #   tensorboard
     #   tensorboardx
     #   wandb
 psutil==5.9.8
     # via wandb
+pyarrow==16.0.0
+    # via ray
 pyasn1==0.6.0
     # via
     #   pyasn1-modules
@@ -227,6 +255,10 @@ pyright==1.1.357
     # via lp-cleanba (pyproject.toml)
 pytest==7.3.2
     # via lp-cleanba (pyproject.toml)
+python-dateutil==2.9.0.post0
+    # via pandas
+pytz==2024.1
+    # via pandas
 pyyaml==6.0.1
     # via
     #   cmdkit
@@ -235,11 +267,19 @@ pyyaml==6.0.1
     #   huggingface-hub
     #   orbax-checkpoint
     #   pre-commit
+    #   ray
     #   wandb
+ray[tune]==2.11.0
+    # via lp-cleanba (pyproject.toml)
+referencing==0.35.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
 requests==2.31.0
     # via
     #   huggingface-hub
     #   moviepy
+    #   ray
     #   requests-oauthlib
     #   tensorboard
     #   wandb
@@ -251,6 +291,10 @@ rich==13.7.1
     #   tyro
 rlax==0.1.6
     # via lp-cleanba (pyproject.toml)
+rpds-py==0.18.0
+    # via
+    #   jsonschema
+    #   referencing
 rsa==4.9
     # via google-auth
 ruff==0.1.15
@@ -268,6 +312,7 @@ shtab==1.7.1
 six==1.16.0
     # via
     #   docker-pycreds
+    #   python-dateutil
     #   tensorflow-probability
 smmap==5.0.1
     # via gitdb
@@ -276,7 +321,9 @@ tensorboard==2.12.3
 tensorboard-data-server==0.7.2
     # via tensorboard
 tensorboardx==2.6.2.2
-    # via lp-cleanba (pyproject.toml)
+    # via
+    #   lp-cleanba (pyproject.toml)
+    #   ray
 tensorflow-probability==0.24.0
     # via distrax
 tensorstore==0.1.56
@@ -310,6 +357,8 @@ typing-extensions==4.11.0
     #   tyro
 tyro==0.5.18
     # via lp-cleanba (pyproject.toml)
+tzdata==2024.1
+    # via pandas
 urllib3==2.2.1
     # via
     #   requests
