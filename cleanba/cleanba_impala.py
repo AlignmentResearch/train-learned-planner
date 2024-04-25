@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import math
 import os
 import queue
 import random
@@ -10,7 +11,7 @@ import warnings
 from collections import deque
 from functools import partial
 from pathlib import Path
-from typing import Any, Iterator, List
+from typing import Any, Iterator, List, Optional
 
 import chex
 import farconf
@@ -56,7 +57,7 @@ def unreplicate(tree):
 
 
 class WandbWriter:
-    save_dir: Path
+    step_digits: int
 
     def __init__(self, cfg: "Args"):
         wandb_kwargs: dict[str, Any]
@@ -91,11 +92,23 @@ class WandbWriter:
         )
 
         assert wandb.run is not None
-        self.save_dir = Path(wandb.run.dir).parent / "local-files"
-        self.save_dir.mkdir()
+        self._save_dir = Path(wandb.run.dir).parent / "local-files"
+        self._save_dir.mkdir()
+
+        self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
     def add_scalar(self, name: str, value: int | float, global_step: int):
         wandb.log({name: value}, step=global_step)
+
+    @contextlib.contextmanager
+    def save_dir(self, global_step: int) -> Iterator[Path]:
+        name = f"cp_{{step:0{self.step_digits}d}}".format(step=global_step)
+        out = self._save_dir / name
+        out.mkdir()
+        yield out
+
+    def maybe_save_barrier(self) -> None:
+        pass
 
 
 @dataclasses.dataclass(frozen=True)
@@ -446,14 +459,19 @@ def rollout(
                 for k, v in log_dict.items():
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
+            if args.save_model:
+                print(f"Actor thread {device_thread_id} entering save barrier")
+                writer.maybe_save_barrier()
 
-def train(args: Args):
+
+def train(args: Args, *, writer: Optional[WandbWriter] = None):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
     with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
         pprint(runtime_info)
-        writer = WandbWriter(args)
+        if writer is None:
+            writer = WandbWriter(args)
 
         # seeding
         random.seed(args.seed)
@@ -624,26 +642,27 @@ def train(args: Args):
 
                 writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
-            if learner_policy_version % args.eval_frequency == 0 and learner_policy_version != 0:
-                if args.save_model:
-                    saved_model_version: int = learner_policy_version // args.eval_frequency
-                    with open(writer.save_dir / f"{saved_model_version:03d}.model", "wb") as f:
-                        f.write(
-                            flax.serialization.to_bytes(
+            if args.save_model and learner_policy_version % args.eval_frequency == 0:
+                print("Learner thread entering save barrier (should be last)")
+                writer.maybe_save_barrier()
+
+                with writer.save_dir(global_step) as dir, open(dir / "model", "wb") as f:
+                    f.write(
+                        flax.serialization.to_bytes(
+                            [
+                                farconf.to_dict(args, Args),
                                 [
-                                    farconf.to_dict(args, Args),
-                                    [
-                                        agent_state.params.network_params,
-                                        agent_state.params.actor_params,
-                                        agent_state.params.critic_params,
-                                    ],
-                                ]
-                            )
+                                    agent_state.params.network_params,
+                                    agent_state.params.actor_params,
+                                    agent_state.params.critic_params,
+                                ],
+                            ]
                         )
-                    writer.add_scalar("eval/saved_model_idx", saved_model_version, global_step)
+                    )
 
             if learner_policy_version >= runtime_info.num_updates:
-                break
+                # The program is finished!
+                return
 
 
 if __name__ == "__main__":
