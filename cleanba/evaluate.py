@@ -29,10 +29,12 @@ class EvalConfig:
         try:
             all_episode_returns = []
             all_episode_lengths = []
+            all_episode_successes = []
             for _ in range(self.n_episode_multiple):
                 obs, _ = envs.reset()
 
                 eps_done = np.zeros(envs.num_envs, dtype=np.bool_)
+                episode_success = np.zeros(envs.num_envs, dtype=np.bool_)
                 episode_returns = np.zeros(envs.num_envs, dtype=np.float64)
                 episode_lengths = np.zeros(envs.num_envs, dtype=np.int64)
 
@@ -52,16 +54,19 @@ class EvalConfig:
                     obs, rewards, truncated, terminated, infos = envs.step(cpu_action)
                     episode_returns[~eps_done] += rewards[~eps_done]
                     episode_lengths[~eps_done] += 1
+                    episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
 
                     # Set as done the episodes which are done
                     eps_done |= truncated | terminated
 
                 all_episode_returns.append(episode_returns)
                 all_episode_lengths.append(episode_lengths)
+                all_episode_successes.append(episode_success)
 
             return dict(
                 episode_returns_mean=float(np.mean(all_episode_returns)),
                 episode_lengths_mean=float(np.mean(all_episode_lengths)),
+                episode_success=float(np.mean(all_episode_successes)),
             )
         finally:
             envs.close()
