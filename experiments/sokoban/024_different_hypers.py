@@ -22,7 +22,6 @@ len_actor_device_ids = 1
 num_actor_threads = 1
 
 clis = []
-vf_coef = 0.1
 train_epochs = 1
 actor_update_frequency = 3
 
