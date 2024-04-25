@@ -51,7 +51,7 @@ class EvalConfig:
                     )
                     # TODO: remove 1+ which is here to avoid noop
                     cpu_action = 1 + np.asarray(action)
-                    obs, rewards, truncated, terminated, infos = envs.step(cpu_action)
+                    obs, rewards, terminated, truncated, infos = envs.step(cpu_action)
                     episode_returns[~eps_done] += rewards[~eps_done]
                     episode_lengths[~eps_done] += 1
                     episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
