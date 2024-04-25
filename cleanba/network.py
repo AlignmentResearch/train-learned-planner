@@ -506,7 +506,7 @@ class GuezResNet(nn.Module):
             x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
             x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
         else:
-            x /= 255.0
+            x = x / 255.0
 
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = self.cfg.norm(x)
