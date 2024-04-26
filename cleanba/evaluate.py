@@ -49,8 +49,7 @@ class EvalConfig:
                         key=key,
                         temperature=self.temperature,
                     )
-                    # TODO: remove 1+ which is here to avoid noop
-                    cpu_action = 1 + np.asarray(action)
+                    cpu_action = np.asarray(action)
                     obs, rewards, terminated, truncated, infos = envs.step(cpu_action)
                     episode_returns[~eps_done] += rewards[~eps_done]
                     episode_lengths[~eps_done] += 1

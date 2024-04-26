@@ -343,8 +343,7 @@ def rollout(
                         a_t, logits_t, key = args.net.get_action(params, obs_t, key)
 
                     with time_and_append(log_stats.device2host_time):
-                        # TODO: remove 1+ which is here to avoid noop
-                        cpu_action = np.array(a_t) + 1  # Add 1 to account for NOOP being action 0
+                        cpu_action = np.array(a_t)
 
                     with time_and_append(log_stats.env_send_time):
                         envs.step_async(cpu_action)

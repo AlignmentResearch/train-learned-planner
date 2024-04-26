@@ -157,6 +157,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             num_envs=self.num_envs,
             tinyworld_obs=self.tinyworld_obs,
             tinyworld_render=self.tinyworld_render,
+            render_mode="rgb_8x8",
             # Sokoban env uses `max_steps` internally
             max_steps=self.max_episode_steps,
             # Passing `max_episode_steps` to Gymnasium makes it add a TimeLimitWrapper

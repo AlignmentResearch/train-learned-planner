@@ -113,4 +113,4 @@ typecheck:
 
 PYTEST_ARGS ?=
 mactest:
-	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg2]'
+	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg4-shape4]'
