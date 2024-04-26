@@ -22,7 +22,9 @@ from cleanba.network import AgentParams, NetworkSpec
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
 @pytest.mark.parametrize("num_timesteps", [20, 2, 1])
 @pytest.mark.parametrize("last_value", [0.0, 1.0])
-def test_vtrace_alignment(np_rng: np.random.Generator, gamma: float, num_timesteps: int, last_value: float):
+def test_vtrace_alignment(gamma: float, num_timesteps: int, last_value: float):
+    np_rng = np.random.default_rng(1234)
+
     rewards = np_rng.uniform(0.1, 2.0, size=num_timesteps)
     correct_returns = np.zeros(len(rewards) + 1)
 
@@ -50,9 +52,8 @@ def test_vtrace_alignment(np_rng: np.random.Generator, gamma: float, num_timeste
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
 @pytest.mark.parametrize("num_timesteps", [20, 2])  # Note: with 1 timesteps we get zero-length arrays
 @pytest.mark.parametrize("last_value", [0.0, 1.0])
-def test_impala_loss_zero_when_accurate(
-    np_rng: np.random.Generator, gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5
-):
+def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5):
+    np_rng = np.random.default_rng(1234)
     rewards = np_rng.uniform(0.1, 2.0, size=(num_timesteps, batch_size))
     correct_returns = np.zeros((num_timesteps + 1, batch_size))
 
@@ -127,8 +128,6 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[NDArray, dict[str, Any]]:
-        if seed is None:
-            seed = self.cfg.seed
         super().reset(seed=seed, options=options)
 
         num_timesteps = int(self.np_random.integers(2, self.cfg.max_episode_steps, size=()))
@@ -151,17 +150,20 @@ class TrivialEnvConfig(EnvConfig):
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        env_fn = partial(TrivialEnv, cfg=self)
-        return partial(gym.vector.SyncVectorEnv, [env_fn] * self.num_envs)
+        seeds = np.random.default_rng(self.seed).integers(2**30 - 1, size=(self.num_envs,))
+        print("The seeds are", seeds)
+        env_fns = [partial(TrivialEnv, cfg=dataclasses.replace(self, seed=int(s))) for s in seeds]
+        return partial(gym.vector.SyncVectorEnv, env_fns)
 
 
-def test_trivial_env_correct_returns(np_rng: np.random.Generator, num_envs: int = 7, gamma: float = 0.9):
-    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma, truncation_probability=0.0).make()
+def test_trivial_env_correct_returns(num_envs: int = 7, gamma: float = 0.9):
+    np_rng = np.random.default_rng(1234)
+    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma, truncation_probability=0.0, seed=1234).make()
 
     returns = []
     rewards = []
     terminateds = []
-    obs, _ = envs.reset(seed=1234)
+    obs, _ = envs.reset()
     returns.append(obs)
 
     num_timesteps = 30
@@ -214,6 +216,8 @@ class ZeroActionNetworkSpec(NetworkSpec):
 
 @pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
 def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
+    np.random.seed(1234)
+
     args = cleanba_impala.Args(
         train_env=TrivialEnvConfig(
             max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability, seed=4
@@ -284,8 +288,10 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
 
         rho_tm1 = np.ones((num_timesteps, num_envs))
 
+        # We want the error to be 0 when the environment is truncated
+        r_t = (~transition.truncated_t) * transition.r_t + transition.truncated_t * v_tm1
         out = jax.vmap(rlax.vtrace, 1, 1)(v_tm1, v_t, r_t, discount_t, rho_tm1)
-        assert np.allclose(out, np.zeros_like(out), atol=1e-6), f"failed at {iteration=}"
+        assert np.allclose(out, np.zeros_like(out), atol=1e-5), f"Return was incorrect at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
         (total_loss, metrics_dict) = impala_loss(
