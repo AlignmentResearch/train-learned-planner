@@ -52,19 +52,6 @@ def impala_loss(
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    # If the episode has been truncated, the value of the next state (after truncation) would be some non-zero amount.
-    # But we don't have access to that state, because the resetting code just throws it away. To compensate, we'll
-    # actually truncate 1 step earlier than the time limit, use the value of the state we know, and just discard the
-    # transition that actually caused truncation. That is, we receive:
-    #
-    #     s0, --r0-> s1 --r1-> s2 --r2-> s3 --r3-> ...
-    #
-    # and say the episode was truncated at s3. We don't know s4, so we can't calculate V(s4), which we need for the
-    # objective. So instead we'll discard r3 and treat s3 as the final state. Now we can calculate V(s3).
-    #
-    # We can implement this by just not using the loss at the truncated steps.
-    mask_t = jnp.float32(~minibatch.truncated_t)
-
     # If the episode has actually terminated, the outgoing state's value is known to be zero.
     #
     # If the episode was truncated or terminated, we don't want the value estimation for future steps to influence the
@@ -103,6 +90,23 @@ def impala_loss(
     v_tm1 = nn_value_from_obs[:-1]
     del nn_value_from_obs
 
+    # If the episode has been truncated, the value of the next state (after truncation) would be some non-zero amount.
+    # But we don't have access to that state, because the resetting code just throws it away. To compensate, we'll
+    # actually truncate 1 step earlier than the time limit, use the value of the state we know, and just discard the
+    # transition that actually caused truncation. That is, we receive:
+    #
+    #     s0, --r0-> s1 --r1-> s2 --r2-> s3 --r3-> ...
+    #
+    # and say the episode was truncated at s3. We don't know s4, so we can't calculate V(s4), which we need for the
+    # objective. So instead we'll discard r3 and treat s3 as the final state. Now we can calculate V(s3).
+    #
+    # We could get the correct TD error just by ignoring the loss at the truncated steps. However, VTrace propagates
+    # errors backward, so the truncated-episode error would propagate backward anyways. To solve this, we set the reward
+    # at truncated timesteps to be equal to v_tm1. The discount for those steps also has to be 0, that's determined by
+    # `discount_t` defined above.
+    mask_t = jnp.float32(~minibatch.truncated_t)
+    r_t = jnp.where(minibatch.truncated_t, jax.lax.stop_gradient(v_tm1), minibatch.r_t)
+
     rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
 
     vtrace_td_error_and_advantage = jax.vmap(
@@ -116,7 +120,8 @@ def impala_loss(
         in_axes=1,
         out_axes=1,
     )
-    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
+
+    vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_t, discount_t, rhos_tm1)
 
     # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
     # are implicit in `pg_advs`.
@@ -127,7 +132,7 @@ def impala_loss(
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
     # Value loss: MSE of VTrace-estimated errors
-    v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
+    v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
