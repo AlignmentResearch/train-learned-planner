@@ -23,7 +23,7 @@ num_actor_threads = 1
 
 clis = []
 train_epochs = 1
-actor_update_frequency = 2
+actor_update_frequency = 1
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
     for optimizer in ["adam", "rmsprop"]:
@@ -34,7 +34,8 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
                 def update_fn(config: Args) -> Args:
                     config.local_num_envs = n_envs
                     config.num_steps = 20
-                    config.total_timesteps = 80_035_840
+                    MUL = 3
+                    config.total_timesteps = 15632 * config.local_num_envs * config.num_steps * MUL
 
                     global_step_multiplier = (
                         config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
@@ -42,7 +43,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
                     assert config.total_timesteps % global_step_multiplier == 0
                     num_updates = config.total_timesteps // global_step_multiplier
 
-                    config.eval_frequency = num_updates // 8
+                    config.eval_frequency = num_updates // (8 * MUL)
 
                     config.actor_update_frequency = actor_update_frequency
                     config.actor_update_cutoff = int(1e20)
@@ -66,9 +67,9 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
                     config.base_fan_in = 1
                     config.anneal_lr = True
 
-                    config.optimizer = "adam"
+                    config.optimizer = optimizer
                     config.adam_b1 = 0.9
-                    config.rmsprop_decay = 0.999
+                    config.rmsprop_decay = rmsprop_decay
                     config.learning_rate = 4e-4
                     config.max_grad_norm = 6.25e-5 * max_grad_norm_mul
                     config.rmsprop_eps = 1.5625e-07
@@ -97,7 +98,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "1step")
 
 if __name__ == "__main__":
     launch_jobs(
