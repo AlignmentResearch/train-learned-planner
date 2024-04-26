@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import json
 import math
 import os
 import queue
@@ -35,7 +36,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
-from cleanba.network import label_and_learning_rate_for_params
+from cleanba.network import AgentParams, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -106,9 +107,6 @@ class WandbWriter:
         out = self._save_dir / name
         out.mkdir()
         yield out
-
-    def maybe_save_barrier(self) -> None:
-        pass
 
 
 @dataclasses.dataclass(frozen=True)
@@ -459,9 +457,55 @@ def rollout(
                 for k, v in log_dict.items():
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
-            if args.save_model:
-                print(f"Actor thread {device_thread_id} entering save barrier")
-                writer.maybe_save_barrier()
+
+def linear_schedule(
+    count: chex.Numeric, *, learning_rate: float, minibatches_per_update: int, total_updates: int
+) -> chex.Numeric:
+    # anneal learning rate linearly after one training iteration which contains
+    # (args.num_minibatches) gradient updates
+    frac = 1.0 - (count // minibatches_per_update) / total_updates
+    return learning_rate * frac
+
+
+def make_optimizer(args: Args, params: AgentParams, total_updates: int):
+    if args.optimizer_yang:
+        learning_rates, agent_param_labels = label_and_learning_rate_for_params(params, base_fan_in=args.base_fan_in)
+        transform_chain = [
+            optax.multi_transform(
+                transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
+            ),
+        ]
+    else:
+        transform_chain = []
+
+    _linear_schedule = partial(
+        linear_schedule,
+        learning_rate=args.learning_rate,
+        minibatches_per_update=args.num_minibatches,
+        total_updates=total_updates,
+    )
+
+    transform_chain += [
+        optax.clip_by_global_norm(args.max_grad_norm),
+        (
+            optax.inject_hyperparams(rmsprop_pytorch_style)(
+                learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
+                eps=args.rmsprop_eps,
+                decay=args.rmsprop_decay,
+            )
+            if args.optimizer == "rmsprop"
+            else (
+                optax.inject_hyperparams(optax.adam)(
+                    learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
+                    b1=args.adam_b1,
+                    b2=args.rmsprop_decay,
+                    eps=args.rmsprop_eps,
+                    eps_root=0.0,
+                )
+            )
+        ),
+    ]
+    return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
 
 def train(args: Args, *, writer: Optional[WandbWriter] = None):
@@ -478,49 +522,13 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         np.random.seed(random_seed())
         key = jax.random.PRNGKey(random_seed())
 
-        def linear_schedule(count: chex.Numeric) -> chex.Numeric:
-            # anneal learning rate linearly after one training iteration which contains
-            # (args.num_minibatches) gradient updates
-            frac = 1.0 - (count // (args.num_minibatches)) / runtime_info.num_updates
-            return args.learning_rate * frac
-
         key, agent_params_subkey = jax.random.split(key, 2)
         agent_params = args.net.init_params(envs, agent_params_subkey)
-
-        if args.optimizer_yang:
-            learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)
-            transform_chain = [
-                optax.multi_transform(
-                    transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
-                ),
-            ]
-        else:
-            transform_chain = []
-        transform_chain += [
-            optax.clip_by_global_norm(args.max_grad_norm),
-            (
-                optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                    eps=args.rmsprop_eps,
-                    decay=args.rmsprop_decay,
-                )
-                if args.optimizer == "rmsprop"
-                else (
-                    optax.inject_hyperparams(optax.adam)(
-                        learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        b1=args.adam_b1,
-                        b2=args.rmsprop_decay,
-                        eps=args.rmsprop_eps,
-                        eps_root=0.0,
-                    )
-                )
-            ),
-        ]
 
         agent_state = TrainState.create(
             apply_fn=None,
             params=agent_params,
-            tx=optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps),
+            tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
         )
 
         multi_device_update = jax.pmap(
@@ -643,26 +651,40 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
             if args.save_model and learner_policy_version % args.eval_frequency == 0:
-                print("Learner thread entering save barrier (should be last)")
-                writer.maybe_save_barrier()
-
-                with writer.save_dir(global_step) as dir, open(dir / "model", "wb") as f:
-                    f.write(
-                        flax.serialization.to_bytes(
-                            [
-                                farconf.to_dict(args, Args),
-                                [
-                                    agent_state.params.network_params,
-                                    agent_state.params.actor_params,
-                                    agent_state.params.critic_params,
-                                ],
-                            ]
-                        )
-                    )
+                with writer.save_dir(global_step) as dir:
+                    save_train_state(dir, args, agent_state)
 
             if learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
                 return
+
+
+def save_train_state(dir: Path, args: Args, train_state: TrainState):
+    with open(dir / "cfg.json", "w") as f:
+        json.dump(farconf.to_dict(args, Args), f)
+
+    with open(dir / "model", "wb") as f:
+        f.write(flax.serialization.to_bytes(train_state))
+
+
+def load_train_state(dir: Path) -> tuple[Args, TrainState]:
+    with open(dir / "cfg.json", "r") as f:
+        args_dict = json.load(f)
+    args = farconf.from_dict(args_dict, Args)
+
+    params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
+
+    target_state = TrainState.create(
+        apply_fn=None,
+        params=params,
+        tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size),
+    )
+
+    with open(dir / "model", "rb") as f:
+        train_state = flax.serialization.from_bytes(target_state, f.read())
+    assert isinstance(train_state, TrainState)
+    return args, train_state
 
 
 if __name__ == "__main__":

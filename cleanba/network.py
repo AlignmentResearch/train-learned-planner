@@ -13,8 +13,7 @@ import numpy as np
 from flax.typing import Axes, Shape
 
 
-@flax.struct.dataclass
-class AgentParams:
+class AgentParams(flax.struct.PyTreeNode):
     network_params: flax.core.FrozenDict
     actor_params: flax.core.FrozenDict
     critic_params: flax.core.FrozenDict

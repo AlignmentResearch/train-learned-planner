@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -16,6 +18,7 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
             tinyworld_obs=True,
             asynchronous=False,
             min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
+            cache_path=Path(__file__).parent.parent / ".sokoban_cache",
         ),
         SokobanConfig(
             max_episode_steps=MAX_EPISODE_STEPS,

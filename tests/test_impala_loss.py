@@ -71,7 +71,7 @@ def test_impala_loss_zero_when_accurate(
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
     (total_loss, metrics_dict) = impala_loss(
-        params=(),
+        params=AgentParams((), (), ()),
         get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs, {}),
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
@@ -225,14 +225,14 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
             vtrace_lambda=1.0,
         ),
         num_steps=num_timesteps,
-        concurrency=False,
+        concurrency=True,
         local_num_envs=num_envs,
         seed=3,
     )
 
     params_queue = queue.Queue(maxsize=5)
     for _ in range(5):
-        params_queue.put({})
+        params_queue.put((AgentParams({}, {}, {}), 1))
 
     rollout_queue = queue.Queue(maxsize=5)
     key = jax.random.PRNGKey(seed=1234)
@@ -289,9 +289,9 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
 
         # Now check that the impala loss works here, i.e. an integration test
         (total_loss, metrics_dict) = impala_loss(
-            params={},
+            params=AgentParams({}, {}, {}),
             get_logits_and_value=args.net.get_logits_and_value,
-            args=ImpalaLossConfig(gamma=gamma),
+            args=ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0),
             minibatch=transition,
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy() * (~transition.truncated_t))
