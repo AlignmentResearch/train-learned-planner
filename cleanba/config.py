@@ -31,7 +31,7 @@ class Args:
     sync_frequency: int = 400
 
     actor_update_frequency: int = 1
-    actor_update_cutoff: int = int(1e20)
+    actor_update_cutoff: int = int(1e9)
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
@@ -126,7 +126,7 @@ def sokoban_resnet() -> Args:
         seed=1234,
         save_model=False,
         log_frequency=10,
-        sync_frequency=int(1e20),
+        sync_frequency=int(4e9),
         net=SokobanResNetConfig(),
         total_timesteps=int(1e9),
     )
