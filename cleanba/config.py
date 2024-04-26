@@ -66,7 +66,7 @@ class Args:
 
 
 def sokoban_resnet() -> Args:
-    CACHE_PATH = Path("/training/.sokoban_cache")
+    CACHE_PATH = Path("/opt/sokoban_cache")
     return Args(
         train_env=EnvpoolBoxobanConfig(
             max_episode_steps=120,

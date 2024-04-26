@@ -103,7 +103,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     n_levels_to_load: int = -1  # -1 means "all levels". Used only when `load_sequentially` is True.
 
     # Not present in _SokobanEnvSpec
-    cache_path: Path = Path(__file__).parent.parent / ".sokoban_cache"
+    cache_path: Path = Path("/opt/sokoban_cache")
     split: Literal["train", "valid", "test", None] = "train"
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
@@ -238,7 +238,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
 class BoxobanConfig(BaseSokobanEnvConfig):
     "Sokoban levels from the Boxoban data set"
 
-    cache_path: Path = Path(__file__).parent.parent / ".sokoban_cache"
+    cache_path: Path = Path("/opt/sokoban_cache")
     split: Literal["train", "valid", "test", None] = "train"
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 

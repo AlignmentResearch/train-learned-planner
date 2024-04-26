@@ -22,20 +22,26 @@ for n_envs in [192, 256]:
             config.local_num_envs = n_envs
             config.num_steps = 20
 
-            num_updates = 65200
-
             world_size = 1
             len_actor_device_ids = 1
             num_actor_threads = 1
             global_step_multiplier = (
                 config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
             )
-            config.total_timesteps = num_updates * global_step_multiplier
             # Approximately 1e9, but also divisible by (math.lcm(256, 192) * 20)
-            assert config.total_timesteps == 1_001_472_000
+            config.total_timesteps = 1_001_472_000
+            num_updates = config.total_timesteps // global_step_multiplier
+            assert (
+                num_updates * global_step_multiplier == config.total_timesteps
+            ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
-            # Evaluate (and save) 40 times during training. I.e. approximately once every 38min.
-            config.eval_frequency = num_updates // 40
+            # Evaluate (and save) EVAL_TIMES during training
+            EVAL_TIMES = 100
+            config.eval_frequency = num_updates // EVAL_TIMES
+            assert (
+                config.eval_frequency * EVAL_TIMES * global_step_multiplier > 1e9
+            ), "training and saving for insufficiently long"
+
             config.save_model = True
             config.base_run_dir = Path("/training/cleanba")
 
