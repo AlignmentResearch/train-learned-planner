@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import flax.linen as nn
 import flax.struct
@@ -88,15 +88,11 @@ class ConvLSTM(nn.Module):
             for c in self.cfg.recurrent
         ]
 
-    def _preprocess_input(
-        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
-    ) -> tuple[ConvLSTMState, jax.Array]:
+    def _preprocess_input(self, observations: jax.Array) -> jax.Array:
         """
-        Embeds the inputs using `self.conv_list`, and preprocesses `carry` so it is zeroed when `episode_starts` is True
+        Embeds the inputs using `self.conv_list`
         """
-        assert len(episode_starts.shape) == 1
         assert len(observations.shape) == 4, f"observations shape must be [batch, h, w, c] but is {observations.shape=}"
-        assert observations.shape[0] == episode_starts.shape[0]
 
         x = observations
         x = jnp.transpose(x, (0, 2, 3, 1))
@@ -106,46 +102,62 @@ class ConvLSTM(nn.Module):
         embedded = x
         del x
 
-        not_reset = ~episode_starts
-        carry = jax.tree.map(lambda z: z * _broadcast_towards_the_left(z, not_reset), carry)
+        return embedded
 
-        return carry, embedded
-
-    def _apply_cells(self, carry: ConvLSTMState, inputs: jax.Array) -> tuple[Any, jax.Array]:
+    @partial(nn.scan, variable_broadcast="params", split_rngs={"params": False})
+    def _apply_cells_once(self, carry: ConvLSTMState, inputs: jax.Array) -> tuple[ConvLSTMState, tuple[()]]:
         """
         Applies all cells in `self.cell_list` once. `Inputs` gets passed as the input to every cell
         """
+        assert len(inputs.shape) == 4
+        prev_layer_state = carry[-1].h  # Top-down skip connection from previous time step
 
-        def apply_layers(i: int, carry: ConvLSTMState) -> ConvLSTMState:
-            prev_layer_state = carry[-1].h  # Top-down skip connection from previous time step
+        for d, cell in enumerate(self.cell_list):
+            # c^n_d, h^n_d = MemoryModule_d(i_t, c^{n-1}_d, h^{n-1}_d, h^n_{d-1})
+            #
+            # equivalently
+            # state[d] = cell_list[d](i_t, state[d], h_n{d-1}
+            carry[d], prev_layer_state = cell(carry[d], inputs, prev_layer_state)
+        return carry, ()
 
-            for d, cell in enumerate(self.cell_list):
-                # c^n_d, h^n_d = MemoryModule_d(i_t, c^{n-1}_d, h^{n-1}_d, h^n_{d-1})
-                #
-                # equivalently
-                # state[d] = cell_list[d](i_t, state[d], h_n{d-1}
-                carry[d], prev_layer_state = cell(carry[d], inputs, prev_layer_state)
-            return carry
+    def _apply_cells(
+        self, carry: ConvLSTMState, inputs: jax.Array, episode_starts: jax.Array
+    ) -> tuple[ConvLSTMState, jax.Array]:
+        """
+        Applies all cells in `self.cell_list`, several times: `self.cfg.repeats_per_step` times. Preprocesses the carry
+        so it gets zeroed at the start of an episode
+        """
+        assert len(inputs.shape) == 4
+        assert len(episode_starts.shape) == 1
 
-        out_carry = jax.lax.fori_loop(0, self.cfg.repeats_per_step, apply_layers, carry, unroll=None)
-        return out_carry, out_carry[-1].h
+        not_reset = ~episode_starts
+        carry = jax.tree.map(lambda z: z * _broadcast_towards_the_left(z, not_reset), carry)
+
+        carry, _ = self._apply_cells_once(carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
+        return carry, carry[-1].h
 
     def step(
         self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
     ) -> tuple[ConvLSTMState, jax.Array]:
         """Applies the ConvLSTM for a single step"""
-        carry, embedded = self._preprocess_input(carry, observations, episode_starts)
-        return self._apply_cells(carry, embedded)
+        embedded = self._preprocess_input(observations)
+        return self._apply_cells(carry, embedded, episode_starts)
 
     def scan(
         self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
     ) -> tuple[ConvLSTMState, jax.Array]:
         """Applies the ConvLSTM over many time steps."""
-        carry, embedded = jax.vmap(self._preprocess_input)(carry, observations, episode_starts)
-        out_carry, out = jax.lax.scan(self._apply_cells, carry, embedded)
+        embedded = jax.vmap(self._preprocess_input)(observations)
+        out_carry, out = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})(
+            self, carry, embedded, episode_starts
+        )
         return out_carry, out
 
     def initialize_carry(self, rng, input_shape):
+        # Convert from NCHW to NHWC
+        assert len(input_shape) == 4
+        input_shape = (input_shape[0], *input_shape[2:4], input_shape[1])
+
         rng = jax.random.split(rng, len(self.cell_list))
         return [cell.initialize_carry(k, input_shape) for (cell, k) in zip(self.cell_list, rng)]
 
