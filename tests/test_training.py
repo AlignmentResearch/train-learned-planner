@@ -187,7 +187,7 @@ def test_concat_and_shard_rollout_internal():
     assert out.truncated_t[0].shape == (time, batch // len_learner_devices)
     assert jax.tree.all(
         jax.tree.map(
-            lambda x_orig, x: x[0].shape == (batch // len_learner_devices, *x_orig.shape[1:]),
+            lambda x_orig, x: x[0].shape == (1, batch // len_learner_devices, *x_orig.shape[1:]),
             storage[0].carry_t,
             out.carry_t,
         )

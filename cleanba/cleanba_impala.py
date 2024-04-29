@@ -259,7 +259,7 @@ def _concat_and_shard_rollout_internal(
         # Add the `last_obs` on the end of this rollout
         obs_t=jnp.stack([*(_split_over_batches(r.obs_t) for r in storage), _split_over_batches(last_obs)], axis=1),
         # Only store the first recurrent state
-        carry_t=jax.tree.map(_split_over_batches, storage[0].carry_t),
+        carry_t=jax.tree.map(lambda x: jnp.expand_dims(_split_over_batches(x), axis=1), storage[0].carry_t),
         a_t=jnp.stack([_split_over_batches(r.a_t) for r in storage], axis=1),
         logits_t=jnp.stack([_split_over_batches(r.logits_t) for r in storage], axis=1),
         r_t=jnp.stack([_split_over_batches(r.r_t) for r in storage], axis=1),

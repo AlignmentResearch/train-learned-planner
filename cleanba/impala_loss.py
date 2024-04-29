@@ -72,7 +72,7 @@ def impala_loss(
     del done_t
 
     _final_carry, nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(
-        params, minibatch.carry_t, minibatch.obs_t, minibatch.episode_starts_t
+        params, jax.tree.map(lambda x: x[0], minibatch.carry_t), minibatch.obs_t, minibatch.episode_starts_t
     )
     del _final_carry
 
