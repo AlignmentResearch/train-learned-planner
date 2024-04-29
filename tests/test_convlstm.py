@@ -37,6 +37,8 @@ def test_equivalent_to_lstm():
     linen_params["params"]["ih"]["bias"] = ih_bias - hh_bias
     linen_params["params"]["hh"]["bias"] = hh_bias
 
+    linen_params["params"]["hh"]["kernel"] = linen_params["params"]["hh"]["kernel"][:, :, : cfg.features, :]
+
     for t in range(len(inputs)):
         cleanba_carry, cleanba_out = jax.jit(cleanba_cell.apply)(
             cleanba_params, cleanba_carry, inputs[t], jnp.zeros_like(cleanba_carry[0])
