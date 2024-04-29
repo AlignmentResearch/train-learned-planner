@@ -1,28 +1,15 @@
 import abc
 import dataclasses
-from functools import partial
-from typing import Any, Literal, SupportsFloat
+from typing import Any, Generic, Literal, SupportsFloat, TypeVar
 
-import flax
 import flax.linen as nn
-import flax.struct
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.typing import Axes, Shape
 
-
-class AgentParams(flax.struct.PyTreeNode):
-    network_params: flax.core.FrozenDict
-    actor_params: flax.core.FrozenDict
-    critic_params: flax.core.FrozenDict
-
-    def __contains__(self, item):
-        return item in (f.name for f in dataclasses.fields(self))
-
-    def _n_actions(self) -> int:
-        return self.actor_params["params"]["Output"]["kernel"].shape[-1]  # type: ignore
+AgentParams = dict[str, Any]
 
 
 class NormConfig(abc.ABC):
@@ -50,8 +37,11 @@ class IdentityNorm(NormConfig):
         return x
 
 
+PolicyCarryT = TypeVar("PolicyCarryT")
+
+
 @dataclasses.dataclass(frozen=True)
-class NetworkSpec(abc.ABC):
+class PolicySpec(abc.ABC, Generic[PolicyCarryT]):
     yang_init: bool = False
     norm: NormConfig = IdentityNorm()
 
@@ -59,42 +49,60 @@ class NetworkSpec(abc.ABC):
     def make(self) -> nn.Module:
         ...
 
-    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> AgentParams:
-        action_space = envs.single_action_space
-        assert isinstance(action_space, gym.spaces.Discrete)
-        n_actions = int(action_space.n)
-        if n_actions == 9:
-            n_actions = 4
+    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> tuple["Policy", PolicyCarryT, Any]:
+        policy = Policy(n_actions_from_envs(envs), self)
+        params_key, carry_key = jax.random.split(key, 2)
 
-        net_key, actor_key, critic_key = jax.random.split(key, 3)
+        box_space = envs.observation_space
+        assert isinstance(box_space, gym.spaces.Box)
 
-        example_obs = np.array(envs.single_observation_space.sample())[None, ...]
+        # We need to `apply()` so the policy can access its `.network_params` attribute.
+        carry: PolicyCarryT = policy.apply({}, carry_key, box_space.shape, method=policy.initialize_carry)  # type: ignore
 
-        net_obj = self.make()
-        net_params = net_obj.init(net_key, example_obs)
-        net_out_shape = jax.eval_shape(net_obj.apply, net_params, example_obs)
+        observations = jnp.ones((1, *box_space.shape))
+        episode_starts = jnp.ones((1, box_space.shape[0]), dtype=jnp.bool_)
+        params = policy.init(params_key, carry, observations, episode_starts, method=policy.get_logits_and_value)
+        return policy, carry, params
 
-        actor_params = Actor(n_actions, yang_init=self.yang_init, norm=self.norm).init(
-            actor_key, jnp.zeros(net_out_shape.shape)
-        )
-        critic_params = Critic(yang_init=self.yang_init, norm=self.norm).init(critic_key, jnp.zeros(net_out_shape.shape))
-        out = AgentParams(net_params, actor_params, critic_params)  # type: ignore
 
-        assert out._n_actions() == n_actions
-        return out
+def n_actions_from_envs(envs: gym.vector.VectorEnv) -> int:
+    action_space = envs.single_action_space
+    assert isinstance(action_space, gym.spaces.Discrete)
+    n_actions = int(action_space.n)
+    return n_actions
 
-    @partial(jax.jit, static_argnames=["self", "temperature"])
+
+def tree_is_empty(tree: Any) -> bool:
+    return len(jax.tree.leaves(tree)) == 0
+
+
+class Policy(nn.Module):
+    n_actions: int
+    cfg: PolicySpec
+
+    def setup(self):
+        # These are called `_params` for backwards compatibility with the `AgentParams` dataclass.
+        self.network_params = self.cfg.make()
+        self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm)
+        self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm)
+
     def get_action(
         self,
-        params: AgentParams,
-        next_obs: jax.Array,
+        carry: PolicyCarryT,
+        obs: jax.Array,
+        episode_starts: jax.Array,
         key: jax.Array,
         *,
         temperature: float = 1.0,
-    ) -> tuple[jax.Array, jax.Array, jax.Array]:
-        hidden = self.make().apply(params.network_params, next_obs)
-
-        logits, _ = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(params.actor_params, hidden)
+    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array]:
+        assert len(obs.shape) == 4
+        assert len(episode_starts.shape) == 1
+        assert episode_starts.shape[:1] == obs.shape[:1]
+        if tree_is_empty(carry):
+            hidden = self.network_params(obs)
+        else:
+            carry, hidden = self.network_params.step(carry, obs, episode_starts)
+        logits, _ = self.actor_params(hidden)
         assert isinstance(logits, jax.Array)
 
         if temperature == 0.0:
@@ -105,27 +113,35 @@ class NetworkSpec(abc.ABC):
             key, subkey = jax.random.split(key)
             u = jax.random.uniform(subkey, shape=logits.shape)
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return action, logits, key
+        return carry, action, logits, key
 
-    @partial(jax.jit, static_argnames=["self"])
     def get_logits_and_value(
         self,
-        params: AgentParams,
-        x: jax.Array,
-    ) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
-        hidden = self.make().apply(params.network_params, x)
-        logits, logits_metrics = Actor(params._n_actions(), yang_init=self.yang_init, norm=self.norm).apply(
-            params.actor_params, hidden
-        )
-        value, value_metrics = Critic(yang_init=self.yang_init, norm=self.norm).apply(params.critic_params, hidden)
+        carry: PolicyCarryT,
+        obs: jax.Array,
+        episode_starts: jax.Array,
+    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, dict[str, jax.Array]]:
+        assert len(obs.shape) == 5
+        assert len(episode_starts.shape) == 2
+        assert episode_starts.shape[:2] == obs.shape[:2]
 
-        assert isinstance(logits, jax.Array)
-        assert isinstance(value, jax.Array)
-        return logits, value.squeeze(-1), {**logits_metrics, **value_metrics}
+        if tree_is_empty(carry):
+            hidden = jax.vmap(self.network_params)(obs)
+        else:
+            carry, hidden = self.network_params.scan(carry, obs, episode_starts)
+
+        logits, logits_metrics = self.actor_params(hidden)
+        value, value_metrics = self.critic_params(hidden)
+        return carry, logits, value.squeeze(-1), {**logits_metrics, **value_metrics}
+
+    def initialize_carry(self, rng, input_shape):
+        if hasattr(self.network_params, "initialize_carry"):
+            return self.network_params.initialize_carry(rng, input_shape)
+        return ()  # Empty pytree if `network_params` is not recurrent
 
 
 @dataclasses.dataclass(frozen=True)
-class AtariCNNSpec(NetworkSpec):
+class AtariCNNSpec(PolicySpec[tuple[()]]):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
@@ -285,7 +301,7 @@ class Actor(nn.Module):
 
 
 @dataclasses.dataclass(frozen=True)
-class SokobanResNetConfig(NetworkSpec):
+class SokobanResNetConfig(PolicySpec[tuple[()]]):
     channels: tuple[int, ...] = (64, 64, 64) * 3
     kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
 
@@ -430,7 +446,7 @@ def label_and_learning_rate_for_params(
 
 
 @dataclasses.dataclass(frozen=True)
-class GuezResNetConfig(NetworkSpec):
+class GuezResNetConfig(PolicySpec[tuple[()]]):
     channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
     strides: tuple[int, ...] = (1,) * 9
     kernel_sizes: tuple[int, ...] = (4,) * 9

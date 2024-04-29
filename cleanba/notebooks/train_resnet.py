@@ -195,7 +195,7 @@ params = jax.jit(net.init_params, static_argnums=(0,))(
 )
 
 x = rollout_collate_fn([train_data[i] for i in range(256)])
-logits, value, _ = jax.vmap(net.get_logits_and_value, in_axes=(None, 0))(params, x.obs_t)
+logits, value, _ = net.get_logits_and_value(params, x.obs_t)
 
 logits_std = np.mean(np.std(logits, axis=(0, 1)))
 print(f"{logits_std=}, {np.std(value)=}")
@@ -251,10 +251,8 @@ def update_minibatch_impala(train_state: TrainState, minibatch: Rollout):
 def update_minibatch(train_state: TrainState, minibatch: Rollout):
     def loss_fn(params, get_logits_and_value, cfg: ImpalaLossConfig, minibatch: Rollout):
         mask_t = jnp.float32(~minibatch.truncated_t)
-        discount_t = (~minibatch.done_t) * cfg.gamma
-        nn_logits_from_obs, nn_value_from_obs, nn_metrics = jax.vmap(get_logits_and_value, in_axes=(None, 0))(
-            params, minibatch.obs_t
-        )
+        discount_t = (~minibatch.episode_starts_t) * cfg.gamma
+        nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(params, minibatch.obs_t)
         nn_logits_t = nn_logits_from_obs[:-1]
         del nn_logits_from_obs
         v_t = nn_value_from_obs[1:]

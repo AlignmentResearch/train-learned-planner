@@ -16,7 +16,7 @@ from numpy.typing import NDArray
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
 from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
-from cleanba.network import AgentParams, NetworkSpec
+from cleanba.network import Policy, PolicySpec
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -72,12 +72,18 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
     (total_loss, metrics_dict) = impala_loss(
-        params=AgentParams((), (), ()),
-        get_logits_and_value=lambda params, obs: (jnp.zeros((batch_size, 1)), obs, {}),
+        params={},
+        get_logits_and_value=lambda params, carry, obs, episode_starts: (
+            carry,
+            jnp.zeros((num_timesteps + 1, batch_size, 1)),
+            obs,
+            {},
+        ),
         args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
-            done_t=done_tm1,
+            carry_t=(),
+            episode_starts_t=np.concatenate([np.zeros((1, batch_size), dtype=np.bool_), done_tm1], axis=0),
             truncated_t=np.zeros_like(done_tm1),
             a_t=a_t,
             logits_t=logits_t,
@@ -128,8 +134,7 @@ class TrivialEnv(gym.Env[NDArray, np.int64]):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[NDArray, dict[str, Any]]:
-        super().reset(seed=seed, options=options)
-
+        super().reset(seed=seed or self.cfg.seed, options=options)
         num_timesteps = int(self.np_random.integers(2, self.cfg.max_episode_steps, size=()))
         self._t = 0
         self._rewards = self.np_random.uniform(self.reward_range[0], self.reward_range[1], size=num_timesteps)
@@ -186,32 +191,51 @@ def test_trivial_env_correct_returns(num_envs: int = 7, gamma: float = 0.9):
     assert np.allclose(out, np.zeros_like(out), atol=1e-6)
 
 
-class ZeroActionNetwork(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        return x
-
-
-@dataclasses.dataclass(frozen=True)
-class ZeroActionNetworkSpec(NetworkSpec):
-    def make(self) -> nn.Module:
-        return ZeroActionNetwork()
-
-    @partial(jax.jit, static_argnames=["self"])
-    def get_action(self, params: AgentParams, next_obs: jax.Array, key: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
-        actions = jnp.zeros(next_obs.shape[0], dtype=jnp.int32)
+class TrivialEnvPolicy(Policy):
+    def get_action(
+        self,
+        carry: tuple[()],
+        obs: jax.Array,
+        episode_starts: jax.Array,
+        key: jax.Array,
+        *,
+        temperature: float = 1.0,
+    ) -> tuple[tuple[()], jax.Array, jax.Array, jax.Array]:
+        actions = jnp.zeros(obs.shape[0], dtype=jnp.int32)
         logits = jnp.stack(
             [
-                next_obs,  # Use next_obs itself to vary logits in a repeatable way
-                jnp.zeros((next_obs.shape[0],), dtype=jnp.float32),
+                obs,  # Use obs itself to vary logits in a repeatable way
+                jnp.zeros((obs.shape[0],), dtype=jnp.float32),
             ],
             axis=1,
         )
-        return actions, logits, key
+        return (), actions, logits, key
 
-    @partial(jax.jit, static_argnames=["self"])
-    def get_logits_and_value(self, params: AgentParams, x: jax.Array) -> tuple[jax.Array, jax.Array, dict[str, jax.Array]]:
-        return self.get_action(params, x, None)[1], x, {}  # type: ignore
+    def get_logits_and_value(
+        self,
+        carry: tuple[()],
+        obs: jax.Array,
+        episode_starts: jax.Array,
+    ) -> tuple[tuple[()], jax.Array, jax.Array, dict[str, jax.Array]]:
+        carry, actions, logits, key = jax.vmap(self.get_action, in_axes=(None, 0, None, None))(
+            carry,
+            obs,
+            None,  # type: ignore
+            jax.random.PRNGKey(1234),
+        )
+
+        value = obs
+        return carry, logits, value, {}
+
+
+@dataclasses.dataclass(frozen=True)
+class ZeroActionNetworkSpec(PolicySpec[tuple[()]]):
+    def make(self) -> nn.Module:
+        return None  # type: ignore
+
+    def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> tuple["Policy", tuple[()], Any]:
+        policy = TrivialEnvPolicy(2, self)
+        return policy, (), {}
 
 
 @pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
@@ -234,9 +258,12 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         seed=3,
     )
 
+    policy, carry, params = args.net.init_params(None, None)  # type: ignore
+    get_logits_and_value_fn = jax.jit(partial(policy.apply, method=policy.get_logits_and_value))
+
     params_queue = queue.Queue(maxsize=5)
     for _ in range(5):
-        params_queue.put((AgentParams({}, {}, {}), 1))
+        params_queue.put((params, 1))
 
     rollout_queue = queue.Queue(maxsize=5)
     key = jax.random.PRNGKey(seed=1234)
@@ -284,7 +311,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
 
         # We have to use 1: with these because they represent the reward/discount of the *previous* step.
         r_t = transition.r_t
-        discount_t = (~transition.done_t) * gamma
+        discount_t = (~transition.episode_starts_t[1:]) * gamma
 
         rho_tm1 = np.ones((num_timesteps, num_envs))
 
@@ -295,8 +322,8 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
 
         # Now check that the impala loss works here, i.e. an integration test
         (total_loss, metrics_dict) = impala_loss(
-            params=AgentParams({}, {}, {}),
-            get_logits_and_value=args.net.get_logits_and_value,
+            params=params,
+            get_logits_and_value=get_logits_and_value_fn,
             args=ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0),
             minibatch=transition,
         )

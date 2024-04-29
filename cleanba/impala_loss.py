@@ -9,8 +9,6 @@ import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
 
-from cleanba.network import AgentParams
-
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig:
@@ -39,16 +37,24 @@ class ImpalaLossConfig:
 
 class Rollout(NamedTuple):
     obs_t: jax.Array
+    carry_t: Any
     a_t: jax.Array
     logits_t: jax.Array
     r_t: jax.Array | NDArray
-    done_t: jax.Array | NDArray
+    episode_starts_t: jax.Array | NDArray
     truncated_t: jax.Array | NDArray
 
 
+GetLogitsAndValueFn = Callable[
+    [Any, Any, jax.Array, jax.Array | NDArray], tuple[Any, jax.Array, jax.Array, dict[str, jax.Array]]
+]
+
+
+# The reason this loss function is peppered with `del` statements is so we don't accidentally use the wrong
+# (time-shifted) variable when coding
 def impala_loss(
-    params: AgentParams,
-    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array, dict[str, jax.Array]]],
+    params: Any,
+    get_logits_and_value: GetLogitsAndValueFn,
     args: ImpalaLossConfig,
     minibatch: Rollout,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
@@ -61,11 +67,14 @@ def impala_loss(
     # Both of these aims can be served by setting the discount to zero when the episode is terminated or truncated.
     #
     # done_t = truncated_t | terminated_t
-    discount_t = (~minibatch.done_t) * args.gamma
+    done_t = minibatch.episode_starts_t[1:]
+    discount_t = (~done_t) * args.gamma
+    del done_t
 
-    nn_logits_from_obs, nn_value_from_obs, nn_metrics = jax.vmap(get_logits_and_value, in_axes=(None, 0))(
-        params, minibatch.obs_t
+    _final_carry, nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(
+        params, minibatch.carry_t, minibatch.obs_t, minibatch.episode_starts_t
     )
+    del _final_carry
 
     # There's one extra timestep at the end for `obs_t` than logits and the rest of objects in `minibatch`, so we need
     # to cut these values to size.
@@ -141,9 +150,11 @@ def impala_loss(
     total_loss += args.vf_coef * v_loss
     total_loss += args.ent_coef * ent_loss
     total_loss += args.logit_l2_coef * jnp.sum(jnp.square(nn_logits_from_obs))
-    total_loss += args.weight_l2_coef * sum(
-        jnp.sum(jnp.square(p)) for p in [*jax.tree.leaves(params.actor_params), *jax.tree.leaves(params.critic_params)]
-    )
+
+    actor_params = jax.tree.leaves(params.get("params", {}).get("actor_params", {}))
+    critic_params = jax.tree.leaves(params.get("params", {}).get("critic_params", {}))
+
+    total_loss += args.weight_l2_coef * sum(jnp.sum(jnp.square(p)) for p in [*actor_params, *critic_params])
 
     # Useful metrics to know
     targets_tm1 = vtrace_returns.errors + v_tm1
@@ -170,12 +181,11 @@ def tree_flatten_and_concat(x) -> jax.Array:
     return jnp.concat(list(map(jnp.ravel, leaves)))
 
 
-@partial(jax.jit, static_argnames=["num_batches", "get_logits_and_value", "impala_cfg"])
 def single_device_update(
     agent_state: TrainState,
     sharded_storages: List[Rollout],
     *,
-    get_logits_and_value: Callable[[Any, jax.Array], tuple[jax.Array, jax.Array, dict[str, jax.Array]]],
+    get_logits_and_value: GetLogitsAndValueFn,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
 ) -> tuple[TrainState, dict[str, jax.Array]]:

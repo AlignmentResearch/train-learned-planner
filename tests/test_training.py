@@ -4,28 +4,30 @@ from pathlib import Path
 from typing import Iterator
 
 import flax.linen as nn
+import pytest
 from flax.training.train_state import TrainState
 
 from cleanba.cleanba_impala import WandbWriter, load_train_state, train
 from cleanba.config import Args
+from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import SokobanConfig
 from cleanba.evaluate import EvalConfig
-from cleanba.network import NetworkSpec
+from cleanba.network import GuezResNetConfig, IdentityNorm, PolicySpec
 
 
-class TinyNetwork(NetworkSpec):
+class TinyNetwork(PolicySpec):
     def make(self) -> nn.Module:
         return nn.Dense(10)
 
 
 # TODO: use generic Writer interface, this is not correct inheritance
 class CheckingWriter(WandbWriter):
-    def __init__(self, cfg: Args, save_dir: Path):
+    def __init__(self, cfg: Args, save_dir: Path, eval_keys):
         self.last_global_step = -1
         self.metrics = {}
         self._save_dir = save_dir
 
-        self.eval_keys = {f"{k}/episode_success" for k in cfg.eval_envs.keys()}
+        self.eval_keys = set(eval_keys)
         assert len(self.eval_keys) > 0
         self.eval_events = {k: threading.Event() for k in self.eval_keys}
 
@@ -76,7 +78,35 @@ class CheckingWriter(WandbWriter):
         assert isinstance(train_state, TrainState)
 
 
-def test_save_model_step(tmpdir: Path):
+@pytest.mark.parametrize(
+    "net",
+    [
+        GuezResNetConfig(
+            False,
+            IdentityNorm(),
+            channels=(2, 3),
+            strides=(1, 1),
+            kernel_sizes=(3, 3),
+            mlp_hiddens=(16,),
+            normalize_input=False,
+        ),
+        ConvLSTMConfig(
+            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
+            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            repeats_per_step=2,
+            pool_and_inject=False,
+            add_one_to_forget=True,
+        ),
+        ConvLSTMConfig(
+            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
+            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            repeats_per_step=2,
+            pool_and_inject=True,
+            add_one_to_forget=True,
+        ),
+    ],
+)
+def test_save_model_step(tmpdir: Path, net: PolicySpec):
     env = SokobanConfig(
         max_episode_steps=40,
         num_envs=1,
@@ -90,7 +120,8 @@ def test_save_model_step(tmpdir: Path):
 
     args = Args(
         train_env=env,
-        eval_envs=dict(eval0=EvalConfig(env), eval1=EvalConfig(env)),
+        eval_envs=dict(eval0=EvalConfig(env, steps_to_think=[0, 1]), eval1=EvalConfig(env, steps_to_think=[2])),
+        net=net,
         eval_frequency=4,
         save_model=True,
         log_frequency=1234,
@@ -99,11 +130,13 @@ def test_save_model_step(tmpdir: Path):
         num_steps=2,
         num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
-        queue_timeout=10,
+        queue_timeout=4,
     )
 
     args.total_timesteps = args.num_steps * args.num_actor_threads * args.local_num_envs * args.eval_frequency
     assert args.total_timesteps < 20
 
-    writer = CheckingWriter(args, tmpdir)
+    writer = CheckingWriter(
+        args, tmpdir, ["eval0/00_episode_successes", "eval0/01_episode_successes", "eval1/02_episode_successes"]
+    )
     train(args, writer=writer)

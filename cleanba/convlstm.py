@@ -1,9 +1,13 @@
 import dataclasses
+from functools import partial
 from typing import Any, Callable, Optional, Sequence
 
 import flax.linen as nn
+import flax.struct
 import jax
 import jax.numpy as jnp
+
+from cleanba.network import PolicySpec
 
 
 @dataclasses.dataclass(frozen=True)
@@ -34,43 +38,65 @@ class ConvConfig:
 
 
 @dataclasses.dataclass(frozen=True)
-class ConvLSTMConfig:
+class ConvLSTMConfig(PolicySpec):
     embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: Sequence[ConvConfig] = dataclasses.field(default_factory=lambda: [ConvConfig(64, (3, 3), (1, 1))])
 
     repeats_per_step: int = 1
-    fence_pad: bool = False
     pool_and_inject: bool = False
-    add_one_to_forget: bool = False
+    add_one_to_forget: bool = True
 
     def make(self) -> "ConvLSTM":
         return ConvLSTM(self)
 
 
-def _broadcast_left(a, b):
-    assert len(b.shape) <= len(a.shape)
-    if len(a.shape) == len(b.shape):
-        return b
-    dims_to_expand = tuple(range(len(b.shape), len(a.shape)))
+class ConvLSTMCellState(flax.struct.PyTreeNode):
+    c: jax.Array
+    h: jax.Array
 
-    return jnp.expand_dims(b, axis=dims_to_expand)
+
+ConvLSTMState = list[ConvLSTMCellState]
+
+
+def _broadcast_towards_the_left(target: jax.Array, src: jax.Array) -> jax.Array:
+    """
+    Broadcasts `src` towards the left-side of `target`'s shape.
+
+    Example: if `target` is shape (2, 3, 4, 5), and `src` is shape(2, 3), it returns a `src` that is shape (2, 3, 1, 1)
+    so it can be broadcasted with `target`.
+    """
+
+    assert len(src.shape) <= len(target.shape)
+    if len(target.shape) == len(src.shape):
+        return src
+
+    # Check that the `target` and `src` have compatible broadcasting shapes
+    _ = jax.eval_shape(partial(jnp.broadcast_to, shape=target.shape[: -len(src.shape)]), src)
+
+    dims_to_expand = tuple(range(len(src.shape), len(target.shape)))
+
+    return jnp.expand_dims(src, axis=dims_to_expand)
 
 
 class ConvLSTM(nn.Module):
     cfg: ConvLSTMConfig
 
     def setup(self):
-        if self.cfg.pool_and_inject:
-            raise NotImplementedError("pool_and_inject")
-        if self.cfg.fence_pad:
-            raise NotImplementedError("fence_pad")
-
         self.conv_list = [c.make_conv() for c in self.cfg.embed]
-        self.cell_list = [ConvLSTMCell(c, add_one_to_forget=self.cfg.add_one_to_forget) for c in self.cfg.recurrent]
+        self.cell_list = [
+            ConvLSTMCell(c, add_one_to_forget=self.cfg.add_one_to_forget, pool_and_inject=self.cfg.pool_and_inject)
+            for c in self.cfg.recurrent
+        ]
 
-    def __call__(self, observations: jax.Array, carry: Any, episode_starts: jax.Array) -> tuple[Any, jax.Array]:
+    def _preprocess_input(
+        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
+    ) -> tuple[ConvLSTMState, jax.Array]:
+        """
+        Embeds the inputs using `self.conv_list`, and preprocesses `carry` so it is zeroed when `episode_starts` is True
+        """
         assert len(episode_starts.shape) == 1
         assert len(observations.shape) == 4, f"observations shape must be [batch, h, w, c] but is {observations.shape=}"
+        assert observations.shape[0] == episode_starts.shape[0]
 
         x = observations
         for c in self.conv_list:
@@ -80,26 +106,47 @@ class ConvLSTM(nn.Module):
         del x
 
         not_reset = ~episode_starts
-        carry = jax.tree.map(lambda z: z * _broadcast_left(z, not_reset), carry)
+        carry = jax.tree.map(lambda z: z * _broadcast_towards_the_left(z, not_reset), carry)
 
-        def loop_all_layers(carry, x):
-            assert isinstance(carry, list)
-            assert isinstance(carry[-1], list)
-            h_nd = carry[-1][0]  # Top-down skip connection from previous time step
+        return carry, embedded
 
-            for cell in self.cell_list:
-                carry, x = cell(carry, x, h_nd)
-            return carry, x
+    def _apply_cells(self, carry: ConvLSTMState, inputs: jax.Array) -> tuple[Any, jax.Array]:
+        """
+        Applies all cells in `self.cell_list` once. `Inputs` gets passed as the input to every cell
+        """
 
-        repeat_embedded = jnp.broadcast_to(embedded, (self.cfg.repeats_per_step, 1, 1, 1))
-        new_carry, out = jax.lax.scan(loop_all_layers, carry, repeat_embedded)
+        def apply_layers(i: int, carry: ConvLSTMState) -> ConvLSTMState:
+            prev_layer_state = carry[-1].h  # Top-down skip connection from previous time step
 
-        assert isinstance(out, jax.Array)
-        assert jax.tree_structure(new_carry) == jax.tree_structure(carry)
-        return new_carry, out
+            for d, cell in enumerate(self.cell_list):
+                # c^n_d, h^n_d = MemoryModule_d(i_t, c^{n-1}_d, h^{n-1}_d, h^n_{d-1})
+                #
+                # equivalently
+                # state[d] = cell_list[d](i_t, state[d], h_n{d-1}
+                carry[d], prev_layer_state = cell(carry[d], inputs, prev_layer_state)
+            return carry
 
+        out_carry = jax.lax.fori_loop(0, self.cfg.repeats_per_step, apply_layers, carry, unroll=None)
+        return out_carry, out_carry[-1].h
 
-ConvLSTMCellState = tuple[jax.Array, jax.Array]
+    def step(
+        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
+    ) -> tuple[ConvLSTMState, jax.Array]:
+        """Applies the ConvLSTM for a single step"""
+        carry, embedded = self._preprocess_input(carry, observations, episode_starts)
+        return self._apply_cells(carry, embedded)
+
+    def scan(
+        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
+    ) -> tuple[ConvLSTMState, jax.Array]:
+        """Applies the ConvLSTM over many time steps."""
+        carry, embedded = jax.vmap(self._preprocess_input)(carry, observations, episode_starts)
+        out_carry, out = jax.lax.scan(self._apply_cells, carry, embedded)
+        return out_carry, out
+
+    def initialize_carry(self, rng, input_shape):
+        rng = jax.random.split(rng, len(self.cell_list))
+        return [cell.initialize_carry(k, input_shape) for (cell, k) in zip(self.cell_list, rng)]
 
 
 class ConvLSTMCell(nn.Module):
@@ -107,8 +154,8 @@ class ConvLSTMCell(nn.Module):
     add_one_to_forget: bool = False
     pool_and_inject: bool = False
 
-    gate_fn: Callable[..., Any] = nn.sigmoid
-    activation_fn: Callable[..., Any] = nn.tanh
+    gate_fn: Callable[..., jax.Array] = nn.sigmoid
+    activation_fn: Callable[..., jax.Array] = nn.tanh
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
     recurrent_kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
     project_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
@@ -145,12 +192,10 @@ class ConvLSTMCell(nn.Module):
             name="hh",
         )
 
-        c, h = carry
-
         if self.pool_and_inject:
             AXES_HW = (1, 2)
-            h_max = jnp.max(h, axis=AXES_HW)
-            h_mean = jnp.mean(h, axis=AXES_HW)
+            h_max = jnp.max(carry.h, axis=AXES_HW)
+            h_mean = jnp.mean(carry.h, axis=AXES_HW)
             h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
             pooled_h = nn.Dense(
                 2 * self.cfg.features,
@@ -160,12 +205,12 @@ class ConvLSTMCell(nn.Module):
                 kernel_init=self.project_init,
             )(h_max_and_mean)
 
-            B, H, W, _ = h.shape
+            B, H, W, _ = carry.h.shape
 
             pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, pooled_h.shape[-1]))
-            concat_hidden = [h, prev_layer_hidden, pooled_h_expanded]
+            concat_hidden = [carry.h, prev_layer_hidden, pooled_h_expanded]
         else:
-            concat_hidden = [h, prev_layer_hidden]
+            concat_hidden = [carry.h, prev_layer_hidden]
 
         h = jnp.concatenate(concat_hidden, axis=-1)
         gates = input_to_hidden(inputs) + hidden_to_hidden(h)
@@ -175,11 +220,11 @@ class ConvLSTMCell(nn.Module):
         f = self.gate_fn(f + (1 if self.add_one_to_forget else 0))
         g = self.activation_fn(g)
         o = self.gate_fn(o)
-        new_c = f * c + i * g
+        new_c = f * carry.c + i * g
         new_h = o * self.activation_fn(new_c)
-        return (new_c, new_h), new_h
+        return ConvLSTMCellState(c=new_c, h=new_h), new_h
 
-    def initialize_carry(self, rng, input_shape):
+    def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> ConvLSTMCellState:
         """Initialize the RNN cell carry.
 
         Args:
@@ -208,4 +253,4 @@ class ConvLSTMCell(nn.Module):
         key1, key2 = jax.random.split(rng)
         c = self.carry_init(key1, mem_shape, self.param_dtype)
         h = self.carry_init(key2, mem_shape, self.param_dtype)
-        return c, h
+        return ConvLSTMCellState(c=c, h=h)

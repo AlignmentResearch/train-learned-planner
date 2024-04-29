@@ -8,7 +8,7 @@ from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
 )
-from cleanba.network import AtariCNNSpec, NetworkSpec, SokobanResNetConfig
+from cleanba.network import AtariCNNSpec, PolicySpec, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -37,7 +37,7 @@ class Args:
 
     loss: ImpalaLossConfig = ImpalaLossConfig()
 
-    net: NetworkSpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
+    net: PolicySpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 
     # Algorithm specific arguments
     total_timesteps: int = 100_000_000  # total timesteps of the experiments

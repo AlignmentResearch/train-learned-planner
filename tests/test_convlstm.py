@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Any
 
 import flax.linen as nn
@@ -24,11 +23,11 @@ def test_equivalent_to_lstm():
     rng, k1, k2, k3 = jax.random.split(rng, 4)
     inputs = jax.random.normal(k1, (7, 5, 10, 10, 3))
 
-    cleanba_carry = cleanba_cell.apply({}, k2, inputs[0].shape, method=ConvLSTMCell.initialize_carry)
+    cleanba_carry = cleanba_cell.initialize_carry(k2, inputs[0].shape)
     linen_carry = linen_cell.initialize_carry(k3, inputs[0].shape)
 
     rng, k1 = jax.random.split(rng, 2)
-    cleanba_params = cleanba_cell.init(k1, cleanba_carry, inputs[0], cleanba_carry[0])
+    cleanba_params = cleanba_cell.init(k1, cleanba_carry, inputs[0], cleanba_carry.h)
     linen_params = _dict_copy(cleanba_params)
 
     ih_bias = cleanba_params["params"]["ih"]["bias"]
@@ -41,13 +40,13 @@ def test_equivalent_to_lstm():
 
     for t in range(len(inputs)):
         cleanba_carry, cleanba_out = jax.jit(cleanba_cell.apply)(
-            cleanba_params, cleanba_carry, inputs[t], jnp.zeros_like(cleanba_carry[0])
+            cleanba_params, cleanba_carry, inputs[t], jnp.zeros_like(cleanba_carry.h)
         )
         linen_carry, linen_out = jax.jit(linen_cell.apply)(linen_params, linen_carry, inputs[t])
 
         assert jnp.allclose(cleanba_out, linen_out, atol=1e-6)
-
-        assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-6), cleanba_carry, linen_carry))
+        assert jnp.allclose(cleanba_carry.c, linen_carry[0], atol=1e-6)
+        assert jnp.allclose(cleanba_carry.h, linen_carry[1], atol=1e-6)
 
 
 @pytest.mark.parametrize("pool_and_inject", [True, False])
@@ -66,8 +65,8 @@ def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool
     rng, k1, k2, k3 = jax.random.split(rng, 4)
     inputs = jax.random.normal(k1, (3, 5, 10, 10, 3))
 
-    carry = cell.apply({}, k2, inputs[0].shape, method=cell.initialize_carry)
-    params = cell.init(k3, carry, inputs[0], carry[0])
+    carry = cell.initialize_carry(k2, inputs[0].shape)
+    params = cell.init(k3, carry, inputs[0], carry.h)
 
     for t in range(len(inputs)):
-        carry, out = jax.jit(cell.apply)(params, carry, inputs[t], carry[0])
+        carry, out = jax.jit(cell.apply)(params, carry, inputs[t], carry.h)

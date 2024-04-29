@@ -233,23 +233,29 @@ def time_and_append(stats: list[float]):
 
 
 @partial(jax.jit, static_argnames=["len_learner_devices"])
-def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Array, len_learner_devices: int) -> Rollout:
+def _concat_and_shard_rollout_internal(
+    storage: List[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, len_learner_devices: int
+) -> Rollout:
     # Concatenate the Rollout steps over time
     out = Rollout(
         # Add the `last_obs` on the end of this rollout
         obs_t=jnp.stack([*(r.obs_t for r in storage), last_obs]),
+        # Only store the first recurrent state
+        carry_t=storage[0].carry_t,
         a_t=jnp.stack([r.a_t for r in storage]),
         logits_t=jnp.stack([r.logits_t for r in storage]),
         r_t=jnp.stack([r.r_t for r in storage]),
-        done_t=jnp.stack([r.done_t for r in storage]),
+        episode_starts_t=jnp.stack([*(r.episode_starts_t for r in storage), last_episode_starts]),
         truncated_t=jnp.stack([r.truncated_t for r in storage]),
     )
     # Split for every learner device over `num_envs` and return
     return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
 
 
-def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: list[jax.Device]) -> Rollout:
-    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, len(learner_devices))
+def concat_and_shard_rollout(
+    storage: list[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, learner_devices: list[jax.Device]
+) -> Rollout:
+    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, last_episode_starts, len(learner_devices))
     # partitioned_storage is a Rollout with lists inside
     sharded_storage = jax.tree.map(
         partial(jax.device_put_sharded, devices=learner_devices),
@@ -283,9 +289,9 @@ def rollout(
     this_thread_eval_cfg = [
         eval_envs[i] for i in range(actor_id, len(args.eval_envs), runtime_info.world_size * args.num_actor_threads)
     ]
-    this_thread_eval_keys = list(
-        jax.random.split(jax.random.PRNGKey(args.train_env.seed + actor_id), len(this_thread_eval_cfg))
-    )
+    key = jax.random.PRNGKey(args.train_env.seed + actor_id)
+    key, eval_keys = jax.random.split(key)
+    this_thread_eval_keys = list(jax.random.split(eval_keys, len(this_thread_eval_cfg)))
 
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
@@ -304,6 +310,12 @@ def rollout(
 
     # Store the first observation
     obs_t, _ = envs.reset()
+
+    # Initialize carry_t and episode_starts_t
+    key, carry_key = jax.random.split(key)
+    policy, carry_t, _ = args.net.init_params(envs, carry_key)
+    episode_starts_t = np.ones(envs.num_envs, dtype=np.bool_)
+    get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
@@ -340,7 +352,7 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time):
-                        a_t, logits_t, key = args.net.get_action(params, obs_t, key)
+                        carry_tplus1, a_t, logits_t, key = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
 
                     with time_and_append(log_stats.device2host_time):
                         cpu_action = np.array(a_t)
@@ -349,21 +361,24 @@ def rollout(
                         envs.step_async(cpu_action)
 
                     with time_and_append(log_stats.env_recv_time):
-                        obs_t_plus_1, r_t, term_t, trunc_t, info_t = envs.step_wait()
+                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
                         done_t = term_t | trunc_t
 
                     with time_and_append(log_stats.create_rollout_time):
                         storage.append(
                             Rollout(
                                 obs_t=obs_t,
+                                carry_t=carry_t,
                                 a_t=a_t,
                                 logits_t=logits_t,
                                 r_t=r_t,
-                                done_t=done_t,
+                                episode_starts_t=episode_starts_t,
                                 truncated_t=trunc_t,
                             )
                         )
-                        obs_t = obs_t_plus_1
+                        obs_t = obs_tplus1
+                        carry_t = carry_tplus1
+                        episode_starts_t = done_t
 
                         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
                         # the true return.
@@ -383,7 +398,7 @@ def rollout(
                         returned_episode_success[done_t] = term_t[done_t]
 
             with time_and_append(log_stats.storage_time):
-                sharded_storage = concat_and_shard_rollout(storage, obs_t, learner_devices)
+                sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, learner_devices)
                 storage.clear()
                 payload = (
                     global_step,
@@ -452,7 +467,7 @@ def rollout(
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
-                log_dict = env_config.run(args.net.get_action, params, key=eval_key)
+                log_dict = env_config.run(policy, get_action_fn, params, key=eval_key)
                 for k, v in log_dict.items():
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
@@ -522,7 +537,8 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         key = jax.random.PRNGKey(random_seed())
 
         key, agent_params_subkey = jax.random.split(key, 2)
-        agent_params = args.net.init_params(envs, agent_params_subkey)
+
+        policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
 
         agent_state = TrainState.create(
             apply_fn=None,
@@ -531,11 +547,13 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         )
 
         multi_device_update = jax.pmap(
-            partial(
-                single_device_update,
-                num_batches=args.num_minibatches * args.gradient_accumulation_steps,
-                get_logits_and_value=args.net.get_logits_and_value,
-                impala_cfg=args.loss,
+            jax.jit(
+                partial(
+                    single_device_update,
+                    num_batches=args.num_minibatches * args.gradient_accumulation_steps,
+                    get_logits_and_value=partial(policy.apply, method=policy.get_logits_and_value),
+                    impala_cfg=args.loss,
+                )
             ),
             axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
             devices=runtime_info.global_learner_devices,
@@ -671,7 +689,8 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
         args_dict = json.load(f)
     args = farconf.from_dict(args_dict, Args)
 
-    params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
 
     target_state = TrainState.create(
