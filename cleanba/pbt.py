@@ -2,7 +2,7 @@ import contextlib
 import dataclasses
 import threading
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 import flax
 import ray
@@ -13,7 +13,7 @@ from ray.tune.schedulers import PopulationBasedTraining
 import cleanba.cleanba_impala
 from cleanba import cleanba_impala as impala
 from cleanba.config import Args, sokoban_resnet
-from cleanba.network import AgentParams
+from cleanba.network import AgentParams, GuezResNetConfig, IdentityNorm
 
 
 class RayWriter(cleanba.cleanba_impala.WandbWriter):
@@ -75,7 +75,7 @@ metric_to_track = "valid_unfiltered/episode_success"
 time_attr = "policy_versions/learner"
 
 
-def trainable(args: Args):
+def trainable(config: dict[str, Any]):
     # If `train.get_checkpoint()` is populated, then we are resuming from a checkpoint.
     checkpoint = train.get_checkpoint()
     if checkpoint:
@@ -83,7 +83,10 @@ def trainable(args: Args):
             learner_policy_version, args, agent_params = load(checkpoint_dir)
     else:
         learner_policy_version = 0
+        args = None
         agent_params = None
+
+    args = custom_explore_fn(args, config)
     impala.train(
         args,
         learner_policy_version=learner_policy_version,
@@ -92,14 +95,15 @@ def trainable(args: Args):
     )
 
 
-def custom_explore_fn(config: dict[str, Any]):
-    args = sokoban_resnet()
-    args = update_fn(args, config["optimizer"], config["rmsprop_decay"], config["network"], config["max_grad_norm_mul"])
+def custom_explore_fn(args: Optional[Args], config: dict[str, Any]) -> Args:
+    if args is None:
+        args = sokoban_resnet()
+    args = update_fn(args, config["optimizer"], config["rmsprop_decay"], config["max_grad_norm_mul"])
 
     return args
 
 
-def update_fn(config: Args, optimizer, rmsprop_decay, network, max_grad_norm_mul):
+def update_fn(config: Args, optimizer, rmsprop_decay, max_grad_norm_mul):
     minibatch_size = 32
     n_envs = 256  # the paper says 200 actors
     assert n_envs % minibatch_size == 0
@@ -153,7 +157,7 @@ def update_fn(config: Args, optimizer, rmsprop_decay, network, max_grad_norm_mul
     config.rmsprop_eps = 1.5625e-07
     config.optimizer_yang = False
 
-    config.net = network
+    config.net = GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False)
 
     config.save_model = True
     config.base_run_dir = Path("/training/cleanba")
@@ -162,11 +166,13 @@ def update_fn(config: Args, optimizer, rmsprop_decay, network, max_grad_norm_mul
 
 perturbation_interval = 5
 hyperparam_mutations = {
-    "lr": tune.uniform(0.001, 1),
-    "momentum": tune.uniform(0.001, 1),
+    "optimizer": tune.choice(["adam", "rmsprop"]),
+    "rmsprop_decay": tune.choice([0.99, 0.999]),
+    "max_grad_norm_mul": tune.choice([4, 8, 16]),
 }
 param_space = dict(hyperparam_mutations, checkpoint_interval=perturbation_interval)
-num_samples = 4
+num_samples = 1
+max_failures = 1
 
 scheduler = PopulationBasedTraining(
     time_attr=time_attr,
@@ -174,7 +180,6 @@ scheduler = PopulationBasedTraining(
     metric=metric_to_track,
     mode="max",
     hyperparam_mutations=hyperparam_mutations,
-    custom_explore_fn=custom_explore_fn,
 )
 
 ray.init()
@@ -191,8 +196,8 @@ tuner = tune.Tuner(
             checkpoint_score_attribute=metric_to_track,
             num_to_keep=4,
         ),
-        storage_path="/training/",
-        failure_config=train.FailureConfig(max_failures=3),
+        storage_path="/training/cleanba",
+        failure_config=train.FailureConfig(max_failures=max_failures),
     ),
     tune_config=tune.TuneConfig(
         scheduler=scheduler,

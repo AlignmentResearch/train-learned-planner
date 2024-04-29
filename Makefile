@@ -66,6 +66,7 @@ release: release/main
 DEVBOX_UID ?= 1001
 CPU ?= 1
 MEMORY ?= 60G
+SHM_SIZE ?= 20G
 GPU ?= 0
 
 DEVBOX_NAME ?= cleanba-devbox
