@@ -35,7 +35,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
-from cleanba.network import label_and_learning_rate_for_params
+from cleanba.network import AgentParams, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -108,6 +108,9 @@ class WandbWriter:
         yield out
 
     def maybe_save_barrier(self) -> None:
+        pass
+
+    def reset_save_barrier(self) -> None:
         pass
 
 
@@ -464,7 +467,13 @@ def rollout(
                 writer.maybe_save_barrier()
 
 
-def train(args: Args, *, writer: Optional[WandbWriter] = None):
+def train(
+    args: Args,
+    *,
+    learner_policy_version: int = 0,
+    agent_params: Optional[AgentParams] = None,
+    writer: Optional[WandbWriter] = None,
+):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
@@ -484,8 +493,9 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             frac = 1.0 - (count // (args.num_minibatches)) / runtime_info.num_updates
             return args.learning_rate * frac
 
-        key, agent_params_subkey = jax.random.split(key, 2)
-        agent_params = args.net.init_params(envs, agent_params_subkey)
+        if agent_params is None:
+            key, agent_params_subkey = jax.random.split(key, 2)
+            agent_params = args.net.init_params(envs, agent_params_subkey)
 
         if args.optimizer_yang:
             learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)
@@ -537,7 +547,6 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         params_queues = []
         rollout_queues = []
 
-        learner_policy_version = 0
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
         for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -645,11 +654,13 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             if args.save_model and learner_policy_version % args.eval_frequency == 0:
                 print("Learner thread entering save barrier (should be last)")
                 writer.maybe_save_barrier()
+                writer.reset_save_barrier()
 
                 with writer.save_dir(global_step) as dir, open(dir / "model", "wb") as f:
                     f.write(
                         flax.serialization.to_bytes(
                             [
+                                learner_policy_version,
                                 farconf.to_dict(args, Args),
                                 [
                                     agent_state.params.network_params,

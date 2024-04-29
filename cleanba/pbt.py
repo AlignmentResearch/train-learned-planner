@@ -1,15 +1,19 @@
 import contextlib
+import dataclasses
 import threading
 from pathlib import Path
 from typing import Any, Iterator
 
+import flax
 import ray
 from ray import train, tune
 from ray.train import Checkpoint
 from ray.tune.schedulers import PopulationBasedTraining
 
 import cleanba.cleanba_impala
-from cleanba.config import Args
+from cleanba import cleanba_impala as impala
+from cleanba.config import Args, sokoban_resnet
+from cleanba.network import AgentParams
 
 
 class RayWriter(cleanba.cleanba_impala.WandbWriter):
@@ -53,71 +57,124 @@ class RayWriter(cleanba.cleanba_impala.WandbWriter):
     def maybe_save_barrier(self) -> None:
         self._save_barrier.wait()
 
+    def reset_save_barrier(self) -> None:
+        self._save_barrier.reset()
 
-def trainable(config: dict[str, Any]):
-    # Create our data loaders, model, and optmizer.
 
-    pass
-    # step = 1
+def load(checkpoint_dir: Path) -> dict[str, Any]:
+    with open(checkpoint_dir / "model", "rb") as f:
+        data = f.read()
 
-    # # If `train.get_checkpoint()` is populated, then we are resuming from a checkpoint.
-    # checkpoint = train.get_checkpoint()
-    # if checkpoint:
-    #     with checkpoint.as_directory() as checkpoint_dir:
-    #         checkpoint_dict = load(checkpoint_dir)
+    deserialized_data = flax.serialization.from_bytes(None, data)
+    learner_policy_version, args, [network_params, actor_params, critic_params] = deserialized_data
+    agent_params = AgentParams(network_params, actor_params, critic_params)
+    return learner_policy_version, args, agent_params
 
-    #     # Load model state and iteration step from checkpoint.
-    #     model.load_state_dict(checkpoint_dict["model_state_dict"])
-    #     # Load optimizer state (needed since we're using momentum),
-    #     # then set the `lr` and `momentum` according to the config.
-    #     optimizer.load_state_dict(checkpoint_dict["optimizer_state_dict"])
-    #     for param_group in optimizer.param_groups:
-    #         if "lr" in config:
-    #             param_group["lr"] = config["lr"]
-    #         if "momentum" in config:
-    #             param_group["momentum"] = config["momentum"]
 
-    #     # Note: Make sure to increment the checkpointed step by 1 to get the current step.
-    #     last_step = checkpoint_dict["step"]
-    #     step = last_step + 1
+metric_to_track = "valid_unfiltered/episode_success"
+time_attr = "policy_versions/learner"
 
-    # while True:
 
-    #     ray.tune.examples.mnist_pytorch.train_func(model, optimizer, train_loader)
-    #     acc = test_func(model, test_loader)
-    #     metrics = {"mean_accuracy": acc, "lr": config["lr"]}
+def trainable(args: Args):
+    # If `train.get_checkpoint()` is populated, then we are resuming from a checkpoint.
+    checkpoint = train.get_checkpoint()
+    if checkpoint:
+        with checkpoint.as_directory() as checkpoint_dir:
+            learner_policy_version, args, agent_params = load(checkpoint_dir)
+    else:
+        learner_policy_version = 0
+        agent_params = None
+    impala.train(
+        args,
+        learner_policy_version=learner_policy_version,
+        agent_params=agent_params,
+        writer=RayWriter(args, metric_to_track=metric_to_track),
+    )
 
-    #     # Every `checkpoint_interval` steps, checkpoint our current state.
-    #     if step % config["checkpoint_interval"] == 0:
-    #         path = Path(f"/Users/adria/ray_tmp/{uuid.uuid4()}")
-    #         path.mkdir()
-    #         torch.save(
-    #             {
-    #                 "step": step,
-    #                 "model_state_dict": model.state_dict(),
-    #                 "optimizer_state_dict": optimizer.state_dict(),
-    #             },
-    #             path / "checkpoint.pt",
-    #         )
-    #         train.report(metrics, checkpoint=Checkpoint.from_directory(str(path)))
-    #     else:
-    #         train.report(metrics)
 
-    #     step += 1
+def custom_explore_fn(config: dict[str, Any]):
+    args = sokoban_resnet()
+    args = update_fn(args, config["optimizer"], config["rmsprop_decay"], config["network"], config["max_grad_norm_mul"])
+
+    return args
+
+
+def update_fn(config: Args, optimizer, rmsprop_decay, network, max_grad_norm_mul):
+    minibatch_size = 32
+    n_envs = 256  # the paper says 200 actors
+    assert n_envs % minibatch_size == 0
+
+    logit_l2_coef = 1.5625e-6  # doesn't seem to matter much from now. May improve stability a tiny bit.
+
+    world_size = 1
+    len_actor_device_ids = 1
+    num_actor_threads = 1
+
+    train_epochs = 1
+    actor_update_frequency = 1
+
+    config.local_num_envs = n_envs
+    config.num_steps = 20
+    MUL = 3
+    config.total_timesteps = 15632 * config.local_num_envs * config.num_steps * MUL
+
+    global_step_multiplier = config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
+    assert config.total_timesteps % global_step_multiplier == 0
+    num_updates = config.total_timesteps // global_step_multiplier
+
+    config.eval_frequency = num_updates // (8 * MUL)
+
+    config.actor_update_frequency = actor_update_frequency
+    config.actor_update_cutoff = int(1e20)
+
+    config.train_epochs = train_epochs
+    config.num_actor_threads = 1
+    config.num_minibatches = (config.local_num_envs * config.num_actor_threads) // minibatch_size
+
+    config.sync_frequency = int(1e20)
+    config.loss = dataclasses.replace(
+        config.loss,
+        vtrace_lambda=0.97,
+        vf_coef=0.25,
+        gamma=0.97,
+        ent_coef=0.01,
+        normalize_advantage=False,
+        logit_l2_coef=logit_l2_coef,
+        weight_l2_coef=logit_l2_coef / 100,
+    )
+    config.base_fan_in = 1
+    config.anneal_lr = True
+
+    config.optimizer = optimizer
+    config.adam_b1 = 0.9
+    config.rmsprop_decay = rmsprop_decay
+    config.learning_rate = 4e-4
+    config.max_grad_norm = 6.25e-5 * max_grad_norm_mul
+    config.rmsprop_eps = 1.5625e-07
+    config.optimizer_yang = False
+
+    config.net = network
+
+    config.save_model = True
+    config.base_run_dir = Path("/training/cleanba")
+    return config
 
 
 perturbation_interval = 5
+hyperparam_mutations = {
+    "lr": tune.uniform(0.001, 1),
+    "momentum": tune.uniform(0.001, 1),
+}
+param_space = dict(hyperparam_mutations, checkpoint_interval=perturbation_interval)
+num_samples = 4
+
 scheduler = PopulationBasedTraining(
-    time_attr="training_iteration",
+    time_attr=time_attr,
     perturbation_interval=perturbation_interval,
-    metric="mean_accuracy",
+    metric=metric_to_track,
     mode="max",
-    hyperparam_mutations={
-        # distribution for resampling
-        "lr": tune.uniform(0.0001, 1),
-        # allow perturbations within this set of categorical values
-        "momentum": [0.8, 0.9, 0.99],
-    },
+    hyperparam_mutations=hyperparam_mutations,
+    custom_explore_fn=custom_explore_fn,
 )
 
 ray.init()
@@ -129,22 +186,18 @@ tuner = tune.Tuner(
         name="pbt_test",
         # Stop when we've reached a threshold accuracy, or a maximum
         # training_iteration, whichever comes first
-        stop={"mean_accuracy": 0.96, "training_iteration": 50},
+        stop={metric_to_track: 0.98, time_attr: 10**9},
         checkpoint_config=train.CheckpointConfig(
-            checkpoint_score_attribute="mean_accuracy",
+            checkpoint_score_attribute=metric_to_track,
             num_to_keep=4,
         ),
-        storage_path="/Users/adria/ray_results",
+        storage_path="/training/",
         failure_config=train.FailureConfig(max_failures=3),
     ),
     tune_config=tune.TuneConfig(
         scheduler=scheduler,
-        num_samples=4,
+        num_samples=num_samples,
     ),
-    param_space={
-        "lr": tune.uniform(0.001, 1),
-        "momentum": tune.uniform(0.001, 1),
-        "checkpoint_interval": perturbation_interval,
-    },
+    param_space=param_space,
 )
 tuner.fit()
