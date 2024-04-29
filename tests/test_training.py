@@ -4,14 +4,18 @@ from pathlib import Path
 from typing import Iterator
 
 import flax.linen as nn
+import jax
+import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax.training.train_state import TrainState
 
-from cleanba.cleanba_impala import WandbWriter, load_train_state, train
+from cleanba.cleanba_impala import WandbWriter, _concat_and_shard_rollout_internal, load_train_state, train
 from cleanba.config import Args
-from cleanba.convlstm import ConvConfig, ConvLSTMConfig
+from cleanba.convlstm import ConvConfig, ConvLSTMCellState, ConvLSTMConfig
 from cleanba.environments import SokobanConfig
 from cleanba.evaluate import EvalConfig
+from cleanba.impala_loss import Rollout
 from cleanba.network import GuezResNetConfig, IdentityNorm, PolicySpec
 
 
@@ -107,7 +111,7 @@ class CheckingWriter(WandbWriter):
     ],
 )
 def test_save_model_step(tmpdir: Path, net: PolicySpec):
-    env = SokobanConfig(
+    env_cfg = SokobanConfig(
         max_episode_steps=40,
         num_envs=1,
         seed=1,
@@ -119,8 +123,8 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
     )
 
     args = Args(
-        train_env=env,
-        eval_envs=dict(eval0=EvalConfig(env, steps_to_think=[0, 1]), eval1=EvalConfig(env, steps_to_think=[2])),
+        train_env=env_cfg,
+        eval_envs=dict(eval0=EvalConfig(env_cfg, steps_to_think=[0, 1]), eval1=EvalConfig(env_cfg, steps_to_think=[2])),
         net=net,
         eval_frequency=4,
         save_model=True,
@@ -140,3 +144,51 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         args, tmpdir, ["eval0/00_episode_successes", "eval0/01_episode_successes", "eval1/02_episode_successes"]
     )
     train(args, writer=writer)
+
+
+def test_concat_and_shard_rollout_internal():
+    len_learner_devices = 2
+    batch = 5 * len_learner_devices
+    envs = SokobanConfig(
+        max_episode_steps=40,
+        num_envs=batch,
+        seed=1,
+        min_episode_steps=20,
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(7, 7),
+        asynchronous=False,
+    ).make()
+
+    time = 4
+
+    obs_t, _ = envs.reset()
+    episode_starts_t = np.ones((envs.num_envs,), dtype=np.bool_)
+    carry_t = [ConvLSTMCellState(obs_t, obs_t)]
+
+    storage: list[Rollout] = []
+    for _ in range(time):
+        a_t = envs.action_space.sample()
+        logits_t = jnp.zeros((*a_t.shape, 2), dtype=jnp.float32)
+        obs_tplus1, r_t, term_t, trunc_t, _ = envs.step(a_t)
+        storage.append(Rollout(obs_t, carry_t, a_t, logits_t, r_t, episode_starts_t, trunc_t))
+
+        obs_t = obs_tplus1
+        episode_starts_t = term_t | trunc_t
+
+    out = _concat_and_shard_rollout_internal(storage, obs_t, episode_starts_t, len_learner_devices)
+    assert isinstance(out, Rollout)
+
+    assert out.obs_t[0].shape == (time + 1, batch // len_learner_devices, *storage[0].obs_t.shape[1:])
+    assert out.a_t[0].shape == (time, batch // len_learner_devices)
+    assert out.logits_t[0].shape == (time, batch // len_learner_devices, storage[0].logits_t.shape[1])
+    assert out.r_t[0].shape == (time, batch // len_learner_devices)
+    assert out.episode_starts_t[0].shape == (time + 1, batch // len_learner_devices)
+    assert out.truncated_t[0].shape == (time, batch // len_learner_devices)
+    assert jax.tree.all(
+        jax.tree.map(
+            lambda x_orig, x: x[0].shape == (batch // len_learner_devices, *x_orig.shape[1:]),
+            storage[0].carry_t,
+            out.carry_t,
+        )
+    )

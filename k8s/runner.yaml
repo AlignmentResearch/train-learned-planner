@@ -38,7 +38,8 @@ spec:
             git clone https://github.com/google-deepmind/boxoban-levels "/opt/sokoban_cache/boxoban-levels-master"
             git pull
             git checkout {COMMIT_HASH}
-            git submodule update --recursive; {COMMAND}
+            git submodule update --recursive
+            {COMMAND}
         resources:
           requests:
             cpu: {CPU}

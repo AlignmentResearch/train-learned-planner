@@ -28,7 +28,15 @@ spec:
           - bash
           - -c
           - |
-            sudo mkdir -p "/training/.sokoban_cache"; sudo chown -R dev:dev "/training"; git clone https://github.com/google-deepmind/boxoban-levels "/training/.sokoban_cache/boxoban-levels-master"; git pull; git checkout {COMMIT_FULL}; git submodule update --recursive; sleep 2d
+            sudo mkdir -p "/opt/sokoban_cache"
+            sudo chown -R dev:dev "/opt/sokoban_cache"
+            sudo mkdir -p "/training/cleanba"
+            sudo chown dev:dev "/training/cleanba"
+            git clone https://github.com/google-deepmind/boxoban-levels "/opt/sokoban_cache/boxoban-levels-master"
+            git pull
+            git checkout {COMMIT_HASH}
+            git submodule update --recursive
+            sleep 8h
         resources:
           requests:
             cpu: {CPU}

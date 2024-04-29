@@ -236,32 +236,46 @@ def time_and_append(stats: list[float]):
 def _concat_and_shard_rollout_internal(
     storage: List[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, len_learner_devices: int
 ) -> Rollout:
-    # Concatenate the Rollout steps over time
+    """
+    Stack the Rollout steps over time, splitting them for every learner device.
+
+    If element of `storage` has shape (batch, *others)
+
+    Then each returned element has shape (len_learner_devices, time, batch//len_learner_devices, *others)
+
+    where time=len(storage) for most things except:
+    - For `obs_t` and `episode_starts_t`, time=len(storage)+1
+    - for `carry_t` the return shape is (len_learner_devices, batch, *others)
+    """
+
+    def _split_over_batches(x):
+        """Split for every learner device over `num_envs`"""
+        batch, *others = x.shape
+        assert batch % len_learner_devices == 0, f"Number of envs {batch=} not divisible by {len_learner_devices=}"
+
+        return jnp.reshape(x, (len_learner_devices, batch // len_learner_devices, *others))
+
     out = Rollout(
         # Add the `last_obs` on the end of this rollout
-        obs_t=jnp.stack([*(r.obs_t for r in storage), last_obs]),
+        obs_t=jnp.stack([*(_split_over_batches(r.obs_t) for r in storage), _split_over_batches(last_obs)], axis=1),
         # Only store the first recurrent state
-        carry_t=storage[0].carry_t,
-        a_t=jnp.stack([r.a_t for r in storage]),
-        logits_t=jnp.stack([r.logits_t for r in storage]),
-        r_t=jnp.stack([r.r_t for r in storage]),
-        episode_starts_t=jnp.stack([*(r.episode_starts_t for r in storage), last_episode_starts]),
-        truncated_t=jnp.stack([r.truncated_t for r in storage]),
+        carry_t=jax.tree.map(_split_over_batches, storage[0].carry_t),
+        a_t=jnp.stack([_split_over_batches(r.a_t) for r in storage], axis=1),
+        logits_t=jnp.stack([_split_over_batches(r.logits_t) for r in storage], axis=1),
+        r_t=jnp.stack([_split_over_batches(r.r_t) for r in storage], axis=1),
+        episode_starts_t=jnp.stack(
+            [*(_split_over_batches(r.episode_starts_t) for r in storage), _split_over_batches(last_episode_starts)], axis=1
+        ),
+        truncated_t=jnp.stack([_split_over_batches(r.truncated_t) for r in storage], axis=1),
     )
-    # Split for every learner device over `num_envs` and return
-    return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
+    return out
 
 
 def concat_and_shard_rollout(
     storage: list[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, learner_devices: list[jax.Device]
 ) -> Rollout:
     partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, last_episode_starts, len(learner_devices))
-    # partitioned_storage is a Rollout with lists inside
-    sharded_storage = jax.tree.map(
-        partial(jax.device_put_sharded, devices=learner_devices),
-        partitioned_storage,
-        is_leaf=lambda x: isinstance(x, list),
-    )
+    sharded_storage = jax.tree.map(lambda x: jax.device_put_sharded(list(x), devices=learner_devices), partitioned_storage)
     return sharded_storage
 
 
