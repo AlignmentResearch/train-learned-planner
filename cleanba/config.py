@@ -3,6 +3,7 @@ from dataclasses import field
 from pathlib import Path
 from typing import List
 
+from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
@@ -130,3 +131,57 @@ def sokoban_resnet() -> Args:
         net=SokobanResNetConfig(),
         total_timesteps=int(1e9),
     )
+
+
+def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
+    CACHE_PATH = Path("/opt/sokoban_cache")
+    return Args(
+        train_env=EnvpoolBoxobanConfig(
+            max_episode_steps=120,
+            min_episode_steps=120 * 3 // 4,
+            num_envs=1,
+            cache_path=CACHE_PATH,
+            split="train",
+            difficulty="unfiltered",
+        ),
+        eval_envs=dict(
+            test_unfiltered=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="test",
+                    difficulty="unfiltered",
+                ),
+                n_episode_multiple=2,
+            ),
+            valid_medium=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="valid",
+                    difficulty="medium",
+                ),
+                n_episode_multiple=2,
+                steps_to_think=[0, 2, 4, 8],
+            ),
+        ),
+        log_frequency=10,
+        sync_frequency=int(4e9),
+        net=ConvLSTMConfig(
+            embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+            recurrent=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * num_layers,
+            repeats_per_step=num_repeats,
+            pool_and_inject=True,
+            add_one_to_forget=True,
+        ),
+    )
+
+
+# fmt: off
+def sokoban_drc_3_3(): return sokoban_drc(3, 3)
+def sokoban_drc_1_1(): return sokoban_drc(1, 1)
+# fmt: on
