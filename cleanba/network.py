@@ -276,7 +276,7 @@ class Critic(nn.Module):
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
         x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
-        bias = self.variables["params"]["Output"]["bias"]
+        bias = jnp.squeeze(self.variables["params"]["Output"]["bias"])
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
 

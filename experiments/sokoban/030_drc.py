@@ -33,11 +33,8 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
             ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
             # Evaluate (and save) EVAL_TIMES during training
-            EVAL_TIMES = 100
+            EVAL_TIMES = 16
             config.eval_frequency = num_updates // EVAL_TIMES
-            assert (
-                config.eval_frequency * EVAL_TIMES * global_step_multiplier > 1e9
-            ), "training and saving for insufficiently long"
 
             config.save_model = True
             config.base_run_dir = Path("/training/cleanba")

@@ -134,7 +134,10 @@ class ConvLSTM(nn.Module):
         carry = jax.tree.map(lambda z: z * _broadcast_towards_the_left(z, not_reset), carry)
 
         carry, _ = self._apply_cells_once(carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
-        return carry, carry[-1].h
+
+        out = carry[-1].h
+        flattened_out = jnp.reshape(out, (inputs.shape[0], -1))
+        return carry, flattened_out
 
     def step(
         self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array

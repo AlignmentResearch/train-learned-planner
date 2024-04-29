@@ -136,10 +136,25 @@ def test_convlstm_forward(net: ConvLSTMConfig):
     obs = envs.observation_space.sample()
 
     assert obs is not None
-    _ = jax.jit(partial(policy.apply, method=policy.get_action))(
+    out_carry, actions, logits, _key = jax.jit(partial(policy.apply, method=policy.get_action))(
         params, carry, obs, jnp.zeros(envs.num_envs, dtype=jnp.bool_), k2
     )
+    assert jax.tree.all(jax.tree.map(lambda x, y: x.shape == y.shape, carry, out_carry)), "Carries don't have the same shape"
+    assert actions.shape == (envs.num_envs,)
+    assert logits.shape == (envs.num_envs, n_actions_from_envs(envs))
+    assert _key.shape == k2.shape
 
-    _ = jax.jit(partial(policy.apply, method=policy.get_logits_and_value))(
-        params, carry, obs[None, ...], jnp.zeros((1, envs.num_envs), dtype=jnp.bool_)
+    timesteps = 4
+    episode_starts = jnp.zeros((timesteps, envs.num_envs), dtype=jnp.bool_)
+    obs = jnp.broadcast_to(obs, (timesteps, *obs.shape))
+
+    out_carry, logits, value, metrics = jax.jit(partial(policy.apply, method=policy.get_logits_and_value))(
+        params, carry, obs, episode_starts
     )
+
+    assert jax.tree.all(jax.tree.map(lambda x, y: x.shape == y.shape, carry, out_carry)), "Carries don't have the same shape"
+    assert logits.shape == (timesteps, envs.num_envs, n_actions_from_envs(envs))
+    assert value.shape == (timesteps, envs.num_envs)
+
+    for k, v in metrics.items():
+        assert v.shape == (), f"{k} is not averaged over time steps, has {v.shape=}"
