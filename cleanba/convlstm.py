@@ -111,6 +111,7 @@ class ConvLSTMCell(nn.Module):
     activation_fn: Callable[..., Any] = nn.tanh
     kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
     recurrent_kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
+    project_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
     bias_init: nn.initializers.Initializer = nn.initializers.zeros_init()
     dtype: Optional[jnp.dtype] = None
     param_dtype: jnp.dtype = jnp.float32
@@ -120,7 +121,6 @@ class ConvLSTMCell(nn.Module):
     def __call__(
         self, carry: ConvLSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
     ) -> tuple[ConvLSTMCellState, jax.Array]:
-        c, h = carry
         input_to_hidden = nn.Conv(
             features=4 * self.cfg.features,
             kernel_size=self.cfg.kernel_size,
@@ -145,6 +145,29 @@ class ConvLSTMCell(nn.Module):
             name="hh",
         )
 
+        c, h = carry
+
+        if self.pool_and_inject:
+            AXES_HW = (1, 2)
+            h_max = jnp.max(h, axis=AXES_HW)
+            h_mean = jnp.mean(h, axis=AXES_HW)
+            h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
+            pooled_h = nn.Dense(
+                2 * self.cfg.features,
+                use_bias=False,
+                dtype=self.dtype,
+                param_dtype=self.param_dtype,
+                kernel_init=self.project_init,
+            )(h_max_and_mean)
+
+            B, H, W, _ = h.shape
+
+            pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, pooled_h.shape[-1]))
+            concat_hidden = [h, prev_layer_hidden, pooled_h_expanded]
+        else:
+            concat_hidden = [h, prev_layer_hidden]
+
+        h = jnp.concatenate(concat_hidden, axis=-1)
         gates = input_to_hidden(inputs) + hidden_to_hidden(h)
         i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
 
@@ -178,9 +201,9 @@ class ConvLSTMCell(nn.Module):
                 dimension_numbers=("NHWC", "HWIO", "NHWC"),
             )
 
-        batch_shape = input_shape[:-3]
-        conv_shape = _input_to_hidden_conv(jnp.ones((1, *input_shape[-3:]))).shape
-        mem_shape = batch_shape + conv_shape
+        hidden = _input_to_hidden_conv(jnp.ones((1, *input_shape[-3:])))
+        # Take only H,W,C from the convolution (discard batch)
+        mem_shape = input_shape[:-3] + hidden.shape[-3:]
 
         key1, key2 = jax.random.split(rng)
         c = self.carry_init(key1, mem_shape, self.param_dtype)
