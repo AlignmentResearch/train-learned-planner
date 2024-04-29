@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Any
 
 import flax.linen as nn
@@ -5,7 +6,8 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from cleanba.convlstm import ConvConfig, ConvLSTMCell
+from cleanba.convlstm import ConvConfig, ConvLSTMCell, ConvLSTMConfig
+from cleanba.environments import SokobanConfig
 
 
 def _dict_copy(d: dict | Any) -> dict | Any:
@@ -70,3 +72,43 @@ def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool
 
     for t in range(len(inputs)):
         carry, out = jax.jit(cell.apply)(params, carry, inputs[t], carry.h)
+
+
+@pytest.mark.parametrize(
+    "net",
+    [
+        ConvLSTMConfig(
+            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
+            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            repeats_per_step=2,
+            pool_and_inject=False,
+            add_one_to_forget=True,
+        ),
+        ConvLSTMConfig(
+            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
+            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            repeats_per_step=2,
+            pool_and_inject=True,
+            add_one_to_forget=True,
+        ),
+    ],
+)
+def test_convlstm_forward(net: ConvLSTMConfig):
+    envs = SokobanConfig(
+        max_episode_steps=40,
+        num_envs=2,
+        seed=1,
+        min_episode_steps=20,
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(6, 6),
+        asynchronous=False,
+    ).make()
+    k1, k2 = jax.random.split(jax.random.PRNGKey(1234))
+    policy, carry, params = net.init_params(envs, k1)
+    obs = envs.observation_space.sample()
+
+    assert obs is not None
+    _carry, _action, _logits, _key = (partial(policy.apply, method=policy.get_action))(
+        params, carry, obs, jnp.zeros(envs.num_envs, dtype=jnp.bool_), k2
+    )

@@ -71,7 +71,7 @@ def _broadcast_towards_the_left(target: jax.Array, src: jax.Array) -> jax.Array:
         return src
 
     # Check that the `target` and `src` have compatible broadcasting shapes
-    _ = jax.eval_shape(partial(jnp.broadcast_to, shape=target.shape[: -len(src.shape)]), src)
+    _ = jax.eval_shape(partial(jnp.broadcast_to, shape=target.shape[: len(src.shape)]), src)
 
     dims_to_expand = tuple(range(len(src.shape), len(target.shape)))
 
@@ -99,6 +99,7 @@ class ConvLSTM(nn.Module):
         assert observations.shape[0] == episode_starts.shape[0]
 
         x = observations
+        x = jnp.transpose(x, (0, 2, 3, 1))
         for c in self.conv_list:
             x = c(x)
             x = nn.relu(x)
