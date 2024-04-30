@@ -110,10 +110,7 @@ class ConvLSTM(nn.Module):
         for c in self.conv_list:
             x = c(x)
             x = nn.relu(x)
-        embedded = x
-        del x
-
-        return embedded
+        return x
 
     def _mlp(self, x: jax.Array) -> jax.Array:
         for dense in self.dense_list:
@@ -212,7 +209,8 @@ class ConvLSTMCell(nn.Module):
     def __call__(
         self, carry: ConvLSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
     ) -> tuple[ConvLSTMCellState, jax.Array]:
-        input_to_hidden = nn.Conv(
+        assert self.cfg.padding == "SAME" and all(s == 1 for s in self.cfg.strides), self.cfg
+        conv = nn.Conv(
             features=4 * self.cfg.features,
             kernel_size=self.cfg.kernel_size,
             strides=self.cfg.strides,
@@ -222,18 +220,6 @@ class ConvLSTMCell(nn.Module):
             bias_init=self.bias_init,
             dtype=self.dtype,
             param_dtype=self.param_dtype,
-            name="ih",
-        )
-        hidden_to_hidden = nn.Conv(
-            features=4 * self.cfg.features,
-            kernel_size=self.cfg.kernel_size,
-            strides=1,  # Has to be 1 so the hidden size stays the same
-            padding="SAME",  # Has to be same so the hidden size stays the same
-            use_bias=False,  # input_to_hidden already uses bias
-            kernel_init=self.recurrent_kernel_init,
-            dtype=self.dtype,
-            param_dtype=self.param_dtype,
-            name="hh",
         )
 
         if self.pool_and_inject:
@@ -253,12 +239,12 @@ class ConvLSTMCell(nn.Module):
             B, H, W, _ = carry.h.shape
 
             pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, self.cfg.features))
-            concat_hidden = [carry.h, prev_layer_hidden, pooled_h_expanded]
+            concat_hidden = [inputs, carry.h, prev_layer_hidden, pooled_h_expanded]
         else:
-            concat_hidden = [carry.h, prev_layer_hidden]
+            concat_hidden = [inputs, carry.h, prev_layer_hidden]
 
         h = jnp.concatenate(concat_hidden, axis=-1)
-        gates = input_to_hidden(inputs) + hidden_to_hidden(h)
+        gates = conv(h)
         i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
 
         i = self.gate_fn(i)
