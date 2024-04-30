@@ -1,3 +1,4 @@
+import argparse
 import contextlib
 import dataclasses
 import threading
@@ -59,6 +60,15 @@ class RayWriter(cleanba.cleanba_impala.WandbWriter):
 
     def reset_save_barrier(self) -> None:
         self._save_barrier.reset()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-n", "--num-samples", type=int, default=1)
+    return parser.parse_args()
+
+
+cli_args = parse_args()
 
 
 def load(checkpoint_dir: Path) -> dict[str, Any]:
@@ -171,7 +181,7 @@ hyperparam_mutations = {
     "max_grad_norm_mul": tune.choice([4, 8, 16]),
 }
 param_space = dict(hyperparam_mutations, checkpoint_interval=perturbation_interval)
-num_samples = 1
+num_samples = cli_args.num_samples
 max_failures = 1
 
 scheduler = PopulationBasedTraining(

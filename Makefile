@@ -74,7 +74,7 @@ DEVBOX_NAME ?= cleanba-devbox
 .PHONY: devbox devbox/%
 devbox/%:
 	git push
-	python -c "print(open('k8s/devbox.yaml').read().format(NAME='${DEVBOX_NAME}', IMAGE='${APPLICATION_URL}:${RELEASE_PREFIX}-$*', COMMIT_FULL='${COMMIT_FULL}', CPU='${CPU}', MEMORY='${MEMORY}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
+	python -c "print(open('k8s/devbox.yaml').read().format(NAME='${DEVBOX_NAME}', IMAGE='${APPLICATION_URL}:${RELEASE_PREFIX}-$*', COMMIT_FULL='${COMMIT_FULL}', CPU='${CPU}', MEMORY='${MEMORY}', SHM_SIZE='${SHM_SIZE}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
 devbox: devbox/main
 
 .PHONY: cuda-devbox cuda-devbox/%
