@@ -36,11 +36,21 @@ class ConvConfig:
             name=name,
         )
 
+    def conv_general_dilated(self, input):
+        return jax.lax.conv_general_dilated(
+            input,
+            jax.ShapeDtypeStruct((*self.kernel_size, input.shape[-1], self.features), jnp.float32),  # type: ignore
+            window_strides=tuple(self.strides),
+            padding=self.padding,
+            dimension_numbers=("NHWC", "HWIO", "NHWC"),
+        )
+
 
 @dataclasses.dataclass(frozen=True)
 class ConvLSTMConfig(PolicySpec):
     embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: Sequence[ConvConfig] = dataclasses.field(default_factory=lambda: [ConvConfig(64, (3, 3), (1, 1))])
+    mlp_hiddens: Sequence[int] = (256,)
 
     repeats_per_step: int = 1
     pool_and_inject: bool = False
@@ -87,6 +97,7 @@ class ConvLSTM(nn.Module):
             ConvLSTMCell(c, add_one_to_forget=self.cfg.add_one_to_forget, pool_and_inject=self.cfg.pool_and_inject)
             for c in self.cfg.recurrent
         ]
+        self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
     def _preprocess_input(self, observations: jax.Array) -> jax.Array:
         """
@@ -103,6 +114,13 @@ class ConvLSTM(nn.Module):
         del x
 
         return embedded
+
+    def _mlp(self, x: jax.Array) -> jax.Array:
+        for dense in self.dense_list:
+            x = self.cfg.norm(x)
+            x = dense(x)
+            x = nn.relu(x)
+        return x
 
     @partial(nn.scan, variable_broadcast="params", split_rngs={"params": False})
     def _apply_cells_once(self, carry: ConvLSTMState, inputs: jax.Array) -> tuple[ConvLSTMState, tuple[()]]:
@@ -144,16 +162,18 @@ class ConvLSTM(nn.Module):
     ) -> tuple[ConvLSTMState, jax.Array]:
         """Applies the ConvLSTM for a single step"""
         embedded = self._preprocess_input(observations)
-        return self._apply_cells(carry, embedded, episode_starts)
+        out_carry, pre_mlp = self._apply_cells(carry, embedded, episode_starts)
+        return out_carry, self._mlp(pre_mlp)
 
     def scan(
         self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
     ) -> tuple[ConvLSTMState, jax.Array]:
         """Applies the ConvLSTM over many time steps."""
         embedded = jax.vmap(self._preprocess_input)(observations)
-        out_carry, out = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})(
+        out_carry, pre_mlp = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})(
             self, carry, embedded, episode_starts
         )
+        out = jax.vmap(self._mlp)(pre_mlp)
         return out_carry, out
 
     def initialize_carry(self, rng, input_shape):
@@ -161,8 +181,16 @@ class ConvLSTM(nn.Module):
         assert len(input_shape) == 4
         input_shape = (input_shape[0], *input_shape[2:4], input_shape[1])
 
+        # Figure out embedded input shape
+        def _conv_stack(x):
+            for emb in self.cfg.embed:
+                x = emb.conv_general_dilated(x)
+            return x
+
+        hidden_shape = jax.eval_shape(_conv_stack, jax.ShapeDtypeStruct(input_shape, jnp.float32)).shape
+
         rng = jax.random.split(rng, len(self.cell_list))
-        return [cell.initialize_carry(k, input_shape) for (cell, k) in zip(self.cell_list, rng)]
+        return [cell.initialize_carry(k, hidden_shape) for (cell, k) in zip(self.cell_list, rng)]
 
 
 class ConvLSTMCell(nn.Module):
@@ -211,10 +239,11 @@ class ConvLSTMCell(nn.Module):
         if self.pool_and_inject:
             AXES_HW = (1, 2)
             h_max = jnp.max(carry.h, axis=AXES_HW)
+            assert h_max.shape == (carry.h.shape[0], carry.h.shape[-1])
             h_mean = jnp.mean(carry.h, axis=AXES_HW)
             h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
             pooled_h = nn.Dense(
-                2 * self.cfg.features,
+                self.cfg.features,
                 use_bias=False,
                 dtype=self.dtype,
                 param_dtype=self.param_dtype,
@@ -223,7 +252,7 @@ class ConvLSTMCell(nn.Module):
 
             B, H, W, _ = carry.h.shape
 
-            pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, pooled_h.shape[-1]))
+            pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, self.cfg.features))
             concat_hidden = [carry.h, prev_layer_hidden, pooled_h_expanded]
         else:
             concat_hidden = [carry.h, prev_layer_hidden]

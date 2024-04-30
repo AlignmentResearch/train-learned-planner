@@ -64,6 +64,23 @@ class PolicySpec(abc.ABC, Generic[PolicyCarryT]):
         params = policy.init(params_key, carry, observations, episode_starts, method=policy.get_logits_and_value)
         return policy, carry, params
 
+    def count_params(self, envs: gym.vector.VectorEnv) -> int:
+        policy = Policy(n_actions_from_envs(envs), self)
+
+        box_space = envs.single_observation_space
+        assert isinstance(box_space, gym.spaces.Box)
+
+        def init_params(key):
+            carry: PolicyCarryT = policy.apply({}, key, (1, *box_space.shape), method=policy.initialize_carry)  # type: ignore
+            observations = jnp.ones((1, 1, *box_space.shape))
+            episode_starts = jnp.ones((1, 1), dtype=jnp.bool_)
+            params = policy.init(key, carry, observations, episode_starts, method=policy.get_logits_and_value)
+            return params
+
+        key = jax.random.PRNGKey(0)
+        params = jax.eval_shape(init_params, key)
+        return sum(np.prod(v.shape) for v in jax.tree.leaves(params))
+
 
 def n_actions_from_envs(envs: gym.vector.VectorEnv) -> int:
     action_space = envs.single_action_space
