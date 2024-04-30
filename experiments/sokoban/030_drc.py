@@ -4,7 +4,7 @@ from pathlib import Path
 
 from farconf import update_fns_to_cli
 
-from cleanba.config import Args, sokoban_drc_1_1, sokoban_drc_3_3
+from cleanba.config import Args, sokoban_drc_3_3
 from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
@@ -13,8 +13,8 @@ clis = []
 n_envs = 256
 minibatch_size = 32
 assert n_envs % minibatch_size == 0
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
-    for base_fn in [sokoban_drc_1_1, sokoban_drc_3_3]:
+for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
+    for base_fn in [sokoban_drc_3_3]:
 
         def update_fn(config: Args) -> Args:
             config.local_num_envs = n_envs
@@ -87,7 +87,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="normal-batch",
+            PRIORITY="high-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
