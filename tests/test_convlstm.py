@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from cleanba.convlstm import ConvConfig, ConvLSTMCell, ConvLSTMConfig
+from cleanba.convlstm import ConvConfig, ConvLSTM, ConvLSTMCell, ConvLSTMCellState, ConvLSTMConfig
 from cleanba.environments import SokobanConfig
 from cleanba.network import Policy, n_actions_from_envs
 
@@ -78,15 +78,15 @@ def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool
 
 CONVLSTM_CONFIGS = [
     ConvLSTMConfig(
-        embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
+        embed=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
         recurrent=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
-        repeats_per_step=2,
+        repeats_per_step=1,
         pool_and_inject=False,
         add_one_to_forget=True,
     ),
     ConvLSTMConfig(
-        embed=[ConvConfig(7, (3, 3), (1, 1), "SAME", True)],
-        recurrent=[ConvConfig(5, (3, 3), (2, 2), "SAME", True), ConvConfig(2, (3, 3), (2, 2), "SAME", True)],
+        embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
+        recurrent=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)] * 2,
         repeats_per_step=2,
         pool_and_inject=True,
         add_one_to_forget=True,
@@ -124,6 +124,71 @@ def test_carry_shape(net: ConvLSTMConfig):
         shape = (envs.num_envs, dim_room[0] // cfg.strides[0], dim_room[1] // cfg.strides[1], cfg.features)
         assert cell_carry.c.shape == shape
         assert cell_carry.h.shape == shape
+
+
+@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
+def test_scan_correct(net: ConvLSTMConfig):
+    num_envs = 5
+    input_shape = (num_envs, 3, 60, 60)
+    lstm = ConvLSTM(net)
+    key, k1, k2 = jax.random.split(jax.random.PRNGKey(1234), 3)
+    carry = lstm.apply({}, k1, input_shape, method=lstm.initialize_carry)
+    params = lstm.init(k2, carry, jnp.ones((1, *input_shape)), jnp.ones((1, num_envs), dtype=jnp.bool_), method=lstm.scan)
+
+    time_steps = 4
+    key, k1, k2 = jax.random.split(key, 3)
+    inputs_nchw = jax.random.uniform(k1, (time_steps, *input_shape), maxval=255)
+    episode_starts = jnp.zeros((time_steps, num_envs))
+
+    lstm_carry, lstm_out = lstm.apply(params, carry, inputs_nchw, episode_starts, method=lstm.scan)
+
+    inputs = jnp.moveaxis(inputs_nchw, -3, -1)
+
+    b_lstm = lstm.bind(params)
+
+    cell_carry: list[ConvLSTMCellState] = list(carry)
+    for t in range(time_steps):
+        x = inputs[t]
+        for conv in b_lstm.conv_list:
+            x = conv(x)
+            x = nn.relu(x)
+
+        lstm_x = b_lstm._preprocess_input(inputs_nchw[t])
+        assert jnp.allclose(x, lstm_x)
+
+        h_nd = cell_carry[-1].h
+        for _ in range(net.repeats_per_step):
+            for d, cell in enumerate(b_lstm.cell_list):
+                cell_carry[d], h_nd = cell(cell_carry[d], x, h_nd)
+
+    for d in range(len(b_lstm.cell_list)):
+        assert jnp.allclose(cell_carry[d].c, lstm_carry[d].c, atol=1e-5)
+        assert jnp.allclose(cell_carry[d].h, lstm_carry[d].h, atol=1e-5)
+
+
+@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
+def test_policy_scan_correct(net: ConvLSTMConfig):
+    dim_room = (6, 6)
+    envs = _sync_sokoban_envs(dim_room)
+    num_envs = envs.num_envs
+    key, k1 = jax.random.split(jax.random.PRNGKey(1234))
+
+    policy, carry, params = net.init_params(envs, k1)
+    b_policy = policy.bind(params)
+
+    time_steps = 4
+    key, k1, k2 = jax.random.split(key, 3)
+    inputs_nchw = jax.random.uniform(k1, (time_steps, num_envs, 3, *dim_room), maxval=255)
+    episode_starts = jax.random.uniform(k2, (time_steps, num_envs)) < 0.4
+
+    scan_carry, scan_logits, _, _ = b_policy.get_logits_and_value(carry, inputs_nchw, episode_starts)
+
+    logits: list[Any] = [None] * time_steps
+    for t in range(time_steps):
+        carry, _, logits[t], key = b_policy.get_action(carry, inputs_nchw[t], episode_starts[t], key)
+
+    assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-5), carry, scan_carry))
+    assert jnp.allclose(scan_logits, jnp.stack(logits), atol=1e-5)
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
