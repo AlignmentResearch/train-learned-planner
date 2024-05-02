@@ -105,7 +105,7 @@ class ConvLSTM(nn.Module):
         """
         assert len(observations.shape) == 4, f"observations shape must be [batch, h, w, c] but is {observations.shape=}"
 
-        x = observations
+        x = observations / 255.0
         x = jnp.transpose(x, (0, 2, 3, 1))
         for c in self.conv_list:
             x = c(x)
@@ -224,9 +224,9 @@ class ConvLSTMCell(nn.Module):
 
         if self.pool_and_inject:
             AXES_HW = (1, 2)
-            h_max = jnp.max(carry.h, axis=AXES_HW)
+            h_max = jnp.max(prev_layer_hidden, axis=AXES_HW)
             assert h_max.shape == (carry.h.shape[0], carry.h.shape[-1])
-            h_mean = jnp.mean(carry.h, axis=AXES_HW)
+            h_mean = jnp.mean(prev_layer_hidden, axis=AXES_HW)
             h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
             pooled_h = nn.Dense(
                 self.cfg.features,
