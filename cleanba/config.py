@@ -177,7 +177,6 @@ def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
             mlp_hiddens=(256,),
             repeats_per_step=num_repeats,
             pool_and_inject=True,
-            add_one_to_forget=True,
         ),
     )
 

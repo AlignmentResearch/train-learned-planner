@@ -12,7 +12,7 @@ from flax.training.train_state import TrainState
 
 from cleanba.cleanba_impala import WandbWriter, _concat_and_shard_rollout_internal, load_train_state, train
 from cleanba.config import Args
-from cleanba.convlstm import ConvConfig, ConvLSTMCellState, ConvLSTMConfig
+from cleanba.convlstm import ConvConfig, ConvLSTMConfig, LSTMCellState
 from cleanba.environments import SokobanConfig
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import Rollout
@@ -99,14 +99,12 @@ class CheckingWriter(WandbWriter):
             recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
             repeats_per_step=2,
             pool_and_inject=False,
-            add_one_to_forget=True,
         ),
         ConvLSTMConfig(
             embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
             recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
             repeats_per_step=2,
             pool_and_inject=True,
-            add_one_to_forget=True,
         ),
     ],
 )
@@ -164,7 +162,7 @@ def test_concat_and_shard_rollout_internal():
 
     obs_t, _ = envs.reset()
     episode_starts_t = np.ones((envs.num_envs,), dtype=np.bool_)
-    carry_t = [ConvLSTMCellState(obs_t, obs_t)]
+    carry_t = [LSTMCellState(obs_t, obs_t)]
 
     storage: list[Rollout] = []
     for _ in range(time):
