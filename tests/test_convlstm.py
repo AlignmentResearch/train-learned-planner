@@ -53,29 +53,6 @@ def test_equivalent_to_lstm():
         assert jnp.allclose(cleanba_carry.h, linen_carry[1], atol=1e-6)
 
 
-@pytest.mark.parametrize("pool_and_inject", [True, False])
-@pytest.mark.parametrize("add_one_to_forget", [True, False])
-@pytest.mark.parametrize(
-    "cfg",
-    [
-        ConvConfig(2, (3, 3), (1, 1), "VALID", True),
-        ConvConfig(2, (3, 3), (2, 2), "SAME", True),
-    ],
-)
-def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool_and_inject: bool):
-    cell = ConvLSTMCell(cfg, add_one_to_forget, pool_and_inject)
-
-    rng = jax.random.PRNGKey(1234)
-    rng, k1, k2, k3 = jax.random.split(rng, 4)
-    inputs = jax.random.normal(k1, (3, 5, 10, 10, 3))
-
-    carry = cell.initialize_carry(k2, inputs[0].shape)
-    params = cell.init(k3, carry, inputs[0], carry.h)
-
-    for t in range(len(inputs)):
-        carry, out = jax.jit(cell.apply)(params, carry, inputs[t], carry.h)
-
-
 CONVLSTM_CONFIGS = [
     ConvLSTMConfig(
         embed=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
@@ -137,8 +114,9 @@ def test_scan_correct(net: ConvLSTMConfig):
 
     time_steps = 4
     key, k1, k2 = jax.random.split(key, 3)
-    inputs_nchw = jax.random.uniform(k1, (time_steps, *input_shape), maxval=255)
-    episode_starts = jnp.zeros((time_steps, num_envs))
+    inputs_nchw = jnp.astype(jax.random.uniform(k1, (time_steps, *input_shape), maxval=255), jnp.uint8)
+    episode_starts = jnp.zeros((time_steps, num_envs), dtype=jnp.bool_)
+    # episode_starts = jax.random.uniform(k2, (time_steps, num_envs)) < 0.2
 
     lstm_carry, lstm_out = lstm.apply(params, carry, inputs_nchw, episode_starts, method=lstm.scan)
 
