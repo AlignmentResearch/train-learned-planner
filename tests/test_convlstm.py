@@ -1,7 +1,9 @@
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import flax.linen as nn
+import flax.serialization
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
@@ -111,6 +113,34 @@ def test_carry_shape(net: ConvLSTMConfig):
         shape = (envs.num_envs, dim_room[0] // cfg.strides[0], dim_room[1] // cfg.strides[1], cfg.features)
         assert cell_carry.c.shape == shape
         assert cell_carry.h.shape == shape
+
+
+def test_scan_reference():
+    net = ConvLSTMConfig(
+        embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
+        recurrent=ConvConfig(5, (3, 3), (1, 1), "SAME", True),
+        n_recurrent=2,
+        repeats_per_step=2,
+        pool_and_inject=True,
+    )
+    lstm = ConvLSTM(net)
+
+    with (Path(__file__).parent / "convlstm_inout.msgpack").open("rb") as f:
+        inputs_and_outputs = flax.serialization.msgpack_restore(f.read())
+    params = inputs_and_outputs["params"]
+
+    carry_structure = [LSTMCellState(jnp.zeros(()), jnp.zeros(()))] * 2
+
+    carry = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["carry"])
+    inputs = inputs_and_outputs["inputs"]
+    episode_starts = inputs_and_outputs["episode_starts"]
+    lstm_carry2 = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["lstm_carry"])
+    lstm_out2 = inputs_and_outputs["lstm_out"]
+
+    lstm_carry, lstm_out = lstm.apply(params, carry, inputs, episode_starts, method=lstm.scan)
+
+    assert jax.tree.all(jax.tree.map(jnp.allclose, lstm_carry2, lstm_carry))
+    assert jnp.allclose(lstm_out2, lstm_out)
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
