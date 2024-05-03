@@ -77,14 +77,14 @@ class WandbWriter:
 
             wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
 
-        run_dir = args.base_run_dir / wandb_kwargs["group"]
+        run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
-        cfg_dict = farconf.to_dict(cfg, Args)
-        assert isinstance(cfg_dict, dict)
+        # cfg_dict = farconf.to_dict(cfg, Args)
+        # assert isinstance(cfg_dict, dict)
 
         wandb.init(
             **wandb_kwargs,
-            config=cfg_dict,
+            # config=cfg_dict,
             save_code=True,  # Make sure git diff is saved
             dir=run_dir,
             monitor_gym=False,  # Must manually log videos to wandb
