@@ -131,6 +131,9 @@ class BaseLSTM(nn.Module):
         carry, _ = apply_cells_once_fn(self, carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
 
         out = carry[-1].h
+
+        out = out + inputs  # Skip-connection from input to the output of the LSTM
+
         flattened_out = jnp.reshape(out, (inputs.shape[0], -1))
         return carry, flattened_out
 
@@ -176,6 +179,14 @@ class ConvLSTM(BaseLSTM):
             x = nn.relu(x)
         return x
 
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        n, h, w, c = input_shape
+        for conv in self.conv_list:
+            w //= conv.strides[0]
+            h //= conv.strides[1]
+        return super().initialize_carry(rng, (n, h, w, c))
+
 
 class LSTM(BaseLSTM):
     cfg: LSTMConfig
@@ -197,6 +208,10 @@ class LSTM(BaseLSTM):
             x = c(x)
             x = nn.relu(x)
         return x
+
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        return super().initialize_carry(rng, (input_shape[0], self.cfg.embed_hiddens[-1]))
 
 
 class WrappedCellBase(nn.RNNCellBase):

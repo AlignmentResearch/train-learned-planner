@@ -22,6 +22,7 @@ from cleanba.environments import EnvpoolBoxobanConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
     Rollout,
+    tree_flatten_and_concat,
 )
 
 
@@ -114,7 +115,7 @@ ROLLOUT_PATH.mkdir(exist_ok=True, parents=True)
 
 rollout_files = list(ROLLOUT_PATH.iterdir())
 
-NUM_ROLLOUTS = 100
+NUM_ROLLOUTS = 500
 if len(rollout_files) < NUM_ROLLOUTS:
     rollouts = collect_rollouts(args, num_rollouts=NUM_ROLLOUTS - len(rollout_files))
 
@@ -230,7 +231,7 @@ train_state = TrainState.create(
     params=params,
     tx=optax.MultiSteps(
         optax.chain(
-            optax.clip_by_global_norm(3.90625e-06),
+            optax.clip_by_global_norm(2.5e-5),
             adam_with_parameters(4e-4),
         ),
         every_k_schedule=1,
@@ -332,6 +333,9 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
     )
     metrics_dict["loss"] = loss
     train_state = train_state.apply_gradients(grads=grads)
+    flat_grad = tree_flatten_and_concat(grads)
+    metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
+    metrics_dict["grad_rms/total"] = metrics_dict["grad_rms/avg"] * np.sqrt(np.prod(flat_grad.shape))
     return train_state, metrics_dict
 
 

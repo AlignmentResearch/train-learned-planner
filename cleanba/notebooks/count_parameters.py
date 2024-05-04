@@ -1,3 +1,4 @@
+from cleanba.config import sokoban_drc_1_1, sokoban_drc_3_3
 from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import SokobanConfig
 from cleanba.network import GuezResNetConfig
@@ -24,6 +25,7 @@ drc33 = ConvLSTMConfig(
         ConvConfig(32, (4, 4), (2, 2), "SAME", True),
     ],
     recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+    n_recurrent=3,
     repeats_per_step=3,
     pool_and_inject=True,
 )
@@ -38,3 +40,17 @@ drc11 = ConvLSTMConfig(
     repeats_per_step=1,
     pool_and_inject=True,
 )
+
+
+# %%
+
+drc33.count_params(envs) - drc11.count_params(envs)
+
+
+# %%
+
+sokoban_drc_3_3().net.count_params(envs) - sokoban_drc_1_1().net.count_params(envs)
+
+
+# %% New grad clipping
+(sokoban_drc_3_3().net.count_params(envs) / GuezResNetConfig().count_params(envs)) ** 0.5 * 2.5e-4
