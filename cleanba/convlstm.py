@@ -238,7 +238,7 @@ class WrappedCellBase(nn.RNNCellBase):
         assert self.cfg.padding == "SAME" and all(s == 1 for s in self.cfg.strides), self.cfg
 
         if self.pool_and_inject:
-            pooled_h = self.pool_and_project(prev_layer_hidden)
+            pooled_h = self.pool_and_project(carry.h)
             cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
         else:
             cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
