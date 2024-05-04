@@ -164,7 +164,10 @@ class ConvLSTM(BaseLSTM):
 
     def setup(self):
         super().setup()
-        self.conv_list = [c.make_conv() for c in self.cfg.embed]
+        self.conv_list = [
+            c.make_conv(kernel_init=nn.initializers.variance_scaling(2.0, "fan_in", "truncated_normal"))
+            for c in self.cfg.embed
+        ]
         self.cell_list = [ConvLSTMCell(self.cfg.pool_and_inject, cfg=self.cfg.recurrent) for _ in range(self.cfg.n_recurrent)]
 
     def _compress_input(self, x: jax.Array) -> jax.Array:

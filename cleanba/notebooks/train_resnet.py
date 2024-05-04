@@ -24,6 +24,7 @@ from cleanba.impala_loss import (
     Rollout,
     tree_flatten_and_concat,
 )
+from cleanba.network import GuezResNetConfig
 
 
 def unreplicate(tree):
@@ -189,7 +190,7 @@ args.net = dataclasses.replace(args.net, yang_init=False)
 #     mlp_hiddens=(256,),
 #     last_activation="relu",
 # )
-# net = GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False)
+_resnet = GuezResNetConfig()
 net = ConvLSTMConfig(
     embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
     recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
@@ -197,7 +198,11 @@ net = ConvLSTMConfig(
     mlp_hiddens=(256,),
     repeats_per_step=3,
     pool_and_inject=True,
+    normalize_input=False,
+    head_scale=4.0,
 )
+# _envs = dataclasses.replace(args.train_env, num_envs=1).make()
+# print("The new grad norm is: ", 2.5e-4 * (net.count_params(_envs) / _resnet.count_params(_envs)) ** 0.5)
 
 BATCH_SIZE = 256
 policy, carry, params = net.init_params(
@@ -231,7 +236,7 @@ train_state = TrainState.create(
     params=params,
     tx=optax.MultiSteps(
         optax.chain(
-            optax.clip_by_global_norm(2.5e-5),
+            optax.clip_by_global_norm(1.6e-4),
             adam_with_parameters(4e-4),
         ),
         every_k_schedule=1,
@@ -250,9 +255,6 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
         _final_carry, nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(
             params, jax.tree.map(lambda x: x[0], minibatch.carry_t), minibatch.obs_t, minibatch.episode_starts_t
         )
-        nn_logits_from_obs *= 12.82
-        nn_value_from_obs *= 12.82
-
         del _final_carry
         nn_logits_t = nn_logits_from_obs[:-1]
         v_t = nn_value_from_obs[1:]
@@ -328,7 +330,14 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
     (loss, metrics_dict), grads = jax.value_and_grad(loss_fn, has_aux=True)(
         train_state.params,
         partial(policy.apply, method=policy.get_logits_and_value),
-        ImpalaLossConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
+        ImpalaLossConfig(
+            gamma=0.97,
+            vf_coef=0.25,
+            vtrace_lambda=0.97,
+            normalize_advantage=False,
+            logit_l2_coef=1.5625e-6,
+            weight_l2_coef=1.5625e-8,
+        ),
         minibatch,
     )
     metrics_dict["loss"] = loss

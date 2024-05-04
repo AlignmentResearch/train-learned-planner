@@ -13,7 +13,7 @@ clis = []
 n_envs = 256
 minibatch_size = 32
 assert n_envs % minibatch_size == 0
-for max_grad_norm in [0.00017636673296686107, 2.5e-4, 5e-4]:
+for max_grad_norm in [1.6e-4, 2.5e-4, 5e-4]:
     for base_fn in [sokoban_drc_3_3, sokoban_drc_3_3]:
         env_seed, learn_seed = (random_seed(), random_seed())
 
@@ -54,7 +54,7 @@ for max_grad_norm in [0.00017636673296686107, 2.5e-4, 5e-4]:
             config.loss = dataclasses.replace(
                 config.loss,
                 vtrace_lambda=0.97,
-                vf_coef=0.25,
+                vf_coef=1.00,
                 gamma=0.97,
                 ent_coef=0.01,
                 normalize_advantage=False,
@@ -97,7 +97,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "vf")
 
 if __name__ == "__main__":
     launch_jobs(

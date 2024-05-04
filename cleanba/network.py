@@ -45,6 +45,7 @@ class PolicySpec(abc.ABC, Generic[PolicyCarryT]):
     yang_init: bool = False
     norm: NormConfig = IdentityNorm()
     normalize_input: bool = False
+    head_scale: float = 1.0
 
     @abc.abstractmethod
     def make(self) -> nn.Module:
@@ -101,8 +102,8 @@ class Policy(nn.Module):
     def setup(self):
         # These are called `_params` for backwards compatibility with the `AgentParams` dataclass.
         self.network_params = self.cfg.make()
-        self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm)
-        self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm)
+        self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
+        self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
 
     def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
         # Convert from NCHW to NHWC
@@ -303,13 +304,14 @@ class AtariCNN(nn.Module):
 class Critic(nn.Module):
     yang_init: bool
     norm: NormConfig
+    kernel_scale: float
 
     @nn.compact
     def __call__(self, x):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(1.0)
+            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
         x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
@@ -321,13 +323,14 @@ class Actor(nn.Module):
     action_dim: int
     yang_init: bool
     norm: NormConfig
+    kernel_scale: float
 
     @nn.compact
     def __call__(self, x):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(1.0)
+            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
         x = nn.Dense(self.action_dim, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
