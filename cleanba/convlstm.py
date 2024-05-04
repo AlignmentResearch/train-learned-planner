@@ -29,6 +29,7 @@ class BaseLSTMConfig(PolicySpec):
     n_recurrent: int = 1  # D in the paper
     repeats_per_step: int = 1  # N in the paper
     pool_and_inject: bool = True
+    pool_and_inject_horizontal: bool = True
     mlp_hiddens: Sequence[int] = (256,)
 
     @abc.abstractmethod
@@ -168,7 +169,10 @@ class ConvLSTM(BaseLSTM):
             c.make_conv(kernel_init=nn.initializers.variance_scaling(2.0, "fan_in", "truncated_normal"))
             for c in self.cfg.embed
         ]
-        self.cell_list = [ConvLSTMCell(self.cfg.pool_and_inject, cfg=self.cfg.recurrent) for _ in range(self.cfg.n_recurrent)]
+        self.cell_list = [
+            ConvLSTMCell(self.cfg.pool_and_inject, self.cfg.pool_and_inject_horizontal, cfg=self.cfg.recurrent)
+            for _ in range(self.cfg.n_recurrent)
+        ]
 
     def _compress_input(self, x: jax.Array) -> jax.Array:
         """
@@ -197,7 +201,8 @@ class LSTM(BaseLSTM):
         super().setup()
         self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
         self.cell_list = [
-            LSTMCell(self.cfg.pool_and_inject, features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)
+            LSTMCell(self.cfg.pool_and_inject, self.cfg.pool_and_inject_horizontal, features=self.cfg.recurrent_hidden)
+            for _ in range(self.cfg.n_recurrent)
         ]
 
     def _compress_input(self, x: jax.Array) -> jax.Array:
@@ -218,6 +223,7 @@ class LSTM(BaseLSTM):
 
 class WrappedCellBase(nn.RNNCellBase):
     pool_and_inject: bool
+    pool_and_inject_horizontal: bool
 
     @staticmethod
     def pool_and_project(prev_layer_hidden: jax.Array) -> jax.Array:
@@ -238,7 +244,7 @@ class WrappedCellBase(nn.RNNCellBase):
         assert self.cfg.padding == "SAME" and all(s == 1 for s in self.cfg.strides), self.cfg
 
         if self.pool_and_inject:
-            pooled_h = self.pool_and_project(carry.h)
+            pooled_h = self.pool_and_project(carry.h if self.pool_and_inject_horizontal else prev_layer_hidden)
             cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
         else:
             cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
