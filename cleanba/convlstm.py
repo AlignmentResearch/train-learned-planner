@@ -152,7 +152,6 @@ class BaseLSTM(nn.Module):
         return out_carry, out
 
     def _mlp(self, x: jax.Array) -> jax.Array:
-        x *= 12.82
         for dense in self.dense_list:
             x = self.cfg.norm(x)
             x = dense(x)
