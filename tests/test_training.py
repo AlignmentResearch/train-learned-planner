@@ -95,14 +95,14 @@ class CheckingWriter(WandbWriter):
             normalize_input=False,
         ),
         ConvLSTMConfig(
-            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
-            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
+            recurrent=ConvConfig(3, (3, 3), (1, 1), "SAME", True),
             repeats_per_step=2,
             pool_and_inject=False,
         ),
         ConvLSTMConfig(
-            embed=[ConvConfig(3, (3, 3), (1, 1), "SAME", True)],
-            recurrent=[ConvConfig(3, (3, 3), (2, 2), "SAME", True)],
+            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
+            recurrent=ConvConfig(3, (3, 3), (1, 1), "SAME", True),
             repeats_per_step=2,
             pool_and_inject=True,
         ),

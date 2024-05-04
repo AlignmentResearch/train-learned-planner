@@ -127,20 +127,44 @@ def test_scan_reference():
 
     with (Path(__file__).parent / "convlstm_inout.msgpack").open("rb") as f:
         inputs_and_outputs = flax.serialization.msgpack_restore(f.read())
-    params = inputs_and_outputs["params"]
-
     carry_structure = [LSTMCellState(jnp.zeros(()), jnp.zeros(()))] * 2
 
     carry = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["carry"])
-    inputs = inputs_and_outputs["inputs"]
+    inputs = jnp.moveaxis(inputs_and_outputs["inputs_nchw"], 2, -1) / 255.0
     episode_starts = inputs_and_outputs["episode_starts"]
     lstm_carry2 = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["lstm_carry"])
     lstm_out2 = inputs_and_outputs["lstm_out"]
 
+    params = inputs_and_outputs["params"]
+    for layer_key in ["cell_list_0", "cell_list_1"]:
+        conv_params = params["params"][layer_key].pop("Conv_0")  # type: ignore
+        hidden_size = net.recurrent.features
+        convcell = dict(
+            hh=dict(
+                kernel=conv_params["kernel"][:, :, hidden_size : hidden_size * 2, :],
+                bias=conv_params["bias"],
+            ),
+            ih=dict(
+                kernel=jnp.concatenate(
+                    [
+                        conv_params["kernel"][:, :, :hidden_size, :],
+                        conv_params["kernel"][:, :, hidden_size * 2 :, :],
+                    ],
+                    axis=2,
+                ),
+                bias=jnp.zeros_like(conv_params["bias"]),
+            ),
+        )
+        params["params"][layer_key]["convcell"] = convcell
+
+    new_params = lstm.init(jax.random.PRNGKey(1234), carry, inputs, episode_starts, method=lstm.scan)
+    assert jax.tree.structure(params) == jax.tree.structure(new_params)
+    assert jax.tree.all(jax.tree.map(lambda x, y: x.shape == y.shape, params, new_params))
+
     lstm_carry, lstm_out = lstm.apply(params, carry, inputs, episode_starts, method=lstm.scan)
 
-    assert jax.tree.all(jax.tree.map(jnp.allclose, lstm_carry2, lstm_carry))
-    assert jnp.allclose(lstm_out2, lstm_out)
+    assert jnp.allclose(lstm_out2, lstm_out, atol=1e-7)
+    assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-7), lstm_carry2, lstm_carry))
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
