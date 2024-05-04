@@ -2,7 +2,7 @@ import dataclasses
 import shlex
 from pathlib import Path
 
-from farconf import update_fns_to_cli
+from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc_3_3
 from cleanba.environments import random_seed
@@ -74,6 +74,9 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             return config
 
         cli, _ = update_fns_to_cli(base_fn, update_fn)
+        # Check that parsing doesn't error
+        _ = parse_cli(cli, Args)
+
         print(shlex.join(cli))
         clis.append(cli)
 
