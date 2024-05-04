@@ -88,11 +88,6 @@ class BaseLSTM(nn.Module):
 
     def setup(self):
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
-        self._setup_compress_and_cells()
-
-    @abc.abstractmethod
-    def _setup_compress_and_cells(self) -> None:
-        ...
 
     @abc.abstractmethod
     def _compress_input(self, x: jax.Array) -> jax.Array:
@@ -154,6 +149,7 @@ class BaseLSTM(nn.Module):
         return out_carry, out
 
     def _mlp(self, x: jax.Array) -> jax.Array:
+        x *= 12.82
         for dense in self.dense_list:
             x = self.cfg.norm(x)
             x = dense(x)
@@ -184,7 +180,8 @@ class ConvLSTM(BaseLSTM):
 class LSTM(BaseLSTM):
     cfg: LSTMConfig
 
-    def _setup_compress_and_cells(self) -> None:
+    def setup(self):
+        super().setup()
         self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
         self.cell_list = [
             LSTMCell(self.cfg.pool_and_inject, features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)
