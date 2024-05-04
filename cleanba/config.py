@@ -133,7 +133,7 @@ def sokoban_resnet() -> Args:
     )
 
 
-def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
+def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
     CACHE_PATH = Path("/opt/sokoban_cache")
     return Args(
         train_env=EnvpoolBoxobanConfig(
@@ -173,7 +173,8 @@ def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
         sync_frequency=int(4e9),
         net=ConvLSTMConfig(
             embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
-            recurrent=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * num_layers,
+            recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            n_recurrent=n_recurrent,
             mlp_hiddens=(256,),
             repeats_per_step=num_repeats,
             pool_and_inject=True,

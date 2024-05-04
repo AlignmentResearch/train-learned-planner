@@ -23,7 +23,7 @@ drc33 = ConvLSTMConfig(
         ConvConfig(32, (8, 8), (4, 4), "SAME", True),
         ConvConfig(32, (4, 4), (2, 2), "SAME", True),
     ],
-    recurrent=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * 3,
+    recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
     repeats_per_step=3,
     pool_and_inject=True,
 )
@@ -33,7 +33,8 @@ drc11 = ConvLSTMConfig(
         ConvConfig(32, (8, 8), (4, 4), "SAME", True),
         ConvConfig(32, (4, 4), (2, 2), "SAME", True),
     ],
-    recurrent=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * 1,
+    recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+    n_recurrent=1,
     repeats_per_step=1,
     pool_and_inject=True,
 )
