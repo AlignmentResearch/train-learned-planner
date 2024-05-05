@@ -26,6 +26,7 @@ for head_scale in [1.0, 2.0, 4.0]:
                     head_scale=head_scale,
                     pool_and_inject_horizontal=horizontal,
                 )
+                assert config.net.head_scale == head_scale
 
                 world_size = 1
                 len_actor_device_ids = 1
@@ -81,7 +82,8 @@ for head_scale in [1.0, 2.0, 4.0]:
 
             cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
             # Check that parsing doesn't error
-            _ = parse_cli(cli, Args)
+            out = parse_cli(cli, Args)
+            assert out.net.head_scale == head_scale, head_scale
 
             print(shlex.join(cli))
             clis.append(cli)

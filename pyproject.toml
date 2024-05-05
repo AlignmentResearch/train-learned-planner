@@ -59,7 +59,7 @@ dependencies = [
     "opencv-python ~=4.7.0.68",
     "moviepy ~=1.0.3",
     "rlax ~=0.1.5",
-    "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
+    "farconf @ git+https://github.com/AlignmentResearch/farconf.git@gneeric-object",
     "ray[tune] ~=2.11.0",
 ]
 [project.optional-dependencies]

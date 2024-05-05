@@ -25,7 +25,7 @@ class ConvConfig:
 
 
 @dataclasses.dataclass(frozen=True)
-class BaseLSTMConfig(PolicySpec):
+class BaseLSTMConfig(PolicySpec["LSTMState"]):
     n_recurrent: int = 1  # D in the paper
     repeats_per_step: int = 1  # N in the paper
     pool_and_inject: bool = True
