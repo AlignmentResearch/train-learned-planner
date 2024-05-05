@@ -2,7 +2,7 @@ import abc
 import dataclasses
 import math
 from functools import partial
-from typing import Sequence
+from typing import Literal, Sequence
 
 import flax.linen as nn
 import flax.struct
@@ -19,8 +19,15 @@ class ConvConfig:
     strides: Sequence[int]
     padding: str | Sequence[tuple[int, int]] = "SAME"
     use_bias: bool = True
+    initialization: Literal["torch", "lecun"] = "lecun"
 
     def make_conv(self, **kwargs):
+        if self.initialization == "torch":
+            kernel_init = nn.initializers.variance_scaling(1 / 3, "fan_in", "uniform")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+        if "kernel_init" not in kwargs:
+            kwargs["kernel_init"] = kernel_init
         return nn.Conv(self.features, self.kernel_size, self.strides, self.padding, self.use_bias, **kwargs)
 
 
@@ -245,12 +252,17 @@ class WrappedCellBase(nn.RNNCellBase):
 
         if self.pool_and_inject:
             pooled_h = self.pool_and_project(carry.h if self.pool_and_inject_horizontal else prev_layer_hidden)
-            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
+            cell_inputs = jnp.concatenate([carry.h, inputs, prev_layer_hidden, pooled_h], axis=-1)
         else:
-            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
+            cell_inputs = jnp.concatenate([carry.h, inputs, prev_layer_hidden], axis=-1)
 
-        (c, h), out = self.make_cell()((carry.c, carry.h), cell_inputs)
-        return LSTMCellState(c=c, h=h), out
+        gates = self.make_cell()(cell_inputs)
+        i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
+
+        f = nn.sigmoid(f + 1)
+        new_c = f * carry.c + nn.sigmoid(i) * jnp.tanh(g)
+        new_h = nn.sigmoid(o) * jnp.tanh(new_c)
+        return LSTMCellState(c=new_c, h=new_h), new_h
 
     @nn.nowrap
     def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> LSTMCellState:
@@ -264,9 +276,7 @@ class ConvLSTMCell(WrappedCellBase):
 
     @nn.nowrap
     def make_cell(self):
-        return nn.ConvLSTMCell(
-            self.cfg.features, self.cfg.kernel_size, self.cfg.strides, self.cfg.padding, self.cfg.use_bias, name="convcell"
-        )
+        return dataclasses.replace(self.cfg, features=4 * self.cfg.features).make_conv()
 
     def num_feature_axes(self) -> int:
         return 3

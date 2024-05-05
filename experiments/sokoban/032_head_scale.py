@@ -14,7 +14,7 @@ n_envs = 256
 minibatch_size = 32
 assert n_envs % minibatch_size == 0
 for head_scale in [1.0, 2.0, 4.0]:
-    for horizontal in [True, False]:
+    for rmsprop_decay, adam_b1 in [(0.99, 0.9), (0.999, 0.99)]:
         for logit_l2_coef in [1.5625e-6, 1.5625e-5]:
             env_seed, learn_seed = (random_seed(), random_seed())
 
@@ -24,7 +24,7 @@ for head_scale in [1.0, 2.0, 4.0]:
                 config.net = dataclasses.replace(
                     config.net,
                     head_scale=head_scale,
-                    pool_and_inject_horizontal=horizontal,
+                    pool_and_inject=False,
                 )
                 assert config.net.head_scale == head_scale
 
@@ -71,10 +71,10 @@ for head_scale in [1.0, 2.0, 4.0]:
                 config.anneal_lr = True
 
                 config.optimizer = "adam"
-                config.adam_b1 = 0.9
-                config.rmsprop_decay = 0.99
+                config.adam_b1 = adam_b1
+                config.rmsprop_decay = rmsprop_decay
                 config.learning_rate = 4e-4
-                config.max_grad_norm = 1.5e-2
+                config.max_grad_norm = 1.5e-4
                 config.rmsprop_eps = 1.5625e-07
                 config.optimizer_yang = False
 
@@ -104,7 +104,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "no-inject")
 
 if __name__ == "__main__":
     launch_jobs(
