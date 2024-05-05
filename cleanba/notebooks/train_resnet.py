@@ -199,7 +199,7 @@ net = ConvLSTMConfig(
     repeats_per_step=3,
     pool_and_inject=True,
     normalize_input=False,
-    head_scale=4.0,
+    head_scale=1.0,
 )
 # _envs = dataclasses.replace(args.train_env, num_envs=1).make()
 # print("The new grad norm is: ", 2.5e-4 * (net.count_params(_envs) / _resnet.count_params(_envs)) ** 0.5)
@@ -236,7 +236,7 @@ train_state = TrainState.create(
     params=params,
     tx=optax.MultiSteps(
         optax.chain(
-            optax.clip_by_global_norm(1.6e-4),
+            optax.clip_by_global_norm(1.6e-3),
             adam_with_parameters(4e-4),
         ),
         every_k_schedule=1,
