@@ -61,6 +61,7 @@ class BaseLSTMConfig(PolicySpec):
 class ConvLSTMConfig(BaseLSTMConfig):
     embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: ConvLSTMCellConfig = ConvLSTMCellConfig(ConvConfig(32, (3, 3), (1, 1), "SAME", True))
+    use_relu: bool = True
 
     def make(self) -> "ConvLSTM":
         return ConvLSTM(self)
@@ -194,7 +195,7 @@ class ConvLSTM(BaseLSTM):
     def setup(self):
         super().setup()
         self.conv_list = [
-            c.make_conv(kernel_init=nn.initializers.variance_scaling(2.0, "fan_in", "truncated_normal"))
+            c.make_conv(kernel_init=nn.initializers.variance_scaling(1.0, "fan_in", "truncated_normal"))
             for c in self.cfg.embed
         ]
         self.cell_list = [ConvLSTMCell(self.cfg.recurrent) for _ in range(self.cfg.n_recurrent)]
@@ -207,7 +208,8 @@ class ConvLSTM(BaseLSTM):
 
         for c in self.conv_list:
             x = c(x)
-            x = nn.relu(x)
+            if self.cfg.use_relu:
+                x = nn.relu(x)
         return x
 
     @nn.nowrap

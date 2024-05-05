@@ -14,90 +14,93 @@ clis = []
 
 vf_coef = 0.25
 for learning_rate in [4e-4, 1e-3]:
-    for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
+    for use_relu in [True, False]:
+        for residual in [True, False]:
+            for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(4)]:
 
-        def update_fn(config: Args) -> Args:
-            config.eval_envs = {}  # Don't evaluate
-            config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
-            config.local_num_envs = 256
-            config.num_steps = 20
-            config.net = ConvLSTMConfig(
-                n_recurrent=3,
-                repeats_per_step=3,
-                skip_final=True,
-                residual=True,
-                embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
-                recurrent=ConvLSTMCellConfig(
-                    ConvConfig(32, (3, 3), (1, 1), "SAME", True),
-                    pool_and_inject="horizontal",
-                    pool_projection="per-channel",
-                    output_activation="sigmoid",
-                    fence_pad="valid",
-                    forget_bias=1.0,
-                ),
-                head_scale=1.0,
-            )
+                def update_fn(config: Args) -> Args:
+                    config.eval_envs = {}  # Don't evaluate
+                    config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
+                    config.local_num_envs = 256
+                    config.num_steps = 20
+                    config.net = ConvLSTMConfig(
+                        n_recurrent=3,
+                        repeats_per_step=3,
+                        skip_final=True,
+                        residual=residual,
+                        use_relu=use_relu,
+                        embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+                        recurrent=ConvLSTMCellConfig(
+                            ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+                            pool_and_inject="horizontal",
+                            pool_projection="per-channel",
+                            output_activation="sigmoid",
+                            fence_pad="valid",
+                            forget_bias=1.0,
+                        ),
+                        head_scale=1.0 if residual else 5.0,
+                    )
 
-            world_size = 1
-            len_actor_device_ids = 1
-            num_actor_threads = 1
-            global_step_multiplier = (
-                config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
-            )
+                    world_size = 1
+                    len_actor_device_ids = 1
+                    num_actor_threads = 1
+                    global_step_multiplier = (
+                        config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
+                    )
 
-            config.total_timesteps = 5_120_000
-            num_updates = config.total_timesteps // global_step_multiplier
-            assert (
-                num_updates * global_step_multiplier == config.total_timesteps
-            ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
+                    config.total_timesteps = 51_200_000
+                    num_updates = config.total_timesteps // global_step_multiplier
+                    assert (
+                        num_updates * global_step_multiplier == config.total_timesteps
+                    ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
-            # Evaluate (and save) EVAL_TIMES during training
-            EVAL_TIMES = 16
-            config.eval_frequency = num_updates // EVAL_TIMES
+                    # Evaluate (and save) EVAL_TIMES during training
+                    EVAL_TIMES = 16
+                    config.eval_frequency = num_updates // EVAL_TIMES
 
-            config.save_model = True
-            config.base_run_dir = Path("/training/cleanba")
+                    config.save_model = True
+                    config.base_run_dir = Path("/training/cleanba")
 
-            config.actor_update_frequency = 1
-            config.actor_update_cutoff = int(1e20)  # disable
+                    config.actor_update_frequency = 1
+                    config.actor_update_cutoff = int(1e20)  # disable
 
-            config.train_epochs = 1
-            config.num_actor_threads = 1
-            config.num_minibatches = 8
+                    config.train_epochs = 1
+                    config.num_actor_threads = 1
+                    config.num_minibatches = 8
 
-            config.seed = learn_seed
-            config.sync_frequency = int(1e20)
+                    config.seed = learn_seed
+                    config.sync_frequency = int(1e20)
 
-            logit_l2_coef = 1.5625e-5
-            config.loss = dataclasses.replace(
-                config.loss,
-                vtrace_lambda=0.97,
-                vf_coef=vf_coef,
-                gamma=0.97,
-                ent_coef=0.001,
-                normalize_advantage=False,
-                logit_l2_coef=logit_l2_coef,
-                weight_l2_coef=logit_l2_coef / 100,
-            )
-            config.base_fan_in = 1
-            config.anneal_lr = False
+                    logit_l2_coef = 1.5625e-5
+                    config.loss = dataclasses.replace(
+                        config.loss,
+                        vtrace_lambda=0.97,
+                        vf_coef=vf_coef,
+                        gamma=0.97,
+                        ent_coef=0.001,
+                        normalize_advantage=False,
+                        logit_l2_coef=logit_l2_coef,
+                        weight_l2_coef=logit_l2_coef / 100,
+                    )
+                    config.base_fan_in = 1
+                    config.anneal_lr = False
 
-            config.optimizer = "adam"
-            config.adam_b1 = 0.9
-            config.rmsprop_decay = 0.999
-            config.learning_rate = learning_rate
-            config.max_grad_norm = 1.5e-4
-            config.rmsprop_eps = 1.5625e-10
-            config.optimizer_yang = False
+                    config.optimizer = "adam"
+                    config.adam_b1 = 0.9
+                    config.rmsprop_decay = 0.999
+                    config.learning_rate = learning_rate
+                    config.max_grad_norm = 1.5e-4
+                    config.rmsprop_eps = 1.5625e-10
+                    config.optimizer_yang = False
 
-            return config
+                    return config
 
-        cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
-        print(shlex.join(cli))
-        # Check that parsing doesn't error
-        out = parse_cli(cli, Args)
+                cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
+                print(shlex.join(cli))
+                # Check that parsing doesn't error
+                out = parse_cli(cli, Args)
 
-        clis.append(cli)
+                clis.append(cli)
 
 runs: list[FlamingoRun] = []
 RUNS_PER_MACHINE = 1
