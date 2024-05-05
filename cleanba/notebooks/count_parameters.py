@@ -49,7 +49,7 @@ drc33.count_params(envs) - drc11.count_params(envs)
 
 # %%
 
-sokoban_drc_3_3().net.count_params(envs) - sokoban_drc_1_1().net.count_params(envs)
+print("params diff", sokoban_drc_3_3().net.count_params(envs) - sokoban_drc_1_1().net.count_params(envs))
 
 
 # %% New grad clipping

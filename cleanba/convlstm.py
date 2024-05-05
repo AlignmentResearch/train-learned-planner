@@ -41,6 +41,7 @@ class BaseLSTMConfig(PolicySpec):
     pool_and_inject_horizontal: bool = True
     mlp_hiddens: Sequence[int] = (256,)
     fence_pad: bool = True
+    skip_final: bool = True
 
     @abc.abstractmethod
     def make(self) -> "BaseLSTM":
@@ -101,7 +102,7 @@ class BaseLSTM(nn.Module):
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
     @abc.abstractmethod
-    def _compress_input(self, x: jax.Array) -> jax.Array:
+    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         ...
 
     @nn.nowrap
@@ -142,27 +143,28 @@ class BaseLSTM(nn.Module):
         carry, _ = apply_cells_once_fn(self, carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
 
         out = carry[-1].h
-
-        out = out + inputs  # Skip-connection from input to the output of the LSTM
-
-        flattened_out = jnp.reshape(out, (inputs.shape[0], -1))
-        return carry, flattened_out
+        return carry, out
 
     def step(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
         """Applies the RNN for a single step"""
-        embedded = self._compress_input(observations)
+        skip, embedded = self._compress_input(observations)
         out_carry, pre_mlp = self._apply_cells(carry, embedded, episode_starts)
+        if self.cfg.skip_final:
+            pre_mlp = pre_mlp + skip
         return out_carry, self._mlp(pre_mlp)
 
     def scan(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
         """Applies the RNN over many time steps."""
-        embedded = jax.vmap(self._compress_input)(observations)
+        skip, embedded = jax.vmap(self._compress_input)(observations)
         apply_cells_fn = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})
         out_carry, pre_mlp = apply_cells_fn(self, carry, embedded, episode_starts)
+        if self.cfg.skip_final:
+            pre_mlp = pre_mlp + skip
         out = jax.vmap(self._mlp)(pre_mlp)
         return out_carry, out
 
     def _mlp(self, x: jax.Array) -> jax.Array:
+        x = jnp.reshape(x, (x.shape[0], -1))
         for dense in self.dense_list:
             x = self.cfg.norm(x)
             x = dense(x)
@@ -184,7 +186,7 @@ class ConvLSTM(BaseLSTM):
             for _ in range(self.cfg.n_recurrent)
         ]
 
-    def _compress_input(self, x: jax.Array) -> jax.Array:
+    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         """
         Embeds the inputs using `self.conv_list`
         """
@@ -197,8 +199,10 @@ class ConvLSTM(BaseLSTM):
         if self.cfg.fence_pad:
             ones = jnp.ones((*x.shape[:-1], 1))
             fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
-            x = jnp.concatenate([x, fence], axis=-1)
-        return x
+            embed = jnp.concatenate([x, fence], axis=-1)
+        else:
+            embed = x
+        return x, embed
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
@@ -220,7 +224,7 @@ class LSTM(BaseLSTM):
             for _ in range(self.cfg.n_recurrent)
         ]
 
-    def _compress_input(self, x: jax.Array) -> jax.Array:
+    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
         assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
 
         # Flatten input
@@ -229,7 +233,7 @@ class LSTM(BaseLSTM):
         for c in self.compress_list:
             x = c(x)
             x = nn.relu(x)
-        return x
+        return x, x
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
