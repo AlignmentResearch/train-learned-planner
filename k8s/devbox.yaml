@@ -38,7 +38,7 @@ spec:
             git submodule update --recursive
             pip install matplotlib jupyter
             pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-            sleep 8h
+            sleep 1d
         resources:
           requests:
             cpu: {CPU}
