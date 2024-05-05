@@ -5,6 +5,7 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc_3_3
+from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
 clis = []
@@ -12,8 +13,8 @@ clis = []
 n_envs = 256
 minibatch_size = 32
 assert n_envs % minibatch_size == 0
-for fence_pad in [True, False]:
-    for env_seed, learn_seed in [(1007432561, 778268931)]:
+for fence_pad in [True]:
+    for env_seed, learn_seed in [(1007432561, 778268931), (random_seed(), random_seed()), (random_seed(), random_seed())]:
 
         def update_fn(config: Args) -> Args:
             config.local_num_envs = n_envs
@@ -33,7 +34,7 @@ for fence_pad in [True, False]:
             global_step_multiplier = (
                 config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
             )
-            config.total_timesteps = 80_117_760
+            config.total_timesteps = 80_117_760 * 5
             num_updates = config.total_timesteps // global_step_multiplier
             assert (
                 num_updates * global_step_multiplier == config.total_timesteps
