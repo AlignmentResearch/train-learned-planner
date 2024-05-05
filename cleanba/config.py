@@ -65,6 +65,8 @@ class Args:
     distributed: bool = False  # whether to use `jax.distributed`
     concurrency: bool = True  # whether to run the actor and learner concurrently
 
+    load_path: Path | None = None  # Where to load the initial training state from
+
 
 def sokoban_resnet() -> Args:
     CACHE_PATH = Path("/opt/sokoban_cache")
