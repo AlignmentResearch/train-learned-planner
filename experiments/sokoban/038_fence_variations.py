@@ -13,12 +13,12 @@ clis = []
 
 
 for pool_and_inject in ["horizontal"]:
-    for pool_projection in ["full", "per-channel", "max"]:
-        for output_activation in ["sigmoid", "tanh"]:
+    for pool_projection in ["per-channel"]:
+        for output_activation in ["sigmoid"]:
             for fence_pad in ["same", "valid"]:
-                for forget_bias in [0.0, 1.0]:
+                for forget_bias in [1.0]:
                     for skip_final in [True]:
-                        for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
+                        for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
 
                             def update_fn(config: Args) -> Args:
                                 config.eval_envs = {}  # Don't evaluate
@@ -38,7 +38,7 @@ for pool_and_inject in ["horizontal"]:
                                         fence_pad=fence_pad,
                                         forget_bias=forget_bias,
                                     ),
-                                    head_scale=2.0,
+                                    head_scale=5.0,
                                 )
 
                                 world_size = 1
@@ -51,11 +51,8 @@ for pool_and_inject in ["horizontal"]:
                                     * len_actor_device_ids
                                     * world_size
                                 )
-                                # Don't update actor
-                                config.actor_update_cutoff = int(1e9)
-                                config.actor_update_frequency = int(1e9)
 
-                                config.total_timesteps = 384_000
+                                config.total_timesteps = 384_000 * 3
                                 num_updates = config.total_timesteps // global_step_multiplier
                                 assert (
                                     num_updates * global_step_multiplier == config.total_timesteps
@@ -68,7 +65,7 @@ for pool_and_inject in ["horizontal"]:
                                 config.save_model = True
                                 config.base_run_dir = Path("/training/cleanba")
 
-                                config.actor_update_frequency = 1
+                                config.actor_update_frequency = int(1e9)  # Don't update actor
                                 config.actor_update_cutoff = int(1e20)  # disable
 
                                 config.train_epochs = 1
@@ -90,12 +87,12 @@ for pool_and_inject in ["horizontal"]:
                                     weight_l2_coef=logit_l2_coef / 100,
                                 )
                                 config.base_fan_in = 1
-                                config.anneal_lr = True
+                                config.anneal_lr = False
 
                                 config.optimizer = "adam"
                                 config.adam_b1 = 0.9
                                 config.rmsprop_decay = 0.999
-                                config.learning_rate = 8e-4
+                                config.learning_rate = 1e-3
                                 config.max_grad_norm = 1.5e-4
                                 config.rmsprop_eps = 1.5625e-10
                                 config.optimizer_yang = False
@@ -125,7 +122,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "2")
 
 if __name__ == "__main__":
     launch_jobs(
