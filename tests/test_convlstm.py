@@ -276,10 +276,12 @@ def test_convlstm_forward(net: ConvLSTMConfig):
 @pytest.mark.parametrize("fence_pad", ["same", "valid", "no"])
 @pytest.mark.parametrize("forget_bias", [0.0, 1.0])
 @pytest.mark.parametrize("skip_final", [True, False])
-def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final):
+@pytest.mark.parametrize("residual", [True, False])
+def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
     net = ConvLSTMConfig(
         n_recurrent=3,
         repeats_per_step=3,
+        residual=residual,
         skip_final=skip_final,
         embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
         recurrent=ConvLSTMCellConfig(

@@ -50,6 +50,7 @@ class BaseLSTMConfig(PolicySpec):
     repeats_per_step: int = 1  # N in the paper
     mlp_hiddens: Sequence[int] = (256,)
     skip_final: bool = True
+    residual: bool = False
 
     @abc.abstractmethod
     def make(self) -> "BaseLSTM":
@@ -124,14 +125,21 @@ class BaseLSTM(nn.Module):
         """
         assert len(inputs.shape) == 4
         carry = list(carry)  # copy
-        prev_layer_state = carry[-1].h  # Top-down skip connection from previous time step
+
+        # Top-down skip connection from previous time step
+        # Importantly it's not residual like the rest of the carry-upwards hidden state
+        prev_layer_state = carry[-1].h
 
         for d, cell in enumerate(self.cell_list):
             # c^n_d, h^n_d = MemoryModule_d(i_t, c^{n-1}_d, h^{n-1}_d, h^n_{d-1})
             #
             # equivalently
             # state[d] = cell_list[d](i_t, state[d], h_n{d-1}
-            carry[d], prev_layer_state = cell(carry[d], inputs, prev_layer_state)
+            carry[d], new_state = cell(carry[d], inputs, prev_layer_state)
+            if self.cfg.residual:
+                prev_layer_state = prev_layer_state + new_state
+            else:
+                prev_layer_state = new_state
         return carry, ()
 
     def _apply_cells(self, carry: LSTMState, inputs: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
