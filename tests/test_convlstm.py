@@ -9,14 +9,23 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from cleanba.convlstm import ConvConfig, ConvLSTM, ConvLSTMCell, ConvLSTMConfig, LSTMCellState
+from cleanba.convlstm import (
+    ConvConfig,
+    ConvLSTM,
+    ConvLSTMCell,
+    ConvLSTMCellConfig,
+    ConvLSTMConfig,
+    LSTMCellState,
+)
 from cleanba.environments import SokobanConfig
 from cleanba.network import Policy, n_actions_from_envs
 
 
 def test_equivalent_to_lstm():
-    cfg = ConvConfig(features=2, kernel_size=(3, 3), strides=(1, 1), padding="SAME", use_bias=True)
-    cleanba_cell = ConvLSTMCell(cfg=cfg, pool_and_inject=False)
+    cfg = ConvLSTMCellConfig(
+        ConvConfig(features=2, kernel_size=(3, 3), strides=(1, 1), padding="SAME", use_bias=True), pool_and_inject="no"
+    )
+    cleanba_cell = ConvLSTMCell(cfg=cfg)
     linen_cell = nn.ConvLSTMCell(cfg.features, cfg.kernel_size, cfg.strides, cfg.padding, cfg.use_bias)
 
     rng = jax.random.PRNGKey(1234)
@@ -69,15 +78,13 @@ def test_convlstm_strides_padding(pool_and_inject: bool, cfg: ConvConfig):
 CONVLSTM_CONFIGS = [
     ConvLSTMConfig(
         embed=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
-        recurrent=ConvConfig(2, (3, 3), (1, 1), "SAME", True),
+        recurrent=ConvLSTMCellConfig(ConvConfig(2, (3, 3), (1, 1), "SAME", True), pool_and_inject="no"),
         repeats_per_step=1,
-        pool_and_inject=False,
     ),
     ConvLSTMConfig(
         embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
-        recurrent=ConvConfig(5, (3, 3), (1, 1), "SAME", True),
+        recurrent=ConvLSTMCellConfig(ConvConfig(5, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
         repeats_per_step=2,
-        pool_and_inject=True,
     ),
 ]
 
@@ -118,10 +125,9 @@ def test_carry_shape(net: ConvLSTMConfig):
 def test_scan_reference():
     net = ConvLSTMConfig(
         embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
-        recurrent=ConvConfig(5, (3, 3), (1, 1), "SAME", True),
+        recurrent=ConvLSTMCellConfig(ConvConfig(5, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
         n_recurrent=2,
         repeats_per_step=2,
-        pool_and_inject=True,
     )
     lstm = ConvLSTM(net)
 
@@ -262,3 +268,38 @@ def test_convlstm_forward(net: ConvLSTMConfig):
 
     for k, v in metrics.items():
         assert v.shape == (), f"{k} is not averaged over time steps, has {v.shape=}"
+
+
+@pytest.mark.parametrize("pool_and_inject", ["horizontal", "vertical", "no"])
+@pytest.mark.parametrize("pool_projection", ["full", "per-channel", "max", "mean"])
+@pytest.mark.parametrize("output_activation", ["sigmoid", "tanh"])
+@pytest.mark.parametrize("fence_pad", ["same", "valid", "no"])
+@pytest.mark.parametrize("forget_bias", [0.0, 1.0])
+@pytest.mark.parametrize("skip_final", [True, False])
+def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final):
+    net = ConvLSTMConfig(
+        n_recurrent=3,
+        repeats_per_step=3,
+        skip_final=skip_final,
+        embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+        recurrent=ConvLSTMCellConfig(
+            ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            pool_and_inject=pool_and_inject,
+            pool_projection=pool_projection,
+            output_activation=output_activation,
+            fence_pad=fence_pad,
+            forget_bias=forget_bias,
+        ),
+    )
+
+    envs = SokobanConfig(
+        max_episode_steps=120,
+        num_envs=1,
+        seed=1,
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(10, 10),
+        asynchronous=False,
+    ).make()
+
+    net.count_params(envs)

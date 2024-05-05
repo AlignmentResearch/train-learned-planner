@@ -207,10 +207,11 @@ def single_device_update(
         metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
         metrics_dict["grad_rms/total"] = metrics_dict["grad_rms/avg"] * np.sqrt(np.prod(flat_grad.shape))
 
-        named_params, _ = jax.tree_util.tree_flatten_with_path(grads)
+        # [DISABLED] per-parameter grads
+        # named_params, _ = jax.tree_util.tree_flatten_with_path(grads)
 
-        for k, v in named_params:
-            metrics_dict[f"grad_rms/{jax.tree_util.keystr(k)}"] = jnp.sqrt(jnp.mean(jnp.square(v)))
+        # for k, v in named_params:
+        #     metrics_dict[f"grad_rms/{jax.tree_util.keystr(k)}"] = jnp.sqrt(jnp.mean(jnp.square(v)))
 
         agent_state = agent_state.apply_gradients(grads=grads)
         return agent_state, metrics_dict

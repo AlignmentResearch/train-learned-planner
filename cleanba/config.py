@@ -3,7 +3,7 @@ from dataclasses import field
 from pathlib import Path
 from typing import List
 
-from cleanba.convlstm import ConvConfig, ConvLSTMConfig
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
@@ -172,12 +172,12 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
         log_frequency=10,
         net=ConvLSTMConfig(
             embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
-            recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            recurrent=ConvLSTMCellConfig(
+                ConvConfig(32, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal", fence_pad="same"
+            ),
             n_recurrent=n_recurrent,
             mlp_hiddens=(256,),
             repeats_per_step=num_repeats,
-            pool_and_inject=True,
-            fence_pad=True,
         ),
         loss=ImpalaLossConfig(
             vtrace_lambda=0.97,

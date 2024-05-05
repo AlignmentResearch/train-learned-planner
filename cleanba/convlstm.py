@@ -34,13 +34,21 @@ class ConvConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class ConvLSTMCellConfig:
+    conv: ConvConfig
+    pool_and_inject: Literal["horizontal", "vertical", "no"] = "horizontal"
+    pool_projection: Literal["full", "per-channel", "max", "mean"] = "full"
+
+    output_activation: Literal["sigmoid", "tanh"] = "sigmoid"
+    forget_bias: float = 0.0
+    fence_pad: Literal["same", "valid", "no"] = "same"
+
+
+@dataclasses.dataclass(frozen=True)
 class BaseLSTMConfig(PolicySpec):
     n_recurrent: int = 1  # D in the paper
     repeats_per_step: int = 1  # N in the paper
-    pool_and_inject: bool = True
-    pool_and_inject_horizontal: bool = True
     mlp_hiddens: Sequence[int] = (256,)
-    fence_pad: bool = True
     skip_final: bool = True
 
     @abc.abstractmethod
@@ -51,7 +59,7 @@ class BaseLSTMConfig(PolicySpec):
 @dataclasses.dataclass(frozen=True)
 class ConvLSTMConfig(BaseLSTMConfig):
     embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
-    recurrent: ConvConfig = ConvConfig(32, (3, 3), (1, 1), "SAME", True)
+    recurrent: ConvLSTMCellConfig = ConvLSTMCellConfig(ConvConfig(32, (3, 3), (1, 1), "SAME", True))
 
     def make(self) -> "ConvLSTM":
         return ConvLSTM(self)
@@ -96,13 +104,13 @@ LSTMState = list[LSTMCellState]
 
 class BaseLSTM(nn.Module):
     cfg: BaseLSTMConfig
-    cell_list: list["WrappedCellBase"] = dataclasses.field(init=False)
+    cell_list: list["ConvLSTMCell"] = dataclasses.field(init=False)
 
     def setup(self):
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
     @abc.abstractmethod
-    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def _compress_input(self, x: jax.Array) -> jax.Array:
         ...
 
     @nn.nowrap
@@ -147,19 +155,19 @@ class BaseLSTM(nn.Module):
 
     def step(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
         """Applies the RNN for a single step"""
-        skip, embedded = self._compress_input(observations)
+        embedded = self._compress_input(observations)
         out_carry, pre_mlp = self._apply_cells(carry, embedded, episode_starts)
         if self.cfg.skip_final:
-            pre_mlp = pre_mlp + skip
+            pre_mlp = pre_mlp + embedded
         return out_carry, self._mlp(pre_mlp)
 
     def scan(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
         """Applies the RNN over many time steps."""
-        skip, embedded = jax.vmap(self._compress_input)(observations)
+        embedded = jax.vmap(self._compress_input)(observations)
         apply_cells_fn = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})
         out_carry, pre_mlp = apply_cells_fn(self, carry, embedded, episode_starts)
         if self.cfg.skip_final:
-            pre_mlp = pre_mlp + skip
+            pre_mlp = pre_mlp + embedded
         out = jax.vmap(self._mlp)(pre_mlp)
         return out_carry, out
 
@@ -181,12 +189,9 @@ class ConvLSTM(BaseLSTM):
             c.make_conv(kernel_init=nn.initializers.variance_scaling(2.0, "fan_in", "truncated_normal"))
             for c in self.cfg.embed
         ]
-        self.cell_list = [
-            ConvLSTMCell(self.cfg.pool_and_inject, self.cfg.pool_and_inject_horizontal, cfg=self.cfg.recurrent)
-            for _ in range(self.cfg.n_recurrent)
-        ]
+        self.cell_list = [ConvLSTMCell(self.cfg.recurrent) for _ in range(self.cfg.n_recurrent)]
 
-    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def _compress_input(self, x: jax.Array) -> jax.Array:
         """
         Embeds the inputs using `self.conv_list`
         """
@@ -195,14 +200,7 @@ class ConvLSTM(BaseLSTM):
         for c in self.conv_list:
             x = c(x)
             x = nn.relu(x)
-
-        if self.cfg.fence_pad:
-            ones = jnp.ones((*x.shape[:-1], 1))
-            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
-            embed = jnp.concatenate([x, fence], axis=-1)
-        else:
-            embed = x
-        return x, embed
+        return x
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
@@ -219,12 +217,9 @@ class LSTM(BaseLSTM):
     def setup(self):
         super().setup()
         self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
-        self.cell_list = [
-            LSTMCell(self.cfg.pool_and_inject, self.cfg.pool_and_inject_horizontal, features=self.cfg.recurrent_hidden)
-            for _ in range(self.cfg.n_recurrent)
-        ]
+        self.cell_list = []  # LSTMCell(self.cfg.cell, features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)]
 
-    def _compress_input(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
+    def _compress_input(self, x: jax.Array) -> jax.Array:
         assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
 
         # Flatten input
@@ -233,25 +228,39 @@ class LSTM(BaseLSTM):
         for c in self.compress_list:
             x = c(x)
             x = nn.relu(x)
-        return x, x
+        return x
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
         return super().initialize_carry(rng, (input_shape[0], self.cfg.embed_hiddens[-1]))
 
 
-class WrappedCellBase(nn.RNNCellBase):
-    pool_and_inject: bool
-    pool_and_inject_horizontal: bool
+class ConvLSTMCell(nn.RNNCellBase):
+    cfg: ConvLSTMCellConfig
 
-    @staticmethod
-    def pool_and_project(prev_layer_hidden: jax.Array) -> jax.Array:
+    def pool_and_project(self, prev_layer_hidden: jax.Array) -> jax.Array:
         B, H, W, C = prev_layer_hidden.shape
         AXES_HW = (1, 2)
         h_max = jnp.max(prev_layer_hidden, axis=AXES_HW)
         h_mean = jnp.mean(prev_layer_hidden, axis=AXES_HW)
-        h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
-        pooled_h = nn.Dense(C, use_bias=False)(h_max_and_mean)
+        if self.cfg.pool_projection == "max":
+            pooled_h = h_max
+        elif self.cfg.pool_projection == "mean":
+            pooled_h = h_mean
+        elif self.cfg.pool_projection == "full":
+            h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
+            pooled_h = nn.Dense(C, use_bias=False)(h_max_and_mean)
+
+        elif self.cfg.pool_projection == "per-channel":
+            project = self.param(
+                "project",
+                nn.initializers.variance_scaling(1.0, "fan_in", "truncated_normal"),
+                (2, self.cfg.conv.features),
+                jnp.float32,
+            )
+            pooled_h = project[0] * h_max + project[1] * h_mean
+        else:
+            raise ValueError(f"{self.cfg.pool_projection=}")
 
         pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, C))
         return pooled_h_expanded
@@ -260,46 +269,63 @@ class WrappedCellBase(nn.RNNCellBase):
     def __call__(
         self, carry: LSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
     ) -> tuple[LSTMCellState, jax.Array]:
-        assert self.cfg.padding == "SAME" and all(s == 1 for s in self.cfg.strides), self.cfg
+        assert self.cfg.conv.padding == "SAME" and all(s == 1 for s in self.cfg.conv.strides), self.cfg
 
-        if self.pool_and_inject:
-            pooled_h = self.pool_and_project(carry.h if self.pool_and_inject_horizontal else prev_layer_hidden)
-            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
+        batch, height, width, channels = inputs.shape
+        if self.cfg.fence_pad == "same":
+            ones = jnp.ones((batch, height, width, channels))
+            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
+            processed_fence = dataclasses.replace(
+                self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="SAME"
+            ).make_conv(name="fence")(fence)
+        elif self.cfg.fence_pad == "valid":
+            ones = jnp.ones((batch, height + 2, width + 2, channels))
+            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
+            processed_fence = dataclasses.replace(
+                self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="VALID"
+            ).make_conv(name="fence")(fence)
+        elif self.cfg.fence_pad == "no":
+            processed_fence = 0.0
         else:
+            raise ValueError(f"{self.cfg.fence_pad=}")
+
+        if self.cfg.pool_and_inject == "no":
             cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
 
-        gates = self.make_cell(name="ih")(cell_inputs) + self.make_cell(use_bias=False, name="hh")(carry.h)
-        i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
+        else:
+            if self.cfg.pool_and_inject == "horizontal":
+                to_pool = carry.h
+            elif self.cfg.pool_and_inject == "vertical":
+                to_pool = prev_layer_hidden
+            else:
+                raise ValueError(f"{self.cfg.pool_and_inject=}")
+            pooled_h = self.pool_and_project(to_pool)
+            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
 
-        f = nn.sigmoid(f + 1)
-        new_c = f * carry.c + nn.sigmoid(i) * jnp.tanh(g)
-        new_h = nn.sigmoid(o) * jnp.tanh(new_c)
+        make_conv_fn = dataclasses.replace(self.cfg.conv, features=4 * self.cfg.conv.features).make_conv
+
+        gates = make_conv_fn(name="ih")(cell_inputs) + make_conv_fn(use_bias=False, name="hh")(carry.h) + processed_fence
+        i, j, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
+
+        i = jnp.tanh(i)
+        j = nn.sigmoid(j)
+        f = nn.sigmoid(f + self.cfg.forget_bias)
+        if self.cfg.output_activation == "sigmoid":
+            o = nn.sigmoid(o)
+        elif self.cfg.output_activation == "tanh":
+            o = jnp.tanh(o)
+        else:
+            raise ValueError(f"{self.cfg.output_activation=}")
+
+        new_c = carry.c * f + i * j
+        new_h = nn.tanh(new_c) * o
         return LSTMCellState(c=new_c, h=new_h), new_h
 
     @nn.nowrap
     def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> LSTMCellState:
-        shape = (*input_shape[:-1], self.cfg.features)
+        shape = (*input_shape[:-1], self.cfg.conv.features)
         c_rng, h_rng = jax.random.split(rng, 2)
         return LSTMCellState(c=nn.zeros_init()(c_rng, shape), h=nn.zeros_init()(h_rng, shape))
 
-
-class ConvLSTMCell(WrappedCellBase):
-    cfg: ConvConfig
-
-    @nn.nowrap
-    def make_cell(self, **kwargs):
-        return dataclasses.replace(self.cfg, features=4 * self.cfg.features).make_conv(**kwargs)
-
     def num_feature_axes(self) -> int:
         return 3
-
-
-class LSTMCell(WrappedCellBase):
-    features: int
-
-    @nn.nowrap
-    def make_cell(self, **kwargs):
-        return nn.LSTMCell(self.features, **kwargs)
-
-    def num_feature_axes(self) -> int:
-        return 1
