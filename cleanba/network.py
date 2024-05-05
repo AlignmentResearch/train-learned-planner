@@ -1,6 +1,6 @@
 import abc
 import dataclasses
-from typing import Any, Generic, Literal, SupportsFloat, TypeVar
+from typing import Any, Literal, SupportsFloat
 
 import flax.linen as nn
 import gymnasium as gym
@@ -37,11 +37,11 @@ class IdentityNorm(NormConfig):
         return x
 
 
-PolicyCarryT = TypeVar("PolicyCarryT")
+PolicyCarryT = Any
 
 
 @dataclasses.dataclass(frozen=True)
-class PolicySpec(abc.ABC, Generic[PolicyCarryT]):
+class PolicySpec(abc.ABC):
     yang_init: bool = False
     norm: NormConfig = IdentityNorm()
     normalize_input: bool = False
@@ -181,7 +181,7 @@ class Policy(nn.Module):
 
 
 @dataclasses.dataclass(frozen=True)
-class AtariCNNSpec(PolicySpec[tuple[()]]):
+class AtariCNNSpec(PolicySpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
@@ -341,7 +341,7 @@ class Actor(nn.Module):
 
 
 @dataclasses.dataclass(frozen=True)
-class SokobanResNetConfig(PolicySpec[tuple[()]]):
+class SokobanResNetConfig(PolicySpec):
     channels: tuple[int, ...] = (64, 64, 64) * 3
     kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
 
@@ -481,7 +481,7 @@ def label_and_learning_rate_for_params(
 
 
 @dataclasses.dataclass(frozen=True)
-class GuezResNetConfig(PolicySpec[tuple[()]]):
+class GuezResNetConfig(PolicySpec):
     channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
     strides: tuple[int, ...] = (1,) * 9
     kernel_sizes: tuple[int, ...] = (4,) * 9
