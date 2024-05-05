@@ -59,7 +59,7 @@ for fence_pad in [True, False]:
                     config.seed = learn_seed
                     config.sync_frequency = int(1e20)
 
-                    logit_l2_coef = 1.5625e-6  # doesn't seem to matter much from now. May improve stability a tiny bit.
+                    logit_l2_coef = 1.5625e-5
                     config.loss = dataclasses.replace(
                         config.loss,
                         vtrace_lambda=0.97,
