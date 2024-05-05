@@ -141,6 +141,8 @@ class BaseLSTM(nn.Module):
                 prev_layer_state = prev_layer_state + new_state
             else:
                 prev_layer_state = new_state
+        if not self.cfg.skip_final:  # Pass the residual connection on to the next repetition
+            carry[-1] = LSTMCellState(c=carry[-1].c, h=prev_layer_state)
         return carry, ()
 
     def _apply_cells(self, carry: LSTMState, inputs: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
@@ -206,9 +208,9 @@ class ConvLSTM(BaseLSTM):
         """
         assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
 
-        for c in self.conv_list:
-            x = c(x)
-            if self.cfg.use_relu:
+        for i, conv in enumerate(self.conv_list):
+            x = conv(x)
+            if self.cfg.use_relu and i < len(self.conv_list) - 1:
                 x = nn.relu(x)
         return x
 

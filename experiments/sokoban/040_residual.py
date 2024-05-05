@@ -118,7 +118,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "3")
+GROUP: str = group_from_fname(__file__, "4")
 
 if __name__ == "__main__":
     launch_jobs(
