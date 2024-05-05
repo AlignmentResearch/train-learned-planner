@@ -28,7 +28,9 @@ class ConvConfig:
             kernel_init = nn.initializers.lecun_normal()
         if "kernel_init" not in kwargs:
             kwargs["kernel_init"] = kernel_init
-        return nn.Conv(self.features, self.kernel_size, self.strides, self.padding, self.use_bias, **kwargs)
+        if "use_bias" not in kwargs:
+            kwargs["use_bias"] = self.use_bias
+        return nn.Conv(self.features, self.kernel_size, self.strides, self.padding, **kwargs)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -38,6 +40,7 @@ class BaseLSTMConfig(PolicySpec):
     pool_and_inject: bool = True
     pool_and_inject_horizontal: bool = True
     mlp_hiddens: Sequence[int] = (256,)
+    fence_pad: bool = True
 
     @abc.abstractmethod
     def make(self) -> "BaseLSTM":
@@ -190,6 +193,11 @@ class ConvLSTM(BaseLSTM):
         for c in self.conv_list:
             x = c(x)
             x = nn.relu(x)
+
+        if self.cfg.fence_pad:
+            ones = jnp.ones((*x.shape[:-1], 1))
+            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
+            x = jnp.concatenate([x, fence], axis=-1)
         return x
 
     @nn.nowrap
@@ -252,11 +260,11 @@ class WrappedCellBase(nn.RNNCellBase):
 
         if self.pool_and_inject:
             pooled_h = self.pool_and_project(carry.h if self.pool_and_inject_horizontal else prev_layer_hidden)
-            cell_inputs = jnp.concatenate([carry.h, inputs, prev_layer_hidden, pooled_h], axis=-1)
+            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
         else:
-            cell_inputs = jnp.concatenate([carry.h, inputs, prev_layer_hidden], axis=-1)
+            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
 
-        gates = self.make_cell()(cell_inputs)
+        gates = self.make_cell(name="ih")(cell_inputs) + self.make_cell(use_bias=False, name="hh")(carry.h)
         i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
 
         f = nn.sigmoid(f + 1)
@@ -275,8 +283,8 @@ class ConvLSTMCell(WrappedCellBase):
     cfg: ConvConfig
 
     @nn.nowrap
-    def make_cell(self):
-        return dataclasses.replace(self.cfg, features=4 * self.cfg.features).make_conv()
+    def make_cell(self, **kwargs):
+        return dataclasses.replace(self.cfg, features=4 * self.cfg.features).make_conv(**kwargs)
 
     def num_feature_axes(self) -> int:
         return 3
@@ -286,8 +294,8 @@ class LSTMCell(WrappedCellBase):
     features: int
 
     @nn.nowrap
-    def make_cell(self):
-        return nn.LSTMCell(self.features)
+    def make_cell(self, **kwargs):
+        return nn.LSTMCell(self.features, **kwargs)
 
     def num_feature_axes(self) -> int:
         return 1

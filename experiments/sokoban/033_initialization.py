@@ -15,8 +15,8 @@ minibatch_size = 32
 assert n_envs % minibatch_size == 0
 for initialization in ["torch", "lecun"]:
     for max_grad_norm in [1.5e-2, 1.5e-1, 1.5e-0]:
-        for rmsprop_decay, adam_b1 in [(0.99, 0.9), (0.999, 0.99)]:
-            for logit_l2_coef in [1.5625e-6, 1.5625e-4]:
+        for rmsprop_decay, adam_b1 in [(0.99, 0.9)]:
+            for logit_l2_coef in [1.5625e-6]:
                 env_seed, learn_seed = (random_seed(), random_seed())
 
                 def update_fn(config: Args) -> Args:
@@ -82,11 +82,11 @@ for initialization in ["torch", "lecun"]:
                     return config
 
                 cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
+                print(shlex.join(cli))
                 # Check that parsing doesn't error
                 out = parse_cli(cli, Args)
-                assert out.net.head_scale == out.net.recurrent.initialization == initialization
+                assert out.net.recurrent.initialization == initialization, out
 
-                print(shlex.join(cli))
                 clis.append(cli)
 
 runs: list[FlamingoRun] = []
