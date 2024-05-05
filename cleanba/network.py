@@ -102,7 +102,7 @@ class Policy(nn.Module):
     def setup(self):
         # These are called `_params` for backwards compatibility with the `AgentParams` dataclass.
         self.network_params = self.cfg.make()
-        self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
+        self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm)
         self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
 
     def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
@@ -311,10 +311,10 @@ class Critic(nn.Module):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
+            kernel_init = nn.initializers.orthogonal(1.0)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x) * self.kernel_scale
         bias = jnp.squeeze(self.variables["params"]["Output"]["bias"])
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
@@ -323,14 +323,13 @@ class Actor(nn.Module):
     action_dim: int
     yang_init: bool
     norm: NormConfig
-    kernel_scale: float
 
     @nn.compact
     def __call__(self, x):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
+            kernel_init = nn.initializers.orthogonal(1.0)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
         x = nn.Dense(self.action_dim, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)

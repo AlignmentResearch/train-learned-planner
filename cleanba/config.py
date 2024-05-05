@@ -170,7 +170,6 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
             ),
         ),
         log_frequency=10,
-        sync_frequency=int(4e9),
         net=ConvLSTMConfig(
             embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
             recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
@@ -178,7 +177,28 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
             mlp_hiddens=(256,),
             repeats_per_step=num_repeats,
             pool_and_inject=True,
+            fence_pad=True,
         ),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.97,
+            weight_l2_coef=1.5625e-07,
+            gamma=0.97,
+            logit_l2_coef=1.5625e-05,
+        ),
+        actor_update_cutoff=100000000000000000000,
+        sync_frequency=100000000000000000000,
+        num_minibatches=8,
+        rmsprop_eps=1.5625e-07,
+        local_num_envs=256,
+        total_timesteps=80117760,
+        base_run_dir=Path("/training/cleanba"),
+        learning_rate=0.0004,
+        eval_frequency=978,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=0.015,
+        num_actor_threads=1,
     )
 
 

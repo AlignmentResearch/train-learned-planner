@@ -71,7 +71,7 @@ for fence_pad in [True, False]:
                         weight_l2_coef=logit_l2_coef / 100,
                     )
                     config.base_fan_in = 1
-                    config.anneal_lr = False
+                    config.anneal_lr = True
 
                     config.optimizer = "adam"
                     config.adam_b1 = 0.9
