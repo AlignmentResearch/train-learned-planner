@@ -46,7 +46,6 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             GPU=1,
             PRIORITY="high-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
-            COMMIT_HASH="ac9b91935af801dfd558ede0869809486c5f0950",
         )
     )
 
