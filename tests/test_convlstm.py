@@ -122,6 +122,7 @@ def test_carry_shape(net: ConvLSTMConfig):
         assert cell_carry.h.shape == shape
 
 
+@pytest.mark.skip("Requires `convlstm_inout.msgpack` which is 50MB")
 def test_scan_reference():
     net = ConvLSTMConfig(
         embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
@@ -196,7 +197,6 @@ def test_scan_correct(net: ConvLSTMConfig):
         x = inputs[t]
         for conv in b_lstm.conv_list:
             x = conv(x)
-            x = nn.relu(x)
 
         lstm_x = b_lstm._compress_input(inputs[t])
         assert jnp.allclose(x, lstm_x)

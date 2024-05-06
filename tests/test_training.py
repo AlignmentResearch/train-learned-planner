@@ -12,7 +12,7 @@ from flax.training.train_state import TrainState
 
 from cleanba.cleanba_impala import WandbWriter, _concat_and_shard_rollout_internal, load_train_state, train
 from cleanba.config import Args
-from cleanba.convlstm import ConvConfig, ConvLSTMConfig, LSTMCellState
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMCellState
 from cleanba.environments import SokobanConfig
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import Rollout
@@ -96,15 +96,13 @@ class CheckingWriter(WandbWriter):
         ),
         ConvLSTMConfig(
             embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvConfig(3, (3, 3), (1, 1), "SAME", True),
+            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
             repeats_per_step=2,
-            pool_and_inject=False,
         ),
         ConvLSTMConfig(
             embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvConfig(3, (3, 3), (1, 1), "SAME", True),
+            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
             repeats_per_step=2,
-            pool_and_inject=True,
         ),
     ],
 )
