@@ -17,7 +17,6 @@ for learning_rate, max_grad_norm in [(4e-4, 1.5e-4), (6e-4, 3e-4)]:
                 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(4)]:
 
                     def update_fn(config: Args) -> Args:
-                        config.eval_envs = {}  # Don't evaluate
                         config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
                         config.local_num_envs = 256
                         config.num_steps = 20
@@ -100,19 +99,24 @@ for learning_rate, max_grad_norm in [(4e-4, 1.5e-4), (6e-4, 3e-4)]:
                     # Check that parsing doesn't error
                     out = parse_cli(cli, Args)
 
-                    clis.append(cli)
+                    clis.append((cli, "normal-batch" if fence_pad == "valid" else "low-batch"))
 
 runs: list[FlamingoRun] = []
 RUNS_PER_MACHINE = 1
 for i in range(0, len(clis), RUNS_PER_MACHINE):
+    this_run_clis = [
+        ["python", "-m", "cleanba.cleanba_impala", *clis[i + j][0]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
+    ]
+    priority = clis[i][1]
+    print("With priority", priority)
     runs.append(
         FlamingoRun(
-            [["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))],
+            this_run_clis,
             CONTAINER_TAG="df13e85-main",
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="normal-batch",
+            PRIORITY=priority,
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
