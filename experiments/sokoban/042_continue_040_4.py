@@ -6,22 +6,31 @@ from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 clis = []
 
 a = shlex.split(
-    """--from-py-fn=cleanba.config:sokoban_drc_3_3 total_timesteps=51200000 loss.ent_coef=0.001 train_env.seed=1551346042 eval_frequency=625 net.residual=true net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.recurrent.pool_projection="per-channel" net.use_relu=false rmsprop_decay=0.999 rmsprop_eps=1.5625e-10 max_grad_norm=0.00015 anneal_lr=false eval_envs={} seed=1420836954"""
+    """--from-py-fn=cleanba.config:sokoban_drc_3_3 loss.ent_coef=0.001 rmsprop_decay=0.999 max_grad_norm=0.0015 total_timesteps=51200000 rmsprop_eps=1.5625e-10 eval_frequency=625 net.residual=true net.recurrent.pool_projection="per-channel" net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.use_relu=false train_env.seed=438173579 seed=1692383821"""
 )
-a.append("load_path=/training/cleanba/040-residual-4/wandb/run-20240505_204952-sc20kyss/local-files/cp_51200000")
+a.append("load_path=/training/cleanba/041-more-tweaks-4/wandb/run-20240505_230928-uuz4mbp7/local-files/cp_28800000")
+a.append("anneal_lr=true")
+a.append("total_timesteps=256000000")
+a.append("eval_frequency=3125")
 clis.append(a)
 
 
 a = shlex.split(
-    """--from-py-fn=cleanba.config:sokoban_drc_3_3 total_timesteps=51200000 loss.ent_coef=0.001 train_env.seed=1498572294 eval_frequency=625 net.residual=true net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.recurrent.pool_projection="per-channel" net.use_relu=false rmsprop_decay=0.999 rmsprop_eps=1.5625e-10 max_grad_norm=0.00015 anneal_lr=false eval_envs={} seed=605986226"""
+    """--from-py-fn=cleanba.config:sokoban_drc_3_3 loss.ent_coef=0.001 rmsprop_decay=0.999 max_grad_norm=0.00015 total_timesteps=51200000 rmsprop_eps=1.5625e-10 eval_frequency=625 net.residual=true net.recurrent.pool_projection="per-channel" net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.use_relu=false train_env.seed=869221144 seed=48729639"""
 )
-a.append("load_path=/training/cleanba/040-residual-4/wandb/run-20240505_204954-5zp4ieok/local-files/cp_51200000")
+a.append("load_path=/training/cleanba/041-more-tweaks-4/wandb/run-20240505_230922-w9ptiwn0/local-files/cp_28800000")
+a.append("anneal_lr=true")
+a.append("total_timesteps=256000000")
+a.append("eval_frequency=3125")
 clis.append(a)
 
 a = shlex.split(
-    """--from-py-fn=cleanba.config:sokoban_drc_3_3 total_timesteps=51200000 loss.ent_coef=0.001 train_env.seed=768284418 eval_frequency=625 net.residual=true net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.recurrent.pool_projection="per-channel" net.use_relu=false rmsprop_decay=0.999 rmsprop_eps=1.5625e-10 max_grad_norm=0.00015 anneal_lr=false eval_envs={} seed=1708301081"""
+    """--from-py-fn=cleanba.config:sokoban_drc_3_3 loss.ent_coef=0.001 rmsprop_decay=0.999 max_grad_norm=0.00015 total_timesteps=51200000 rmsprop_eps=1.5625e-10 eval_frequency=625 net.residual=true net.recurrent.pool_projection="per-channel" net.recurrent.fence_pad="valid" net.recurrent.forget_bias=1.0 net.use_relu=false train_env.seed=994894590 seed=884239727"""
 )
-a.append("load_path=/training/cleanba/040-residual-4/wandb/run-20240505_204952-drm6t5l8/local-files/cp_51200000")
+a.append("load_path=/training/cleanba/041-more-tweaks-4/wandb/run-20240505_230921-ga0l65ji/local-files/cp_28800000")
+a.append("anneal_lr=true")
+a.append("total_timesteps=256000000")
+a.append("eval_frequency=3125")
 clis.append(a)
 
 
@@ -35,7 +44,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="normal-batch",
+            PRIORITY="high-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
             COMMIT_HASH="ac9b91935af801dfd558ede0869809486c5f0950",
         )

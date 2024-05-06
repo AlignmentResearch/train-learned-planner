@@ -1,7 +1,7 @@
 import dataclasses
 from dataclasses import field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
@@ -65,7 +65,7 @@ class Args:
     distributed: bool = False  # whether to use `jax.distributed`
     concurrency: bool = True  # whether to run the actor and learner concurrently
 
-    load_path: Path | None = None  # Where to load the initial training state from
+    load_path: Optional[Path] = None  # Where to load the initial training state from
 
 
 def sokoban_resnet() -> Args:
