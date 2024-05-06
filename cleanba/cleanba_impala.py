@@ -709,6 +709,7 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
     args = farconf.from_dict(args_dict, Args)
 
     _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    params = unreplicate(params)
 
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
 
