@@ -323,7 +323,7 @@ def rollout(
     storage = []
 
     # Store the first observation
-    obs_t, _ = envs.reset()
+    obs_t, _ = envs.reset(seed=list(map(int, jax.random.randint(key, (envs.num_envs,), 0, 2**10))))
 
     # Initialize carry_t and episode_starts_t
     key, carry_key = jax.random.split(key)
@@ -625,6 +625,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
             for _ in range(args.train_epochs):
+                writer.add_scalar("storages", (agent_state, sharded_storages), global_step)
                 (
                     agent_state,
                     metrics_dict,
@@ -671,13 +672,13 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                     global_step,
                     f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={learner_policy_version}, training time: {time.time() - training_time_start}s",
                 )
-                writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
-                writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
-                writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
-                writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
+                writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0], global_step)
+                writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0], global_step)
+                writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0], global_step)
+                writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0], global_step)
 
                 for name, value in metrics_dict.items():
-                    writer.add_scalar(name, value[0].item(), global_step)
+                    writer.add_scalar(name, value[0], global_step)
 
                 writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 

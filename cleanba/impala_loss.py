@@ -34,6 +34,8 @@ class ImpalaLossConfig:
     logit_l2_coef: float = 0.0
     weight_l2_coef: float = 0.0
 
+    max_vf_error: float = 1.0
+
 
 class Rollout(NamedTuple):
     obs_t: jax.Array
@@ -138,13 +140,16 @@ def impala_loss(
         jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
     )
     pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
-    pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
+    pg_loss_disagg = jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t)
+    pg_loss = jnp.mean(pg_loss_disagg)
 
     # Value loss: MSE of VTrace-estimated errors
-    v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
+    multiplier = jax.lax.stop_gradient(jnp.clip(args.max_vf_error / jnp.abs(vtrace_returns.errors), a_min=1e-3, a_max=1.0))
+    v_loss = jnp.mean(jnp.square(vtrace_returns.errors * multiplier))
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
-    ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
+    ent_loss_disagg = jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t)
+    ent_loss = jnp.mean(ent_loss_disagg)
 
     total_loss = pg_loss
     total_loss += args.vf_coef * v_loss
@@ -162,13 +167,11 @@ def impala_loss(
         pg_loss=pg_loss,
         v_loss=v_loss,
         ent_loss=ent_loss,
-        max_ratio=jnp.max(rhos_tm1),
-        min_ratio=jnp.min(rhos_tm1),
-        avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
         var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
         proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
-        mean_error=jnp.mean(vtrace_returns.errors),
-        **nn_metrics,
+        vtrace_errors=vtrace_returns.errors,
+        pg_loss_disagg=pg_loss_disagg,
+        multiplier=jnp.mean(multiplier),
     )
     return total_loss, metrics_dict
 
@@ -220,5 +223,5 @@ def single_device_update(
     )
 
     aux_dict = jax.lax.pmean(loss_and_aux_per_step, axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS)
-    aux_dict = jax.tree.map(jnp.mean, aux_dict)
+    # aux_dict = jax.tree.map(jnp.mean, aux_dict)
     return (agent_state, aux_dict)

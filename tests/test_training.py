@@ -44,7 +44,7 @@ class CheckingWriter(WandbWriter):
         self.done_saving.set()
 
     def add_scalar(self, name: str, value: int | float, global_step: int):
-        if global_step == self.last_global_step:
+        if global_step != self.last_global_step:
             self.metrics.clear()
 
         self.last_global_step = global_step
