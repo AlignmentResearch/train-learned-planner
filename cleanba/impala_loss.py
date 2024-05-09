@@ -5,6 +5,7 @@ from typing import Any, Callable, List, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
@@ -33,6 +34,8 @@ class ImpalaLossConfig:
 
     logit_l2_coef: float = 0.0
     weight_l2_coef: float = 0.0
+
+    max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
 
 
 class Rollout(NamedTuple):
@@ -132,16 +135,20 @@ def impala_loss(
 
     vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_t, discount_t, rhos_tm1)
 
+    # We're going to multiply advantages by this value, so the policy doesn't change too much in situations where the
+    # value error is large.
+    adv_multiplier = jax.lax.stop_gradient(jnp.clip(args.max_vf_error / jnp.abs(vtrace_returns.errors), a_max=1.0))
+
     # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
     # are implicit in `pg_advs`.
     norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
         jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
     )
-    pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
+    pg_advs = adv_multiplier * jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
-    # Value loss: MSE of VTrace-estimated errors
-    v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
+    # Value loss: Huber loss of VTrace-estimated errors
+    v_loss = jnp.mean(optax.losses.huber_loss(vtrace_returns.errors))
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
@@ -162,13 +169,10 @@ def impala_loss(
         pg_loss=pg_loss,
         v_loss=v_loss,
         ent_loss=ent_loss,
-        max_ratio=jnp.max(rhos_tm1),
-        min_ratio=jnp.min(rhos_tm1),
-        avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
         var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
         proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
-        mean_error=jnp.mean(vtrace_returns.errors),
         **nn_metrics,
+        adv_multiplier=jnp.mean(adv_multiplier),
     )
     return total_loss, metrics_dict
 
