@@ -17,9 +17,10 @@ from gymnasium.wrappers import TimeLimit
 import cleanba.cleanba_impala
 from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
+from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import PPOConfig
-from cleanba.network import PolicySpec
+from cleanba.impala_loss import ImpalaConfig
+from cleanba.network import GuezResNetConfig, PolicySpec
 
 
 # %%
@@ -175,29 +176,27 @@ class MLP(nn.Module):
 
 
 def train_cartpole_no_vel(policy="resnet", env="cartpole"):
-    # if policy == "resnet":
-    #     net = GuezResNetConfig(
-    #         channels=(),
-    #         strides=(1,),
-    #         kernel_sizes=(1,),
-    #         mlp_hiddens=(64, 64),
-    #         normalize_input=False,
-    #     )
-    # else:
-    #     net = ConvLSTMConfig(
-    #         embed=[],
-    #         recurrent=[ConvConfig(64, (1, 1), (1, 1), "VALID", True)],
-    #         repeats_per_step=1,
-    #         pool_and_inject=False,
-    #         add_one_to_forget=True,
-    #     )
-    net = MLPConfig(hiddens=(64, 64))
-    env_cfg = MountainCarConfig(max_episode_steps=200)
-    NUM_ENVS = 16
-    # if env == "cartpole":
-    #     env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
-    # else:
-    #     env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
+    if policy == "resnet":
+        net = GuezResNetConfig(
+            channels=(),
+            strides=(1,),
+            kernel_sizes=(1,),
+            mlp_hiddens=(256, 256),
+            normalize_input=False,
+        )
+    else:
+        net = ConvLSTMConfig(
+            embed=[],
+            recurrent=[ConvConfig(64, (1, 1), (1, 1), "SAME", True)],
+            repeats_per_step=1,
+            pool_and_inject=False,
+            add_one_to_forget=True,
+        )
+    NUM_ENVS = 8
+    if env == "cartpole":
+        env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
+    else:
+        env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
 
     args = Args(
         seed=13246,
@@ -206,16 +205,16 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         net=net,
         eval_frequency=int(1e9),
         save_model=False,
-        log_frequency=5,
+        log_frequency=50,
         local_num_envs=NUM_ENVS,
         num_actor_threads=1,
         num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
         queue_timeout=60,
-        train_epochs=10,
-        num_steps=2048,
-        learning_rate=3e-4,
-        anneal_lr=False,
+        train_epochs=1,
+        num_steps=32,
+        learning_rate=0.001,
+        anneal_lr=True,
         total_timesteps=1_000_000,
         max_grad_norm=0.5,
         base_fan_in=1,
@@ -226,26 +225,25 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         # optimizer="rmsprop",
         # rmsprop_eps=1e-3,
         # loss=ImpalaLossConfig(logit_l2_coef=1e-6,),
-        # loss=ImpalaConfig(
-        #     logit_l2_coef=0.0,
-        #     weight_l2_coef=0.0,
-        #     vf_coef=0.25,
-        #     ent_coef=1e-3,
-        #     gamma=0.99,
-        #     vtrace_lambda=0.97,
-        #     max_vf_error=0.01,
-        # ),
-        loss=PPOConfig(
+        loss=ImpalaConfig(
             logit_l2_coef=0.0,
             weight_l2_coef=0.0,
-            vf_coef=0.5,
-            ent_coef=0.0,
+            vf_coef=0.25,
+            ent_coef=0,
             gamma=0.99,
-            gae_lambda=0.95,
-            clip_vf=1e9,
-            clip_rho=0.2,
-            normalize_advantage=True,
+            vtrace_lambda=0.97,
+            max_vf_error=0.01,
         ),
+        # loss=PPOConfig(
+        #     # logit_l2_coef=0.0,
+        #     # weight_l2_coef=0.0,
+        #     vf_coef=0.5,
+        #     ent_coef=0.0,
+        #     gamma=0.98,
+        #     gae_lambda=0.8,
+        #     clip_vf=0.2,
+        #     clip_rho=0.1,
+        # ),
     )
 
     tmpdir = tempfile.TemporaryDirectory()
