@@ -185,7 +185,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             mlp_hiddens=(256, 256),
             normalize_input=False,
         )
-    else:
+    elif policy == "lstm":
         net = ConvLSTMConfig(
             embed=[],
             recurrent=[ConvConfig(64, (1, 1), (1, 1), "SAME", True)],
@@ -193,11 +193,15 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             pool_and_inject=False,
             add_one_to_forget=True,
         )
+    else:
+        raise ValueError(f"{policy=}")
     NUM_ENVS = 8
     if env == "cartpole":
         env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
-    else:
+    elif env == "cartpole_no_vel":
         env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
+    else:
+        raise ValueError(f"{env=}")
 
     args = Args(
         train_env=env_cfg,
@@ -217,7 +221,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         concurrency=True,
         anneal_lr=True,
         total_timesteps=1_000_000,
-        max_grad_norm=0.5,
+        max_grad_norm=1e-4,
         base_fan_in=1,
         optimizer="adam",
         rmsprop_eps=1e-8,
@@ -258,7 +262,8 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
     return writer
 
 
-writer = train_cartpole_no_vel()
+# writer = train_cartpole_no_vel("lstm", "cartpole_no_vel")
+writer = train_cartpole_no_vel("resnet", "cartpole")
 
 
 def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers=False):
