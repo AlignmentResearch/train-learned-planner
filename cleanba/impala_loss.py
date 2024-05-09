@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, List, NamedTuple
+from typing import Any, Callable, List, Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -36,6 +36,15 @@ class ImpalaLossConfig:
     weight_l2_coef: float = 0.0
 
     max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
+    vf_loss_type: Literal["square", "huber"] = "huber"
+
+    def vf_loss_fn(self, x: jax.Array) -> jax.Array:
+        if self.vf_loss_type == "square":
+            return jnp.square(x)
+        elif self.vf_loss_type == "huber":
+            return optax.losses.huber_loss(x)
+        else:
+            raise ValueError(f"{self.vf_loss_type=}")
 
 
 class Rollout(NamedTuple):
@@ -148,7 +157,7 @@ def impala_loss(
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
     # Value loss: Huber loss of VTrace-estimated errors
-    v_loss = jnp.mean(optax.losses.huber_loss(vtrace_returns.errors))
+    v_loss = jnp.mean(args.vf_loss_fn(vtrace_returns.errors))
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
