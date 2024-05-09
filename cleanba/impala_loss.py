@@ -156,7 +156,7 @@ class ImpalaConfig(AlgorithmConfig):
         pg_loss_disagg = jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t)
 
         # Value loss: MSE of VTrace-estimated errors
-        multiplier = jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_returns.errors), a_min=1e-3, a_max=1.0))
+        multiplier = jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_returns.errors), a_max=1.0))
         pre_multiplier_v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
         # v_loss = jnp.mean(jnp.square(vtrace_returns.errors * multiplier))
         v_loss = jnp.mean(optax.losses.huber_loss(vtrace_returns.errors))
@@ -240,7 +240,7 @@ class PPOConfig(AlgorithmConfig):
         value_diff = nn_value_from_obs[:-1] - minibatch_v_tm1
         values_pred = minibatch_v_tm1 + jnp.clip(value_diff, -self.clip_vf, self.clip_vf)
         values_errors = values_pred - gae_t
-        v_loss = jnp.mean(optax.huber_loss(values_errors))
+        v_loss = jnp.mean(optax.huber_loss(values_errors * mask_t))
 
         ent_loss_disagg = jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t)
         ent_loss = jnp.mean(ent_loss_disagg)
@@ -262,6 +262,7 @@ class PPOConfig(AlgorithmConfig):
             var_explained=1 - jnp.var(values_errors, ddof=1) / jnp.var(gae_t, ddof=1),
             proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
             vtrace_errors=values_errors,
+            multiplier=1.0,
         )
         return total_loss, metrics_dict
 

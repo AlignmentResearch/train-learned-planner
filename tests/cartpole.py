@@ -19,6 +19,7 @@ from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
 from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
+from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import ImpalaConfig
 from cleanba.network import GuezResNetConfig, PolicySpec
 
@@ -199,11 +200,10 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
 
     args = Args(
-        seed=13246,
         train_env=env_cfg,
-        eval_envs={},
+        eval_envs=dict(train=EvalConfig(env_cfg, n_episode_multiple=4)),
         net=net,
-        eval_frequency=int(1e9),
+        eval_frequency=3900,  # Evaluate once at the end of training
         save_model=False,
         log_frequency=50,
         local_num_envs=NUM_ENVS,
@@ -214,6 +214,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         train_epochs=1,
         num_steps=32,
         learning_rate=0.001,
+        concurrency=True,
         anneal_lr=True,
         total_timesteps=1_000_000,
         max_grad_norm=0.5,
@@ -235,14 +236,15 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             max_vf_error=0.01,
         ),
         # loss=PPOConfig(
-        #     # logit_l2_coef=0.0,
-        #     # weight_l2_coef=0.0,
+        #     logit_l2_coef=0.0,
+        #     weight_l2_coef=0.0,
         #     vf_coef=0.5,
         #     ent_coef=0.0,
-        #     gamma=0.98,
-        #     gae_lambda=0.8,
-        #     clip_vf=0.2,
-        #     clip_rho=0.1,
+        #     gamma=0.99,
+        #     gae_lambda=0.95,
+        #     clip_vf=1e9,
+        #     clip_rho=0.2,
+        #     normalize_advantage=True,
         # ),
     )
 
@@ -286,7 +288,7 @@ def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers
 
 
 # Create a figure and axes
-fig, axes = plt.subplots(6, 1, figsize=(6, 8), sharex="col")
+fig, axes = plt.subplots(7, 1, figsize=(6, 8), sharex="col")
 writer.metrics = writer.metrics.sort_index()
 
 # Plot var_explained
@@ -318,14 +320,18 @@ perc_plot(
 ax.set_ylabel("VTrace errors")
 
 ax = axes[4]
-# writer.metrics["multiplier"].plot(ax=ax, color="C1")
-writer.metrics["losses/entropy"].plot(ax=ax, color="C1")
+writer.metrics["losses/entropy"].plot(ax=ax, color="C0")
 ax.set_ylabel("entropy loss")
 
 
 ax = axes[5]
 writer.metrics["losses/policy_loss"].plot(ax=ax, label="Policy Loss")
 ax.set_ylabel("Policy loss")
+
+ax = axes[6]
+writer.metrics["multiplier"].plot(ax=ax, color="C1")
+ax.set_ylabel("Value multiplier average")
+
 
 # ax = axes[5]
 # perc_plot(

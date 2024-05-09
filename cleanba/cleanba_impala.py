@@ -497,6 +497,7 @@ def rollout(
                 log_dict = env_config.run(policy, get_action_fn, params, key=eval_key)
                 for k, v in log_dict.items():
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
+                    print(f"{eval_name}/{k}", v, global_step)
 
 
 def linear_schedule(
