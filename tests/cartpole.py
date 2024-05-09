@@ -17,7 +17,7 @@ from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
 from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig
+from cleanba.impala_loss import PPOConfig
 from cleanba.network import GuezResNetConfig
 
 
@@ -143,7 +143,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             channels=(),
             strides=(1,),
             kernel_sizes=(1,),
-            mlp_hiddens=(128, 128),
+            mlp_hiddens=(64, 64),
             normalize_input=False,
         )
     else:
@@ -170,31 +170,41 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         log_frequency=5,
         local_num_envs=NUM_ENVS,
         num_actor_threads=1,
-        num_minibatches=1,
+        num_minibatches=2,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
         queue_timeout=60,
-        train_epochs=1,
-        num_steps=20,
-        learning_rate=0.0006,
+        train_epochs=4,
+        num_steps=16,
+        learning_rate=0.00025,
         anneal_lr=False,
-        total_timesteps=2_000_000,
-        max_grad_norm=1e-3,
+        total_timesteps=600_000,
+        max_grad_norm=0.5,
         base_fan_in=1,
         optimizer="adam",
-        rmsprop_eps=1e-7,
+        rmsprop_eps=1e-8,
         adam_b1=0.9,
         rmsprop_decay=0.95,
         # optimizer="rmsprop",
         # rmsprop_eps=1e-3,
         # loss=ImpalaLossConfig(logit_l2_coef=1e-6,),
-        loss=ImpalaLossConfig(
+        # loss=ImpalaConfig(
+        #     logit_l2_coef=0.0,
+        #     weight_l2_coef=0.0,
+        #     vf_coef=0.25,
+        #     ent_coef=1e-3,
+        #     gamma=0.99,
+        #     vtrace_lambda=0.97,
+        #     max_vf_error=0.01,
+        # ),
+        loss=PPOConfig(
             logit_l2_coef=0.0,
             weight_l2_coef=0.0,
             vf_coef=0.25,
             ent_coef=1e-3,
             gamma=0.99,
-            vtrace_lambda=0.97,
-            max_vf_error=0.01,
+            gae_lambda=0.98,
+            clip_vf=0.5,
+            clip_rho=0.1,
         ),
     )
 
@@ -237,7 +247,6 @@ def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers
         )
 
 
-# %%
 # Create a figure and axes
 fig, axes = plt.subplots(6, 1, figsize=(6, 8), sharex="col")
 writer.metrics = writer.metrics.sort_index()
@@ -257,7 +266,7 @@ ax.set_ylabel("Ep lengths")
 ax = axes[2]
 # writer.metrics["losses/loss"].plot(ax=ax, label="Total Loss")
 writer.metrics["losses/value_loss"].plot(ax=ax, label="Value Loss")
-writer.metrics["pre_multiplier_v_loss"].plot(ax=ax, label="Pre-multiplier value loss")
+# writer.metrics["pre_multiplier_v_loss"].plot(ax=ax, label="Pre-multiplier value loss")
 
 ax.set_ylabel("Value loss")
 
@@ -271,22 +280,23 @@ perc_plot(
 ax.set_ylabel("VTrace errors")
 
 ax = axes[4]
-writer.metrics["multiplier"].plot(ax=ax, color="C1")
-ax.set_ylabel("error multiplier")
+# writer.metrics["multiplier"].plot(ax=ax, color="C1")
+writer.metrics["losses/entropy"].plot(ax=ax, color="C1")
+ax.set_ylabel("entropy loss")
 
-
-# ax = axes[5]
-# writer.metrics["losses/policy_loss"].plot(ax=ax, label="Policy Loss")
-# ax.set_ylabel("Policy loss")
 
 ax = axes[5]
-perc_plot(
-    ax,
-    writer.metrics.index[:-1],
-    [np.ravel(writer.states[i, "pg_loss_disagg"]) for i in writer.metrics.index[:-1]],
-    percentiles=[0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0],
-)
-ax.set_ylabel("PG loss")
+writer.metrics["losses/policy_loss"].plot(ax=ax, label="Policy Loss")
+ax.set_ylabel("Policy loss")
+
+# ax = axes[5]
+# perc_plot(
+#     ax,
+#     writer.metrics.index[:-1],
+#     [np.ravel(writer.states[i, "pg_loss_disagg"]) for i in writer.metrics.index[:-1]],
+#     percentiles=[0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0],
+# )
+# ax.set_ylabel("PG loss")
 
 
 # # Plot grad_rms/total
@@ -298,10 +308,10 @@ ax.set_ylabel("PG loss")
 # Adjust spacing between subplots
 plt.tight_layout()
 
-LOW = 0
-HIGH = 1e6
-for ax in axes:
-    ax.set_xlim(LOW, HIGH)
+# LOW = 0
+# HIGH = 1e6
+# for ax in axes:
+#     ax.set_xlim(LOW, HIGH)
 
 # Display the plot
 plt.show()

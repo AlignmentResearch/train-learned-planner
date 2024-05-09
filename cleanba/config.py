@@ -7,7 +7,8 @@ from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
-    ImpalaLossConfig,
+    AlgorithmConfig,
+    ImpalaConfig,
 )
 from cleanba.network import AtariCNNSpec, PolicySpec, SokobanResNetConfig
 
@@ -36,7 +37,7 @@ class Args:
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
-    loss: ImpalaLossConfig = ImpalaLossConfig()
+    loss: AlgorithmConfig = ImpalaConfig()
 
     net: PolicySpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 

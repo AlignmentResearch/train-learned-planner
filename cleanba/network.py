@@ -111,7 +111,7 @@ class Policy(nn.Module):
         key: jax.Array,
         *,
         temperature: float = 1.0,
-    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array, jax.Array]:
         assert len(obs.shape) == 4
         assert len(episode_starts.shape) == 1
         assert episode_starts.shape[:1] == obs.shape[:1]
@@ -130,7 +130,9 @@ class Policy(nn.Module):
             key, subkey = jax.random.split(key)
             u = jax.random.uniform(subkey, shape=logits.shape)
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return carry, action, logits, key
+
+        value, _ = self.critic_params(hidden)
+        return carry, action, logits, jnp.squeeze(value, axis=-1), key
 
     def get_logits_and_value(
         self,

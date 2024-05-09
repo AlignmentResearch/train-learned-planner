@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
+from cleanba.impala_loss import ImpalaConfig, Rollout, impala_loss
 from cleanba.network import Policy, PolicySpec
 
 
@@ -79,7 +79,7 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
             obs,
             {},
         ),
-        args=ImpalaLossConfig(gamma=gamma),
+        args=ImpalaConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
             carry_t=(),
@@ -248,7 +248,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         ),
         eval_envs={},
         net=ZeroActionNetworkSpec(),
-        loss=ImpalaLossConfig(
+        loss=ImpalaConfig(
             gamma=0.9,
             vtrace_lambda=1.0,
         ),
@@ -324,7 +324,7 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         (total_loss, metrics_dict) = impala_loss(
             params=params,
             get_logits_and_value=get_logits_and_value_fn,
-            args=ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0),
+            args=ImpalaConfig(gamma=gamma, logit_l2_coef=0.0),
             minibatch=transition,
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy() * (~transition.truncated_t))

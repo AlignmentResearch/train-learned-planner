@@ -19,7 +19,7 @@ import cleanba.cleanba_impala as cleanba_impala
 from cleanba.config import Args, sokoban_resnet
 from cleanba.environments import EnvpoolBoxobanConfig
 from cleanba.impala_loss import (
-    ImpalaLossConfig,
+    ImpalaConfig,
     Rollout,
     impala_loss,
 )
@@ -239,7 +239,7 @@ def update_minibatch_impala(train_state: TrainState, minibatch: Rollout):
     (loss, metrics_dict), grads = jax.value_and_grad(impala_loss, has_aux=True)(
         train_state.params,
         args.net.get_logits_and_value,
-        ImpalaLossConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
+        ImpalaConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
         minibatch,
     )
     metrics_dict["loss"] = loss
@@ -249,7 +249,7 @@ def update_minibatch_impala(train_state: TrainState, minibatch: Rollout):
 
 @jax.jit
 def update_minibatch(train_state: TrainState, minibatch: Rollout):
-    def loss_fn(params, get_logits_and_value, cfg: ImpalaLossConfig, minibatch: Rollout):
+    def loss_fn(params, get_logits_and_value, cfg: ImpalaConfig, minibatch: Rollout):
         mask_t = jnp.float32(~minibatch.truncated_t)
         discount_t = (~minibatch.episode_starts_t) * cfg.gamma
         nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(params, minibatch.obs_t)
@@ -314,7 +314,7 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
     (loss, metrics_dict), grads = jax.value_and_grad(loss_fn, has_aux=True)(
         train_state.params,
         args.net.get_logits_and_value,
-        ImpalaLossConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
+        ImpalaConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
         minibatch,
     )
     metrics_dict["loss"] = loss
