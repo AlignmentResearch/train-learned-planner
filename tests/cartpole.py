@@ -13,12 +13,12 @@ from gymnasium.envs.classic_control.cartpole import CartPoleEnv
 from gymnasium.wrappers import TimeLimit
 
 import cleanba.cleanba_impala
-from cleanba.cleanba_impala import WandbWriter, train, unreplicate
+from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
 from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, impala_loss
-from cleanba.network import GuezResNetConfig, Policy
+from cleanba.impala_loss import ImpalaLossConfig
+from cleanba.network import GuezResNetConfig
 
 
 # %%
@@ -39,7 +39,7 @@ class DataFrameWriter(WandbWriter):
             try:
                 a = v.item()
                 self.metrics.loc[global_step + 640 * i, name] = a
-            except TypeError:
+            except (TypeError, AttributeError, ValueError):
                 self.states[global_step + 640 * i, name] = value
 
 
@@ -73,7 +73,7 @@ if "CartPoleNoVel-v0" not in gym.registry or "CartPoleCHW-v0" not in gym.registr
 
         def step(self, action):
             full_obs, rew, terminated, truncated, info = super().step(action)
-            return CartPoleCHWEnv._pos_obs(full_obs), rew / 100, terminated, truncated, info
+            return CartPoleCHWEnv._pos_obs(full_obs), rew / 500, terminated, truncated, info
 
     class CartPoleNoVelEnv(CartPoleEnv):
         """Variant of CartPoleEnv with velocity information removed, and CHW-shaped observations.
@@ -101,7 +101,7 @@ if "CartPoleNoVel-v0" not in gym.registry or "CartPoleCHW-v0" not in gym.registr
 
         def step(self, action):
             full_obs, rew, terminated, truncated, info = super().step(action)
-            return CartPoleNoVelEnv._pos_obs(full_obs), rew / 100, terminated, truncated, info
+            return CartPoleNoVelEnv._pos_obs(full_obs), rew / 500, terminated, truncated, info
 
     gym.register(
         id="CartPoleNoVel-v0",
@@ -143,7 +143,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             channels=(),
             strides=(1,),
             kernel_sizes=(1,),
-            mlp_hiddens=(1024,),
+            mlp_hiddens=(128, 128),
             normalize_input=False,
         )
     else:
@@ -174,13 +174,14 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
         queue_timeout=60,
         train_epochs=1,
+        num_steps=20,
         learning_rate=0.0006,
-        anneal_lr=True,
-        total_timesteps=1_000_000,
+        anneal_lr=False,
+        total_timesteps=2_000_000,
         max_grad_norm=1e-3,
         base_fan_in=1,
         optimizer="adam",
-        rmsprop_eps=1e-8,
+        rmsprop_eps=1e-7,
         adam_b1=0.9,
         rmsprop_decay=0.95,
         # optimizer="rmsprop",
@@ -190,10 +191,10 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             logit_l2_coef=0.0,
             weight_l2_coef=0.0,
             vf_coef=0.25,
-            ent_coef=0.0,
-            gamma=0.95,
-            vtrace_lambda=1.0,
-            max_vf_error=1e9,
+            ent_coef=1e-3,
+            gamma=0.99,
+            vtrace_lambda=0.97,
+            max_vf_error=0.01,
         ),
     )
 
@@ -256,6 +257,7 @@ ax.set_ylabel("Ep lengths")
 ax = axes[2]
 # writer.metrics["losses/loss"].plot(ax=ax, label="Total Loss")
 writer.metrics["losses/value_loss"].plot(ax=ax, label="Value Loss")
+writer.metrics["pre_multiplier_v_loss"].plot(ax=ax, label="Pre-multiplier value loss")
 
 ax.set_ylabel("Value loss")
 
@@ -269,8 +271,8 @@ perc_plot(
 ax.set_ylabel("VTrace errors")
 
 ax = axes[4]
-writer.metrics["top_percentile"].plot(ax=ax, color="C1")
-ax.set_ylabel("error clipping")
+writer.metrics["multiplier"].plot(ax=ax, color="C1")
+ax.set_ylabel("error multiplier")
 
 
 # ax = axes[5]
@@ -296,42 +298,10 @@ ax.set_ylabel("PG loss")
 # Adjust spacing between subplots
 plt.tight_layout()
 
-# LOW = 385_000
-# HIGH = 407_000
-
-# LOW = 200_000
-# HIGH = 350_000
-
-# LOW = 800_000
-# HIGH = 900_000
-# for ax in axes:
-#     ax.set_xlim(LOW, HIGH)
+LOW = 0
+HIGH = 1e6
+for ax in axes:
+    ax.set_xlim(LOW, HIGH)
 
 # Display the plot
 plt.show()
-
-# %% Examine the faulty rollouts
-
-cfg = GuezResNetConfig(
-    channels=(),
-    strides=(1,),
-    kernel_sizes=(1,),
-    mlp_hiddens=(512,),
-    normalize_input=True,
-)
-policy = Policy(2, cfg)
-get_logits_and_value_fn = partial(policy.apply, method=policy.get_logits_and_value)
-loss_cfg = ImpalaLossConfig(
-    logit_l2_coef=0.0,
-    weight_l2_coef=0.0,
-    vf_coef=0.25,
-    ent_coef=0.01,
-    gamma=0.99,
-    vtrace_lambda=1.0,
-)
-
-state, (storage,) = unreplicate(writer.states[614400, "storages"])
-
-
-loss, aux = impala_loss(state.params, get_logits_and_value_fn, loss_cfg, storage)
-loss

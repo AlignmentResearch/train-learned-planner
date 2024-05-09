@@ -5,6 +5,7 @@ from typing import Any, Callable, List, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
@@ -141,11 +142,13 @@ def impala_loss(
     )
     pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
     pg_loss_disagg = jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t)
-    pg_loss = jnp.mean(pg_loss_disagg)
 
     # Value loss: MSE of VTrace-estimated errors
     multiplier = jax.lax.stop_gradient(jnp.clip(args.max_vf_error / jnp.abs(vtrace_returns.errors), a_min=1e-3, a_max=1.0))
-    v_loss = jnp.mean(jnp.square(vtrace_returns.errors * multiplier))
+    pre_multiplier_v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
+    # v_loss = jnp.mean(jnp.square(vtrace_returns.errors * multiplier))
+    v_loss = jnp.mean(optax.losses.huber_loss(vtrace_returns.errors))
+    pg_loss = jnp.mean(pg_loss_disagg * multiplier)
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss_disagg = jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t)
@@ -154,7 +157,7 @@ def impala_loss(
     total_loss = pg_loss
     total_loss += args.vf_coef * v_loss
     total_loss += args.ent_coef * ent_loss
-    total_loss += args.logit_l2_coef * jnp.sum(jnp.square(nn_logits_from_obs))
+    total_loss += args.logit_l2_coef * jnp.mean(jnp.square(nn_logits_from_obs))
 
     actor_params = jax.tree.leaves(params.get("params", {}).get("actor_params", {}))
     critic_params = jax.tree.leaves(params.get("params", {}).get("critic_params", {}))
@@ -166,6 +169,7 @@ def impala_loss(
     metrics_dict = dict(
         pg_loss=pg_loss,
         v_loss=v_loss,
+        pre_multiplier_v_loss=pre_multiplier_v_loss,
         ent_loss=ent_loss,
         var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
         proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
