@@ -195,8 +195,8 @@ class ImpalaConfig(AlgorithmConfig):
 @dataclasses.dataclass(frozen=True)
 class PPOConfig(AlgorithmConfig):
     gamma: float = 0.99  # the discount factor gamma
-    ent_coef: float = 0.01  # coefficient of the entropy
-    vf_coef: float = 0.25  # coefficient of the value function
+    ent_coef: float = 0.0  # coefficient of the entropy
+    vf_coef: float = 0.5  # coefficient of the value function
     gae_lambda: float = 0.95
 
     clip_rho: float = 0.2

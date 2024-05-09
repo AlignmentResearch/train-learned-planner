@@ -1,9 +1,11 @@
 # %%
+import dataclasses
 import tempfile
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 
+import flax.linen as nn
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,10 +17,9 @@ from gymnasium.wrappers import TimeLimit
 import cleanba.cleanba_impala
 from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
-from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
 from cleanba.impala_loss import PPOConfig
-from cleanba.network import GuezResNetConfig
+from cleanba.network import PolicySpec
 
 
 # %%
@@ -134,31 +135,69 @@ class CartPoleConfig(EnvConfig):
         return partial(gym.vector.SyncVectorEnv, env_fns=[partial(tl_wrapper, CartPoleCHWEnv)] * self.num_envs)
 
 
+class MountainCarNormalized(gym.envs.classic_control.MountainCarEnv):
+    def step(self, action):
+        full_obs, rew, terminated, truncated, info = super().step(action)
+        return full_obs, rew, terminated, truncated, info
+
+
+class MountainCarConfig(EnvConfig):
+    max_episode_steps: int = 200
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        def tl_wrapper(env_fn):
+            return TimeLimit(env_fn(), max_episode_steps=self.max_episode_steps)
+
+        return partial(gym.vector.SyncVectorEnv, env_fns=[partial(tl_wrapper, MountainCarNormalized)] * self.num_envs)
+
+
 # %%
 
 
+@dataclasses.dataclass(frozen=True)
+class MLPConfig(PolicySpec):
+    hiddens: Sequence[int] = (64, 64)
+
+    def make(self) -> nn.Module:
+        return MLP(self)
+
+
+class MLP(nn.Module):
+    cfg: MLPConfig
+
+    @nn.compact
+    def __call__(self, x):
+        for h in self.cfg.hiddens:
+            x = nn.Dense(h)(x)
+            x = nn.relu(x)
+        return x
+
+
 def train_cartpole_no_vel(policy="resnet", env="cartpole"):
-    if policy == "resnet":
-        net = GuezResNetConfig(
-            channels=(),
-            strides=(1,),
-            kernel_sizes=(1,),
-            mlp_hiddens=(64, 64),
-            normalize_input=False,
-        )
-    else:
-        net = ConvLSTMConfig(
-            embed=[],
-            recurrent=[ConvConfig(64, (1, 1), (1, 1), "VALID", True)],
-            repeats_per_step=1,
-            pool_and_inject=False,
-            add_one_to_forget=True,
-        )
-    NUM_ENVS = 32
-    if env == "cartpole":
-        env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
-    else:
-        env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
+    # if policy == "resnet":
+    #     net = GuezResNetConfig(
+    #         channels=(),
+    #         strides=(1,),
+    #         kernel_sizes=(1,),
+    #         mlp_hiddens=(64, 64),
+    #         normalize_input=False,
+    #     )
+    # else:
+    #     net = ConvLSTMConfig(
+    #         embed=[],
+    #         recurrent=[ConvConfig(64, (1, 1), (1, 1), "VALID", True)],
+    #         repeats_per_step=1,
+    #         pool_and_inject=False,
+    #         add_one_to_forget=True,
+    #     )
+    net = MLPConfig(hiddens=(64, 64))
+    env_cfg = MountainCarConfig(max_episode_steps=200)
+    NUM_ENVS = 16
+    # if env == "cartpole":
+    #     env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
+    # else:
+    #     env_cfg = CartPoleNoVelConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
 
     args = Args(
         seed=13246,
@@ -170,14 +209,14 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         log_frequency=5,
         local_num_envs=NUM_ENVS,
         num_actor_threads=1,
-        num_minibatches=2,
+        num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
         queue_timeout=60,
-        train_epochs=4,
-        num_steps=16,
-        learning_rate=0.00025,
+        train_epochs=10,
+        num_steps=2048,
+        learning_rate=3e-4,
         anneal_lr=False,
-        total_timesteps=600_000,
+        total_timesteps=1_000_000,
         max_grad_norm=0.5,
         base_fan_in=1,
         optimizer="adam",
@@ -199,12 +238,13 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         loss=PPOConfig(
             logit_l2_coef=0.0,
             weight_l2_coef=0.0,
-            vf_coef=0.25,
-            ent_coef=1e-3,
+            vf_coef=0.5,
+            ent_coef=0.0,
             gamma=0.99,
-            gae_lambda=0.98,
-            clip_vf=0.5,
-            clip_rho=0.1,
+            gae_lambda=0.95,
+            clip_vf=1e9,
+            clip_rho=0.2,
+            normalize_advantage=True,
         ),
     )
 
