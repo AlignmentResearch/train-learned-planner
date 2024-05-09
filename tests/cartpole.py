@@ -17,7 +17,7 @@ from cleanba.cleanba_impala import WandbWriter, train
 from cleanba.config import Args
 from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvConfig
-from cleanba.impala_loss import PPOConfig
+from cleanba.impala_loss import ImpalaConfig, PPOConfig
 from cleanba.network import GuezResNetConfig
 
 
@@ -143,18 +143,18 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
             channels=(),
             strides=(1,),
             kernel_sizes=(1,),
-            mlp_hiddens=(64, 64),
+            mlp_hiddens=(256, 256),
             normalize_input=False,
         )
     else:
         net = ConvLSTMConfig(
             embed=[],
-            recurrent=[ConvConfig(64, (1, 1), (1, 1), "VALID", True)],
+            recurrent=[ConvConfig(64, (1, 1), (1, 1), "SAME", True)],
             repeats_per_step=1,
             pool_and_inject=False,
             add_one_to_forget=True,
         )
-    NUM_ENVS = 32
+    NUM_ENVS = 8
     if env == "cartpole":
         env_cfg = CartPoleConfig(num_envs=NUM_ENVS, max_episode_steps=500, seed=1234)
     else:
@@ -167,17 +167,17 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         net=net,
         eval_frequency=int(1e9),
         save_model=False,
-        log_frequency=5,
+        log_frequency=50,
         local_num_envs=NUM_ENVS,
         num_actor_threads=1,
-        num_minibatches=2,
+        num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
         queue_timeout=60,
-        train_epochs=4,
-        num_steps=16,
-        learning_rate=0.00025,
-        anneal_lr=False,
-        total_timesteps=600_000,
+        train_epochs=1,
+        num_steps=32,
+        learning_rate=0.001,
+        anneal_lr=True,
+        total_timesteps=1_000_000,
         max_grad_norm=0.5,
         base_fan_in=1,
         optimizer="adam",
@@ -187,25 +187,25 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole"):
         # optimizer="rmsprop",
         # rmsprop_eps=1e-3,
         # loss=ImpalaLossConfig(logit_l2_coef=1e-6,),
-        # loss=ImpalaConfig(
-        #     logit_l2_coef=0.0,
-        #     weight_l2_coef=0.0,
-        #     vf_coef=0.25,
-        #     ent_coef=1e-3,
-        #     gamma=0.99,
-        #     vtrace_lambda=0.97,
-        #     max_vf_error=0.01,
-        # ),
-        loss=PPOConfig(
+        loss=ImpalaConfig(
             logit_l2_coef=0.0,
             weight_l2_coef=0.0,
             vf_coef=0.25,
-            ent_coef=1e-3,
+            ent_coef=0,
             gamma=0.99,
-            gae_lambda=0.98,
-            clip_vf=0.5,
-            clip_rho=0.1,
+            vtrace_lambda=0.97,
+            max_vf_error=0.01,
         ),
+        # loss=PPOConfig(
+        #     # logit_l2_coef=0.0,
+        #     # weight_l2_coef=0.0,
+        #     vf_coef=0.5,
+        #     ent_coef=0.0,
+        #     gamma=0.98,
+        #     gae_lambda=0.8,
+        #     clip_vf=0.2,
+        #     clip_rho=0.1,
+        # ),
     )
 
     tmpdir = tempfile.TemporaryDirectory()
