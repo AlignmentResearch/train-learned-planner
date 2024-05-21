@@ -185,7 +185,7 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
             shape = (obs_space.shape[2], *obs_space.shape[:2], *obs_space.shape[3:])
             low = obs_space.low if isinstance(obs_space.low, float) else np.moveaxis(obs_space.low, 2, 0)
             high = obs_space.high if isinstance(obs_space.high, float) else np.moveaxis(obs_space.high, 2, 0)
-            self.single_observation_space = gym.spaces.Box(low, high, shape)
+            self.single_observation_space = gym.spaces.Box(low, high, shape, dtype=obs_space.dtype)
         else:
             raise NotImplementedError(f"{type(obs_space)=}")
 
