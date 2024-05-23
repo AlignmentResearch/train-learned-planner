@@ -103,10 +103,16 @@ envpool-docker: envpool-docker/envpool-ci
 .PHONY: lint format typecheck mactest
 
 lint:
-	ruff --fix .
+	ruff check --fix .
+
+lint-check:
+	ruff check .
 
 format:
 	ruff format .
+
+format-check:
+	ruff format --check .
 
 typecheck:
 	pyright .
