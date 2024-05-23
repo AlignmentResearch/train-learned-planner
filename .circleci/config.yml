@@ -1,0 +1,66 @@
+version: 2.1
+
+parameters:
+  docker_img_version:
+    # Docker image version for running tests.
+    type: string
+    default: "b08213f-main"
+
+workflows:
+  test-jobs:
+    jobs:
+      - format:
+          context:
+            - ghcr-auth
+      - py-tests:
+          context:
+            - ghcr-auth
+
+commands:
+  save-worker-test-results:
+    steps:
+      - store_test_results: # report the test results (in test-results/junit.xml) to CircleCI
+          path: /workspace/test-results
+  recursive-checkout:
+    steps:
+      - checkout
+      - run:
+          name: Recursive checkout
+          command: git submodule update --recursive
+
+jobs:
+  format:
+    docker:
+      - image: ghcr.io/alignmentresearch/lp-cleanba:<< pipeline.parameters.docker_img_version >>
+        auth:
+          username: "$GHCR_DOCKER_USER"
+          password: "$GHCR_DOCKER_TOKEN"
+    resource_class: alignmentresearch/small
+    working_directory: /workspace
+    steps:
+      - recursive-checkout
+      - run:
+          name: Lint
+          command: make lint-check
+      - run:
+          name: Format
+          command: make format-check
+
+  py-tests:
+    docker:
+      - image: ghcr.io/alignmentresearch/lp-cleanba:<< pipeline.parameters.docker_img_version >>
+        auth:
+          username: "$GHCR_DOCKER_USER"
+          password: "$GHCR_DOCKER_TOKEN"
+    resource_class: alignmentresearch/medium
+    working_directory: /workspace
+    steps:
+      - recursive-checkout
+      - run:
+          name: Run tests
+          command: |
+            mkdir /workspace/test-results
+            pytest --junitxml=/workspace/test-results/worker-0.xml --verbose
+          environment:
+            OMP_NUM_THREADS: "2"
+      - save-worker-test-results

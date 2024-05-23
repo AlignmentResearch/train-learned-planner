@@ -48,7 +48,7 @@ cloudpickle==3.0.0
     #   tensorflow-probability
 cmdkit==2.7.4
     # via names-generator
-databind==4.5.1
+databind @ git+https://github.com/rhaps0dy/python-databind.git@merge-fixes#subdirectory=databind
     # via farconf
 decorator==4.4.2
     # via

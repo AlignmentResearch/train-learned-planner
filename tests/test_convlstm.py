@@ -2,6 +2,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+import farconf
 import flax.linen as nn
 import flax.serialization
 import gymnasium as gym
@@ -305,3 +306,10 @@ def test_count_params(pool_and_inject, pool_projection, output_activation, fence
     ).make()
 
     net.count_params(envs)
+
+
+@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
+def test_config_de_serialize(net: ConvLSTMConfig):
+    d = farconf.to_dict(net, ConvLSTMConfig)
+    net2 = farconf.from_dict(d, ConvLSTMConfig)
+    assert net == net2

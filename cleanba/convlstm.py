@@ -2,7 +2,7 @@ import abc
 import dataclasses
 import math
 from functools import partial
-from typing import Literal, Sequence
+from typing import Literal, Sequence, Tuple
 
 import flax.linen as nn
 import flax.struct
@@ -15,9 +15,9 @@ from cleanba.network import PolicySpec
 @dataclasses.dataclass(frozen=True)
 class ConvConfig:
     features: int
-    kernel_size: Sequence[int]
-    strides: Sequence[int]
-    padding: str | Sequence[tuple[int, int]] = "SAME"
+    kernel_size: Tuple[int, ...]
+    strides: Tuple[int, ...]
+    padding: Literal["SAME", "VALID"] | Sequence[Tuple[int, ...]] = "SAME"
     use_bias: bool = True
     initialization: Literal["torch", "lecun"] = "lecun"
 
@@ -48,7 +48,7 @@ class ConvLSTMCellConfig:
 class BaseLSTMConfig(PolicySpec):
     n_recurrent: int = 1  # D in the paper
     repeats_per_step: int = 1  # N in the paper
-    mlp_hiddens: Sequence[int] = (256,)
+    mlp_hiddens: Tuple[int, ...] = (256,)
     skip_final: bool = True
     residual: bool = False
 
