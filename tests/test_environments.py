@@ -19,7 +19,7 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
                 tinyworld_obs=True,
                 asynchronous=False,
                 min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
-                cache_path=Path(__file__).parent.parent / ".sokoban_cache",
+                cache_path=Path(__file__).parent,
             ),
             (10, 10),
         ),
@@ -44,7 +44,7 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
                 tinyworld_obs=False,
                 asynchronous=False,
                 min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
-                cache_path=Path(__file__).parent.parent / ".sokoban_cache",
+                cache_path=Path(__file__).parent,
             ),
             (80, 80),
         ),
@@ -61,7 +61,16 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
             ),
             (80, 80),
         ),
-        (EnvpoolBoxobanConfig(MAX_EPISODE_STEPS, NUM_ENVS, SEED, min_episode_steps=MAX_EPISODE_STEPS * 3 // 4), (10, 10)),
+        (
+            EnvpoolBoxobanConfig(
+                MAX_EPISODE_STEPS,
+                NUM_ENVS,
+                SEED,
+                min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
+                cache_path=Path(__file__).parent,
+            ),
+            (10, 10),
+        ),
     ],
 )
 def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
