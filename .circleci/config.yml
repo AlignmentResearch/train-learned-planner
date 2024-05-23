@@ -8,8 +8,6 @@ parameters:
 
 workflows:
   test-jobs:
-    when:
-      equal: [oncommit, << pipeline.parameters.action >>]
     jobs:
       - format:
           context:
