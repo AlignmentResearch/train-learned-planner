@@ -1,6 +1,7 @@
 from functools import partial
 from typing import Any
 
+import farconf
 import flax.linen as nn
 import gymnasium as gym
 import jax
@@ -223,3 +224,10 @@ def test_convlstm_forward(net: ConvLSTMConfig):
 
     for k, v in metrics.items():
         assert v.shape == (), f"{k} is not averaged over time steps, has {v.shape=}"
+
+
+@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
+def test_config_de_serialize(net: ConvLSTMConfig):
+    d = farconf.to_dict(net, ConvLSTMConfig)
+    net2 = farconf.from_dict(d, ConvLSTMConfig)
+    assert net == net2

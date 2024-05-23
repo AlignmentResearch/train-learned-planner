@@ -1,6 +1,6 @@
 import dataclasses
 from functools import partial
-from typing import Callable, Optional, Sequence
+from typing import Callable, Literal, Optional, Sequence, Tuple
 
 import flax.linen as nn
 import flax.struct
@@ -13,9 +13,9 @@ from cleanba.network import PolicySpec
 @dataclasses.dataclass(frozen=True)
 class ConvConfig:
     features: int
-    kernel_size: Sequence[int]
-    strides: Sequence[int]
-    padding: str | Sequence[tuple[int, int]] = "SAME"
+    kernel_size: Tuple[int, ...]
+    strides: Tuple[int, ...]
+    padding: Literal["SAME", "VALID"] | Sequence[Tuple[int, int]] = "SAME"
     use_bias: bool = True
 
     def make_conv(
@@ -50,7 +50,7 @@ class ConvConfig:
 class ConvLSTMConfig(PolicySpec):
     embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: Sequence[ConvConfig] = dataclasses.field(default_factory=lambda: [ConvConfig(64, (3, 3), (1, 1))])
-    mlp_hiddens: Sequence[int] = (256,)
+    mlp_hiddens: Tuple[int, ...] = (256,)
 
     repeats_per_step: int = 1
     pool_and_inject: bool = False

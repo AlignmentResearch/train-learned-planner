@@ -35,6 +35,7 @@ requirements.txt.new: pyproject.toml ${DOCKERFILE}
 	pip-compile --verbose -o requirements.txt.new \
 		--extra=dev --extra=launch_jobs pyproject.toml
 
+# To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
 	sed -E "s/^(jax==.*|jaxlib==.*|nvidia-.*|torchvision==.*|torch==.*|triton==.*)$$/# DISABLED \\1/g" requirements.txt.new > requirements.txt
 
