@@ -14,7 +14,7 @@ for drc_n_n in [3]:
     for advantage_multiplier in ["mean", "elementwise"]:
         for vf_loss_type in ["square"]:
             for local_num_envs in [32]:
-                for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
+                for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
 
                     def update_fn(config: Args) -> Args:
                         config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -52,7 +52,7 @@ for drc_n_n in [3]:
                         ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
                         # Evaluate (and save) EVAL_TIMES during training
-                        EVAL_TIMES = 16
+                        EVAL_TIMES = 25
                         config.eval_frequency = num_updates // EVAL_TIMES
 
                         config.save_model = True
@@ -124,7 +124,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "eval-more")
 
 if __name__ == "__main__":
     launch_jobs(
