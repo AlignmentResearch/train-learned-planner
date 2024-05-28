@@ -12,20 +12,20 @@ from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 clis = []
 for drc_n_n in [3]:
     for advantage_multiplier in ["mean", "elementwise"]:
-        for vf_loss_type in ["square"]:
-            for local_num_envs in [32]:
-                for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
+        for residual in [True, False]:
+            for use_relu in [True, False]:
+                for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
 
                     def update_fn(config: Args) -> Args:
                         config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
-                        config.local_num_envs = local_num_envs
+                        config.local_num_envs = 32
                         config.num_steps = 20
                         config.net = ConvLSTMConfig(
                             n_recurrent=drc_n_n,
                             repeats_per_step=drc_n_n,
                             skip_final=True,
-                            residual=True,
-                            use_relu=False,
+                            residual=residual,
+                            use_relu=use_relu,
                             embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
                             recurrent=ConvLSTMCellConfig(
                                 ConvConfig(32, (3, 3), (1, 1), "SAME", True),
@@ -63,7 +63,7 @@ for drc_n_n in [3]:
 
                         config.train_epochs = 1
                         config.num_actor_threads = 1
-                        config.num_minibatches = local_num_envs // 32
+                        config.num_minibatches = config.local_num_envs // 32
 
                         config.seed = learn_seed
                         config.sync_frequency = int(1e20)
@@ -78,7 +78,7 @@ for drc_n_n in [3]:
                             normalize_advantage=False,
                             logit_l2_coef=logit_l2_coef,
                             weight_l2_coef=logit_l2_coef / 100,
-                            vf_loss_type=vf_loss_type,
+                            vf_loss_type="squared",
                             advantage_multiplier=advantage_multiplier,
                         )
                         config.base_fan_in = 1
@@ -124,7 +124,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "eval-more")
+GROUP: str = group_from_fname(__file__, "wackier-attempts")
 
 if __name__ == "__main__":
     launch_jobs(
