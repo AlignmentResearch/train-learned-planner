@@ -36,7 +36,8 @@ class ImpalaLossConfig:
     weight_l2_coef: float = 0.0
 
     max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
-    vf_loss_type: Literal["square", "huber"] = "huber"
+    vf_loss_type: Literal["square", "huber"] = "square"
+    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] = "one"
 
     def vf_loss_fn(self, x: jax.Array) -> jax.Array:
         if self.vf_loss_type == "square":
@@ -45,6 +46,18 @@ class ImpalaLossConfig:
             return optax.losses.huber_loss(x)
         else:
             raise ValueError(f"{self.vf_loss_type=}")
+
+    def adv_multiplier(self, vtrace_errors: jax.Array) -> jax.Array | float:
+        if self.advantage_multiplier == "one":
+            return 1.0
+        elif self.advantage_multiplier == "mean":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.mean(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier == "max":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.max(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier == "elementwise":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_errors), a_max=1.0))
+        else:
+            raise ValueError(f"{self.advantage_multiplier=}")
 
 
 class Rollout(NamedTuple):
@@ -146,7 +159,7 @@ def impala_loss(
 
     # We're going to multiply advantages by this value, so the policy doesn't change too much in situations where the
     # value error is large.
-    adv_multiplier = jax.lax.stop_gradient(jnp.clip(args.max_vf_error / jnp.abs(vtrace_returns.errors), a_max=1.0))
+    adv_multiplier = args.adv_multiplier(vtrace_returns.errors)
 
     # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
     # are implicit in `pg_advs`.
