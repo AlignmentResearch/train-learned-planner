@@ -45,14 +45,14 @@ for drc_n_n in [3]:
                             config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
                         )
 
-                        config.total_timesteps = 256_000_000
+                        config.total_timesteps = 200_000_000
                         num_updates = config.total_timesteps // global_step_multiplier
                         assert (
                             num_updates * global_step_multiplier == config.total_timesteps
                         ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
                         # Evaluate (and save) EVAL_TIMES during training
-                        EVAL_TIMES = 25
+                        EVAL_TIMES = 20
                         config.eval_frequency = num_updates // EVAL_TIMES
 
                         config.save_model = True
