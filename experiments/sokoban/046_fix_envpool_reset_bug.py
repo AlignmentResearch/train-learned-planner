@@ -78,7 +78,7 @@ for drc_n_n in [3]:
                             normalize_advantage=False,
                             logit_l2_coef=logit_l2_coef,
                             weight_l2_coef=logit_l2_coef / 100,
-                            vf_loss_type="squared",
+                            vf_loss_type="square",
                             advantage_multiplier=advantage_multiplier,
                         )
                         config.base_fan_in = 1
@@ -124,7 +124,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "wackier-attempts")
+GROUP: str = group_from_fname(__file__, "arch-variations")
 
 if __name__ == "__main__":
     launch_jobs(
