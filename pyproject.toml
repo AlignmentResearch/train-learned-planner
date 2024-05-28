@@ -22,6 +22,10 @@ extend-select = ["I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # ignore third_party dir for now
+markers = [
+    "slow",
+    "envpool: tests that use Envpool and thus won't run on Mac",
+]
 
 [tool.pyright]
 exclude = [
@@ -59,8 +63,9 @@ dependencies = [
     "opencv-python ~=4.7.0.68",
     "moviepy ~=1.0.3",
     "rlax ~=0.1.5",
-    "farconf @ git+https://github.com/AlignmentResearch/farconf.git@gneeric-object",
+    "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
     "ray[tune] ~=2.11.0",
+    "matplotlib ~=3.9.0",
 ]
 [project.optional-dependencies]
 dev = [
