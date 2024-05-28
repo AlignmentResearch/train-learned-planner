@@ -74,7 +74,7 @@ etils[epath,epy]==1.7.0
     # via orbax-checkpoint
 exceptiongroup==1.2.0
     # via pytest
-farconf @ git+https://github.com/AlignmentResearch/farconf.git@gneeric-object
+farconf @ git+https://github.com/AlignmentResearch/farconf.git
     # via lp-cleanba (pyproject.toml)
 filelock==3.13.3
     # via
