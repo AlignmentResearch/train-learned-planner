@@ -554,11 +554,16 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
         policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
 
-        agent_state = TrainState.create(
-            apply_fn=None,
-            params=agent_params,
-            tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
-        )
+        if args.load_path is None:
+            agent_state = TrainState.create(
+                apply_fn=None,
+                params=agent_params,
+                tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
+            )
+        else:
+            old_args, agent_state = load_train_state(args.load_path)
+            print(f"Loaded TrainState from {args.load_path}. Here are the differences from `args` to the loaded args:")
+            farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args))
 
         multi_device_update = jax.pmap(
             jax.jit(
@@ -716,6 +721,13 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
     with open(dir / "model", "rb") as f:
         train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
+    train_state = unreplicate(train_state)
+    for i in range(args.net.n_recurrent):
+        train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
+            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
+            axis=2,
+            keepdims=True,
+        )
     return args, train_state
 
 

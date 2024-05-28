@@ -229,7 +229,7 @@ class TrivialEnvPolicy(Policy):
 
 
 @dataclasses.dataclass(frozen=True)
-class ZeroActionNetworkSpec(PolicySpec[tuple[()]]):
+class ZeroActionNetworkSpec(PolicySpec):
     def make(self) -> nn.Module:
         return None  # type: ignore
 

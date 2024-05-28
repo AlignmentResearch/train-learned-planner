@@ -1,27 +1,32 @@
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 import farconf
 import flax.linen as nn
+import flax.serialization
 import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import pytest
 
-from cleanba.convlstm import ConvConfig, ConvLSTM, ConvLSTMCell, ConvLSTMCellState, ConvLSTMConfig
+from cleanba.convlstm import (
+    ConvConfig,
+    ConvLSTM,
+    ConvLSTMCell,
+    ConvLSTMCellConfig,
+    ConvLSTMConfig,
+    LSTMCellState,
+)
 from cleanba.environments import SokobanConfig
 from cleanba.network import Policy, n_actions_from_envs
 
 
-def _dict_copy(d: dict | Any) -> dict | Any:
-    if isinstance(d, dict):
-        return {k: _dict_copy(v) for k, v in d.items()}
-    return d
-
-
 def test_equivalent_to_lstm():
-    cfg = ConvConfig(features=2, kernel_size=(3, 3), strides=(1, 1), padding="SAME", use_bias=True)
-    cleanba_cell = ConvLSTMCell(cfg=cfg, add_one_to_forget=True, pool_and_inject=False)
+    cfg = ConvLSTMCellConfig(
+        ConvConfig(features=2, kernel_size=(3, 3), strides=(1, 1), padding="SAME", use_bias=True), pool_and_inject="no"
+    )
+    cleanba_cell = ConvLSTMCell(cfg=cfg)
     linen_cell = nn.ConvLSTMCell(cfg.features, cfg.kernel_size, cfg.strides, cfg.padding, cfg.use_bias)
 
     rng = jax.random.PRNGKey(1234)
@@ -33,21 +38,16 @@ def test_equivalent_to_lstm():
 
     rng, k1 = jax.random.split(rng, 2)
     cleanba_params = cleanba_cell.init(k1, cleanba_carry, inputs[0], cleanba_carry.h)
-    linen_params = _dict_copy(cleanba_params)
-
-    ih_bias = cleanba_params["params"]["ih"]["bias"]
-    hh_bias = jax.random.normal(rng, ih_bias.shape)
-
-    linen_params["params"]["ih"]["bias"] = ih_bias - hh_bias
-    linen_params["params"]["hh"]["bias"] = hh_bias
-
-    linen_params["params"]["hh"]["kernel"] = linen_params["params"]["hh"]["kernel"][:, :, : cfg.features, :]
+    linen_params = {
+        "params": {"ih": cleanba_params["params"]["convcell"]["ih"], "hh": cleanba_params["params"]["convcell"]["hh"]}
+    }
 
     for t in range(len(inputs)):
-        cleanba_carry, cleanba_out = jax.jit(cleanba_cell.apply)(
-            cleanba_params, cleanba_carry, inputs[t], jnp.zeros_like(cleanba_carry.h)
-        )
-        linen_carry, linen_out = jax.jit(linen_cell.apply)(linen_params, linen_carry, inputs[t])
+        rng, k1 = jax.random.split(rng, 2)
+        prev_layer_hidden = jax.random.normal(k1, cleanba_carry.h.shape)
+        cleanba_carry, cleanba_out = jax.jit(cleanba_cell.apply)(cleanba_params, cleanba_carry, inputs[t], prev_layer_hidden)
+        cat_input_t = jnp.concatenate([inputs[t], prev_layer_hidden], axis=-1)
+        linen_carry, linen_out = jax.jit(linen_cell.apply)(linen_params, linen_carry, cat_input_t)
 
         assert jnp.allclose(cleanba_out, linen_out, atol=1e-6)
         assert jnp.allclose(cleanba_carry.c, linen_carry[0], atol=1e-6)
@@ -55,16 +55,15 @@ def test_equivalent_to_lstm():
 
 
 @pytest.mark.parametrize("pool_and_inject", [True, False])
-@pytest.mark.parametrize("add_one_to_forget", [True, False])
 @pytest.mark.parametrize(
     "cfg",
     [
-        ConvConfig(2, (3, 3), (1, 1), "VALID", True),
-        ConvConfig(2, (3, 3), (2, 2), "SAME", True),
+        ConvConfig(2, (3, 3), (1, 1), "SAME", True),
+        ConvConfig(2, (2, 2), (1, 1), "SAME", True),
     ],
 )
-def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool_and_inject: bool):
-    cell = ConvLSTMCell(cfg, add_one_to_forget, pool_and_inject)
+def test_convlstm_strides_padding(pool_and_inject: bool, cfg: ConvConfig):
+    cell = ConvLSTMCell(pool_and_inject, cfg)
 
     rng = jax.random.PRNGKey(1234)
     rng, k1, k2, k3 = jax.random.split(rng, 4)
@@ -80,17 +79,13 @@ def test_convlstm_strides_padding(cfg: ConvConfig, add_one_to_forget: bool, pool
 CONVLSTM_CONFIGS = [
     ConvLSTMConfig(
         embed=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
-        recurrent=[ConvConfig(2, (3, 3), (1, 1), "SAME", True)],
+        recurrent=ConvLSTMCellConfig(ConvConfig(2, (3, 3), (1, 1), "SAME", True), pool_and_inject="no"),
         repeats_per_step=1,
-        pool_and_inject=False,
-        add_one_to_forget=True,
     ),
     ConvLSTMConfig(
         embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
-        recurrent=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)] * 2,
+        recurrent=ConvLSTMCellConfig(ConvConfig(5, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
         repeats_per_step=2,
-        pool_and_inject=True,
-        add_one_to_forget=True,
     ),
 ]
 
@@ -116,9 +111,10 @@ def test_carry_shape(net: ConvLSTMConfig):
 
     carry = policy.apply({}, jax.random.PRNGKey(0), envs.observation_space.shape, method=policy.initialize_carry)
     assert isinstance(carry, list)
-    assert len(carry) == len(net.recurrent)
+    assert len(carry) == net.n_recurrent
 
-    for cell_carry, cfg in zip(carry, net.recurrent):
+    cfg = net.recurrent
+    for cell_carry in carry:
         if cfg.padding != "SAME":
             raise NotImplementedError
 
@@ -127,10 +123,62 @@ def test_carry_shape(net: ConvLSTMConfig):
         assert cell_carry.h.shape == shape
 
 
+@pytest.mark.skip("Requires `convlstm_inout.msgpack` which is 50MB")
+def test_scan_reference():
+    net = ConvLSTMConfig(
+        embed=[ConvConfig(5, (3, 3), (1, 1), "SAME", True)],
+        recurrent=ConvLSTMCellConfig(ConvConfig(5, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
+        n_recurrent=2,
+        repeats_per_step=2,
+    )
+    lstm = ConvLSTM(net)
+
+    with (Path(__file__).parent / "convlstm_inout.msgpack").open("rb") as f:
+        inputs_and_outputs = flax.serialization.msgpack_restore(f.read())
+    carry_structure = [LSTMCellState(jnp.zeros(()), jnp.zeros(()))] * 2
+
+    carry = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["carry"])
+    inputs = jnp.moveaxis(inputs_and_outputs["inputs_nchw"], 2, -1) / 255.0
+    episode_starts = inputs_and_outputs["episode_starts"]
+    lstm_carry2 = flax.serialization.from_state_dict(carry_structure, inputs_and_outputs["lstm_carry"])
+    lstm_out2 = inputs_and_outputs["lstm_out"]
+
+    params = inputs_and_outputs["params"]
+    for layer_key in ["cell_list_0", "cell_list_1"]:
+        conv_params = params["params"][layer_key].pop("Conv_0")  # type: ignore
+        hidden_size = net.recurrent.features
+        convcell = dict(
+            hh=dict(
+                kernel=conv_params["kernel"][:, :, hidden_size : hidden_size * 2, :],
+                bias=conv_params["bias"],
+            ),
+            ih=dict(
+                kernel=jnp.concatenate(
+                    [
+                        conv_params["kernel"][:, :, :hidden_size, :],
+                        conv_params["kernel"][:, :, hidden_size * 2 :, :],
+                    ],
+                    axis=2,
+                ),
+                bias=jnp.zeros_like(conv_params["bias"]),
+            ),
+        )
+        params["params"][layer_key]["convcell"] = convcell
+
+    new_params = lstm.init(jax.random.PRNGKey(1234), carry, inputs, episode_starts, method=lstm.scan)
+    assert jax.tree.structure(params) == jax.tree.structure(new_params)
+    assert jax.tree.all(jax.tree.map(lambda x, y: x.shape == y.shape, params, new_params))
+
+    lstm_carry, lstm_out = lstm.apply(params, carry, inputs, episode_starts, method=lstm.scan)
+
+    assert jnp.allclose(lstm_out2, lstm_out, atol=1e-7)
+    assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-7), lstm_carry2, lstm_carry))
+
+
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
 def test_scan_correct(net: ConvLSTMConfig):
     num_envs = 5
-    input_shape = (num_envs, 3, 60, 60)
+    input_shape = (num_envs, 60, 60, 3)
     lstm = ConvLSTM(net)
     key, k1, k2 = jax.random.split(jax.random.PRNGKey(1234), 3)
     carry = lstm.apply({}, k1, input_shape, method=lstm.initialize_carry)
@@ -138,23 +186,20 @@ def test_scan_correct(net: ConvLSTMConfig):
 
     time_steps = 4
     key, k1, k2 = jax.random.split(key, 3)
-    inputs_nchw = jax.random.uniform(k1, (time_steps, *input_shape), maxval=255)
-    episode_starts = jnp.zeros((time_steps, num_envs))
+    inputs = jax.random.uniform(k1, (time_steps, *input_shape), maxval=255)
+    episode_starts = jnp.zeros((time_steps, num_envs), dtype=jnp.bool_)
 
-    lstm_carry, lstm_out = lstm.apply(params, carry, inputs_nchw, episode_starts, method=lstm.scan)
-
-    inputs = jnp.moveaxis(inputs_nchw, -3, -1)
+    lstm_carry, lstm_out = lstm.apply(params, carry, inputs, episode_starts, method=lstm.scan)
 
     b_lstm = lstm.bind(params)
 
-    cell_carry: list[ConvLSTMCellState] = list(carry)
+    cell_carry: list[LSTMCellState] = list(carry)
     for t in range(time_steps):
         x = inputs[t]
         for conv in b_lstm.conv_list:
             x = conv(x)
-            x = nn.relu(x)
 
-        lstm_x = b_lstm._preprocess_input(inputs_nchw[t])
+        lstm_x = b_lstm._compress_input(inputs[t])
         assert jnp.allclose(x, lstm_x)
 
         h_nd = cell_carry[-1].h
@@ -231,3 +276,40 @@ def test_config_de_serialize(net: ConvLSTMConfig):
     d = farconf.to_dict(net, ConvLSTMConfig)
     net2 = farconf.from_dict(d, ConvLSTMConfig)
     assert net == net2
+
+
+@pytest.mark.parametrize("pool_and_inject", ["horizontal", "vertical", "no"])
+@pytest.mark.parametrize("pool_projection", ["full", "per-channel", "max", "mean"])
+@pytest.mark.parametrize("output_activation", ["sigmoid", "tanh"])
+@pytest.mark.parametrize("fence_pad", ["same", "valid", "no"])
+@pytest.mark.parametrize("forget_bias", [0.0, 1.0])
+@pytest.mark.parametrize("skip_final", [True, False])
+@pytest.mark.parametrize("residual", [True, False])
+def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
+    net = ConvLSTMConfig(
+        n_recurrent=3,
+        repeats_per_step=3,
+        residual=residual,
+        skip_final=skip_final,
+        embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+        recurrent=ConvLSTMCellConfig(
+            ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            pool_and_inject=pool_and_inject,
+            pool_projection=pool_projection,
+            output_activation=output_activation,
+            fence_pad=fence_pad,
+            forget_bias=forget_bias,
+        ),
+    )
+
+    envs = SokobanConfig(
+        max_episode_steps=120,
+        num_envs=1,
+        seed=1,
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(10, 10),
+        asynchronous=False,
+    ).make()
+
+    net.count_params(envs)

@@ -1,6 +1,8 @@
+import abc
 import dataclasses
+import math
 from functools import partial
-from typing import Callable, Literal, Optional, Sequence, Tuple
+from typing import Literal, Sequence, Tuple
 
 import flax.linen as nn
 import flax.struct
@@ -17,55 +19,61 @@ class ConvConfig:
     strides: Tuple[int, ...]
     padding: Literal["SAME", "VALID"] | Sequence[Tuple[int, int]] = "SAME"
     use_bias: bool = True
+    initialization: Literal["torch", "lecun"] = "lecun"
 
-    def make_conv(
-        self,
-        kernel_init=nn.initializers.lecun_normal(),
-        bias_init=nn.initializers.zeros_init(),
-        *,
-        name: Optional[str] = None,
-    ):
-        return nn.Conv(
-            self.features,
-            self.kernel_size,
-            self.strides,
-            self.padding,
-            use_bias=self.use_bias,
-            kernel_init=kernel_init,
-            bias_init=bias_init,
-            name=name,
-        )
-
-    def conv_general_dilated(self, input):
-        return jax.lax.conv_general_dilated(
-            input,
-            jax.ShapeDtypeStruct((*self.kernel_size, input.shape[-1], self.features), jnp.float32),  # type: ignore
-            window_strides=tuple(self.strides),
-            padding=self.padding,
-            dimension_numbers=("NHWC", "HWIO", "NHWC"),
-        )
+    def make_conv(self, **kwargs):
+        if self.initialization == "torch":
+            kernel_init = nn.initializers.variance_scaling(1 / 3, "fan_in", "uniform")
+        else:
+            kernel_init = nn.initializers.lecun_normal()
+        if "kernel_init" not in kwargs:
+            kwargs["kernel_init"] = kernel_init
+        if "use_bias" not in kwargs:
+            kwargs["use_bias"] = self.use_bias
+        return nn.Conv(self.features, self.kernel_size, self.strides, self.padding, **kwargs)
 
 
 @dataclasses.dataclass(frozen=True)
-class ConvLSTMConfig(PolicySpec):
-    embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
-    recurrent: Sequence[ConvConfig] = dataclasses.field(default_factory=lambda: [ConvConfig(64, (3, 3), (1, 1))])
-    mlp_hiddens: Tuple[int, ...] = (256,)
+class ConvLSTMCellConfig:
+    conv: ConvConfig
+    pool_and_inject: Literal["horizontal", "vertical", "no"] = "horizontal"
+    pool_projection: Literal["full", "per-channel", "max", "mean"] = "full"
 
-    repeats_per_step: int = 1
-    pool_and_inject: bool = False
-    add_one_to_forget: bool = True
+    output_activation: Literal["sigmoid", "tanh"] = "sigmoid"
+    forget_bias: float = 0.0
+    fence_pad: Literal["same", "valid", "no"] = "same"
+
+
+@dataclasses.dataclass(frozen=True)
+class BaseLSTMConfig(PolicySpec):
+    n_recurrent: int = 1  # D in the paper
+    repeats_per_step: int = 1  # N in the paper
+    mlp_hiddens: Sequence[int] = (256,)
+    skip_final: bool = True
+    residual: bool = False
+
+    @abc.abstractmethod
+    def make(self) -> "BaseLSTM":
+        ...
+
+
+@dataclasses.dataclass(frozen=True)
+class ConvLSTMConfig(BaseLSTMConfig):
+    embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
+    recurrent: ConvLSTMCellConfig = ConvLSTMCellConfig(ConvConfig(32, (3, 3), (1, 1), "SAME", True))
+    use_relu: bool = True
 
     def make(self) -> "ConvLSTM":
         return ConvLSTM(self)
 
 
-class ConvLSTMCellState(flax.struct.PyTreeNode):
-    c: jax.Array
-    h: jax.Array
+@dataclasses.dataclass(frozen=True)
+class LSTMConfig(BaseLSTMConfig):
+    embed_hiddens: Sequence[int] = (200,)
+    recurrent_hidden: int = 200
 
-
-ConvLSTMState = list[ConvLSTMCellState]
+    def make(self) -> "LSTM":
+        return LSTM(self)
 
 
 def _broadcast_towards_the_left(target: jax.Array, src: jax.Array) -> jax.Array:
@@ -88,56 +96,56 @@ def _broadcast_towards_the_left(target: jax.Array, src: jax.Array) -> jax.Array:
     return jnp.expand_dims(src, axis=dims_to_expand)
 
 
-class ConvLSTM(nn.Module):
-    cfg: ConvLSTMConfig
+class LSTMCellState(flax.struct.PyTreeNode):
+    c: jax.Array
+    h: jax.Array
+
+
+LSTMState = list[LSTMCellState]
+
+
+class BaseLSTM(nn.Module):
+    cfg: BaseLSTMConfig
+    cell_list: list["ConvLSTMCell"] = dataclasses.field(init=False)
 
     def setup(self):
-        self.conv_list = [c.make_conv() for c in self.cfg.embed]
-        self.cell_list = [
-            ConvLSTMCell(c, add_one_to_forget=self.cfg.add_one_to_forget, pool_and_inject=self.cfg.pool_and_inject)
-            for c in self.cfg.recurrent
-        ]
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
-    def _preprocess_input(self, observations: jax.Array) -> jax.Array:
-        """
-        Embeds the inputs using `self.conv_list`
-        """
-        assert len(observations.shape) == 4, f"observations shape must be [batch, h, w, c] but is {observations.shape=}"
+    @abc.abstractmethod
+    def _compress_input(self, x: jax.Array) -> jax.Array:
+        ...
 
-        x = observations
-        x = jnp.transpose(x, (0, 2, 3, 1))
-        for c in self.conv_list:
-            x = c(x)
-            x = nn.relu(x)
-        return x
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        rng = jax.random.split(rng, len(self.cell_list))
+        return [cell.initialize_carry(k, input_shape) for (cell, k) in zip(self.cell_list, rng)]
 
-    def _mlp(self, x: jax.Array) -> jax.Array:
-        for dense in self.dense_list:
-            x = self.cfg.norm(x)
-            x = dense(x)
-            x = nn.relu(x)
-        return x
-
-    @partial(nn.scan, variable_broadcast="params", split_rngs={"params": False})
-    def _apply_cells_once(self, carry: ConvLSTMState, inputs: jax.Array) -> tuple[ConvLSTMState, tuple[()]]:
+    def apply_cells_once(self, carry: LSTMState, inputs: jax.Array) -> tuple[LSTMState, tuple[()]]:
         """
         Applies all cells in `self.cell_list` once. `Inputs` gets passed as the input to every cell
         """
         assert len(inputs.shape) == 4
-        prev_layer_state = carry[-1].h  # Top-down skip connection from previous time step
+        carry = list(carry)  # copy
+
+        # Top-down skip connection from previous time step
+        # Importantly it's not residual like the rest of the carry-upwards hidden state
+        prev_layer_state = carry[-1].h
 
         for d, cell in enumerate(self.cell_list):
             # c^n_d, h^n_d = MemoryModule_d(i_t, c^{n-1}_d, h^{n-1}_d, h^n_{d-1})
             #
             # equivalently
             # state[d] = cell_list[d](i_t, state[d], h_n{d-1}
-            carry[d], prev_layer_state = cell(carry[d], inputs, prev_layer_state)
+            carry[d], new_state = cell(carry[d], inputs, prev_layer_state)
+            if self.cfg.residual:
+                prev_layer_state = prev_layer_state + new_state
+            else:
+                prev_layer_state = new_state
+        if not self.cfg.skip_final:  # Pass the residual connection on to the next repetition
+            carry[-1] = LSTMCellState(c=carry[-1].c, h=prev_layer_state)
         return carry, ()
 
-    def _apply_cells(
-        self, carry: ConvLSTMState, inputs: jax.Array, episode_starts: jax.Array
-    ) -> tuple[ConvLSTMState, jax.Array]:
+    def _apply_cells(self, carry: LSTMState, inputs: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
         """
         Applies all cells in `self.cell_list`, several times: `self.cfg.repeats_per_step` times. Preprocesses the carry
         so it gets zeroed at the start of an episode
@@ -148,140 +156,190 @@ class ConvLSTM(nn.Module):
         not_reset = ~episode_starts
         carry = jax.tree.map(lambda z: z * _broadcast_towards_the_left(z, not_reset), carry)
 
-        carry, _ = self._apply_cells_once(carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
+        apply_cells_once_fn = nn.scan(
+            self.__class__.apply_cells_once, variable_broadcast="params", split_rngs={"params": False}
+        )
+        carry, _ = apply_cells_once_fn(self, carry, jnp.broadcast_to(inputs, (self.cfg.repeats_per_step, *inputs.shape)))
 
         out = carry[-1].h
-        flattened_out = jnp.reshape(out, (inputs.shape[0], -1))
-        return carry, flattened_out
+        return carry, out
 
-    def step(
-        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
-    ) -> tuple[ConvLSTMState, jax.Array]:
-        """Applies the ConvLSTM for a single step"""
-        embedded = self._preprocess_input(observations)
+    def step(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
+        """Applies the RNN for a single step"""
+        embedded = self._compress_input(observations)
         out_carry, pre_mlp = self._apply_cells(carry, embedded, episode_starts)
+        if self.cfg.skip_final:
+            pre_mlp = pre_mlp + embedded
         return out_carry, self._mlp(pre_mlp)
 
-    def scan(
-        self, carry: ConvLSTMState, observations: jax.Array, episode_starts: jax.Array
-    ) -> tuple[ConvLSTMState, jax.Array]:
-        """Applies the ConvLSTM over many time steps."""
-        embedded = jax.vmap(self._preprocess_input)(observations)
-        out_carry, pre_mlp = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})(
-            self, carry, embedded, episode_starts
-        )
+    def scan(self, carry: LSTMState, observations: jax.Array, episode_starts: jax.Array) -> tuple[LSTMState, jax.Array]:
+        """Applies the RNN over many time steps."""
+        embedded = jax.vmap(self._compress_input)(observations)
+        apply_cells_fn = nn.scan(self.__class__._apply_cells, variable_broadcast="params", split_rngs={"params": False})
+        out_carry, pre_mlp = apply_cells_fn(self, carry, embedded, episode_starts)
+        if self.cfg.skip_final:
+            pre_mlp = pre_mlp + embedded
         out = jax.vmap(self._mlp)(pre_mlp)
         return out_carry, out
 
-    def initialize_carry(self, rng, input_shape):
-        # Convert from NCHW to NHWC
-        assert len(input_shape) == 4
-        input_shape = (input_shape[0], *input_shape[2:4], input_shape[1])
-
-        # Figure out embedded input shape
-        def _conv_stack(x):
-            for emb in self.cfg.embed:
-                x = emb.conv_general_dilated(x)
-            return x
-
-        hidden_shape = jax.eval_shape(_conv_stack, jax.ShapeDtypeStruct(input_shape, jnp.float32)).shape
-
-        rng = jax.random.split(rng, len(self.cell_list))
-        return [cell.initialize_carry(k, hidden_shape) for (cell, k) in zip(self.cell_list, rng)]
+    def _mlp(self, x: jax.Array) -> jax.Array:
+        x = jnp.reshape(x, (x.shape[0], -1))
+        for dense in self.dense_list:
+            x = self.cfg.norm(x)
+            x = dense(x)
+            x = nn.relu(x)
+        return x
 
 
-class ConvLSTMCell(nn.Module):
-    cfg: ConvConfig
-    add_one_to_forget: bool = False
-    pool_and_inject: bool = False
+class ConvLSTM(BaseLSTM):
+    cfg: ConvLSTMConfig
 
-    gate_fn: Callable[..., jax.Array] = nn.sigmoid
-    activation_fn: Callable[..., jax.Array] = nn.tanh
-    kernel_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
-    recurrent_kernel_init: nn.initializers.Initializer = nn.initializers.orthogonal()
-    project_init: nn.initializers.Initializer = nn.initializers.lecun_normal()
-    bias_init: nn.initializers.Initializer = nn.initializers.zeros_init()
-    dtype: Optional[jnp.dtype] = None
-    param_dtype: jnp.dtype = jnp.float32
-    carry_init: nn.initializers.Initializer = nn.initializers.zeros_init()
+    def setup(self):
+        super().setup()
+        self.conv_list = [
+            c.make_conv(kernel_init=nn.initializers.variance_scaling(1.0, "fan_in", "truncated_normal"))
+            for c in self.cfg.embed
+        ]
+        self.cell_list = [ConvLSTMCell(self.cfg.recurrent) for _ in range(self.cfg.n_recurrent)]
+
+    def _compress_input(self, x: jax.Array) -> jax.Array:
+        """
+        Embeds the inputs using `self.conv_list`
+        """
+        assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
+
+        for i, conv in enumerate(self.conv_list):
+            x = conv(x)
+            if self.cfg.use_relu and i < len(self.conv_list) - 1:
+                x = nn.relu(x)
+        return x
+
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        n, h, w, c = input_shape
+        for conv in self.conv_list:
+            w //= conv.strides[0]
+            h //= conv.strides[1]
+        return super().initialize_carry(rng, (n, h, w, c))
+
+
+class LSTM(BaseLSTM):
+    cfg: LSTMConfig
+
+    def setup(self):
+        super().setup()
+        self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
+        self.cell_list = []  # LSTMCell(self.cfg.cell, features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)]
+
+    def _compress_input(self, x: jax.Array) -> jax.Array:
+        assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
+
+        # Flatten input
+        x = jnp.reshape(x, (x.shape[0], math.prod(x.shape[1:])))
+
+        for c in self.compress_list:
+            x = c(x)
+            x = nn.relu(x)
+        return x
+
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        return super().initialize_carry(rng, (input_shape[0], self.cfg.embed_hiddens[-1]))
+
+
+class ConvLSTMCell(nn.RNNCellBase):
+    cfg: ConvLSTMCellConfig
+
+    def pool_and_project(self, prev_layer_hidden: jax.Array) -> jax.Array:
+        B, H, W, C = prev_layer_hidden.shape
+        AXES_HW = (1, 2)
+        h_max = jnp.max(prev_layer_hidden, axis=AXES_HW)
+        h_mean = jnp.mean(prev_layer_hidden, axis=AXES_HW)
+        if self.cfg.pool_projection == "max":
+            pooled_h = h_max
+        elif self.cfg.pool_projection == "mean":
+            pooled_h = h_mean
+        elif self.cfg.pool_projection == "full":
+            h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
+            pooled_h = nn.Dense(C, use_bias=False)(h_max_and_mean)
+
+        elif self.cfg.pool_projection == "per-channel":
+            project = self.param(
+                "project",
+                nn.initializers.variance_scaling(1.0, "fan_in", "truncated_normal"),
+                (2, self.cfg.conv.features),
+                jnp.float32,
+            )
+            pooled_h = project[0] * h_max + project[1] * h_mean
+        else:
+            raise ValueError(f"{self.cfg.pool_projection=}")
+
+        pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, C))
+        return pooled_h_expanded
 
     @nn.compact
     def __call__(
-        self, carry: ConvLSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
-    ) -> tuple[ConvLSTMCellState, jax.Array]:
-        assert self.cfg.padding == "SAME" and all(s == 1 for s in self.cfg.strides), self.cfg
-        conv = nn.Conv(
-            features=4 * self.cfg.features,
-            kernel_size=self.cfg.kernel_size,
-            strides=self.cfg.strides,
-            padding=self.cfg.padding,
-            use_bias=self.cfg.use_bias,
-            kernel_init=self.kernel_init,
-            bias_init=self.bias_init,
-            dtype=self.dtype,
-            param_dtype=self.param_dtype,
-        )
+        self, carry: LSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
+    ) -> tuple[LSTMCellState, jax.Array]:
+        assert self.cfg.conv.padding == "SAME" and all(s == 1 for s in self.cfg.conv.strides), self.cfg
 
-        if self.pool_and_inject:
-            AXES_HW = (1, 2)
-            h_max = jnp.max(carry.h, axis=AXES_HW)
-            assert h_max.shape == (carry.h.shape[0], carry.h.shape[-1])
-            h_mean = jnp.mean(carry.h, axis=AXES_HW)
-            h_max_and_mean = jnp.concatenate([h_max, h_mean], axis=-1)
-            pooled_h = nn.Dense(
-                self.cfg.features,
-                use_bias=False,
-                dtype=self.dtype,
-                param_dtype=self.param_dtype,
-                kernel_init=self.project_init,
-            )(h_max_and_mean)
-
-            B, H, W, _ = carry.h.shape
-
-            pooled_h_expanded = jnp.broadcast_to(pooled_h[:, None, None, :], (B, H, W, self.cfg.features))
-            concat_hidden = [inputs, carry.h, prev_layer_hidden, pooled_h_expanded]
+        batch, height, width, channels = inputs.shape
+        if self.cfg.fence_pad == "same":
+            ones = jnp.ones((batch, height, width, 1))
+            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
+            processed_fence = dataclasses.replace(
+                self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="SAME"
+            ).make_conv(name="fence")(fence)
+        elif self.cfg.fence_pad == "valid":
+            valid_height = height + (self.cfg.conv.kernel_size[0] - 1)
+            valid_width = width + (self.cfg.conv.kernel_size[1] - 1)
+            ones = jnp.ones((batch, valid_height, valid_width, 1))
+            fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
+            processed_fence = dataclasses.replace(
+                self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="VALID"
+            ).make_conv(name="fence")(fence)
+        elif self.cfg.fence_pad == "no":
+            processed_fence = 0.0
         else:
-            concat_hidden = [inputs, carry.h, prev_layer_hidden]
+            raise ValueError(f"{self.cfg.fence_pad=}")
 
-        h = jnp.concatenate(concat_hidden, axis=-1)
-        gates = conv(h)
-        i, g, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
+        if self.cfg.pool_and_inject == "no":
+            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
 
-        i = self.gate_fn(i)
-        f = self.gate_fn(f + (1 if self.add_one_to_forget else 0))
-        g = self.activation_fn(g)
-        o = self.gate_fn(o)
-        new_c = f * carry.c + i * g
-        new_h = o * self.activation_fn(new_c)
-        return ConvLSTMCellState(c=new_c, h=new_h), new_h
+        else:
+            if self.cfg.pool_and_inject == "horizontal":
+                to_pool = carry.h
+            elif self.cfg.pool_and_inject == "vertical":
+                to_pool = prev_layer_hidden
+            else:
+                raise ValueError(f"{self.cfg.pool_and_inject=}")
+            pooled_h = self.pool_and_project(to_pool)
+            cell_inputs = jnp.concatenate([inputs, prev_layer_hidden, pooled_h], axis=-1)
 
-    def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> ConvLSTMCellState:
-        """Initialize the RNN cell carry.
+        make_conv_fn = dataclasses.replace(self.cfg.conv, features=4 * self.cfg.conv.features).make_conv
 
-        Args:
-          rng: random number generator passed to the init_fn.
-          input_shape: a tuple providing the shape of the input to the cell.
+        gates = make_conv_fn(name="ih")(cell_inputs) + make_conv_fn(use_bias=False, name="hh")(carry.h) + processed_fence
+        i, j, f, o = jnp.split(gates, indices_or_sections=4, axis=-1)
 
-        Returns:
-          An initialized carry for the given RNN cell.
-        """
+        i = jnp.tanh(i)
+        j = nn.sigmoid(j)
+        f = nn.sigmoid(f + self.cfg.forget_bias)
+        if self.cfg.output_activation == "sigmoid":
+            o = nn.sigmoid(o)
+        elif self.cfg.output_activation == "tanh":
+            o = jnp.tanh(o)
+        else:
+            raise ValueError(f"{self.cfg.output_activation=}")
 
-        def _input_to_hidden_conv(input):
-            kernel = jnp.ones((*self.cfg.kernel_size, input.shape[-1], self.cfg.features))
-            assert isinstance(self.cfg.padding, str)
-            return jax.lax.conv_general_dilated(
-                input,
-                kernel,
-                window_strides=tuple(self.cfg.strides),
-                padding=self.cfg.padding,
-                dimension_numbers=("NHWC", "HWIO", "NHWC"),
-            )
+        new_c = carry.c * f + i * j
+        new_h = nn.tanh(new_c) * o
+        return LSTMCellState(c=new_c, h=new_h), new_h
 
-        hidden = _input_to_hidden_conv(jnp.ones((1, *input_shape[-3:])))
-        # Take only H,W,C from the convolution (discard batch)
-        mem_shape = input_shape[:-3] + hidden.shape[-3:]
+    @nn.nowrap
+    def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> LSTMCellState:
+        shape = (*input_shape[:-1], self.cfg.conv.features)
+        c_rng, h_rng = jax.random.split(rng, 2)
+        return LSTMCellState(c=nn.zeros_init()(c_rng, shape), h=nn.zeros_init()(h_rng, shape))
 
-        key1, key2 = jax.random.split(rng)
-        c = self.carry_init(key1, mem_shape, self.param_dtype)
-        h = self.carry_init(key2, mem_shape, self.param_dtype)
-        return ConvLSTMCellState(c=c, h=h)
+    def num_feature_axes(self) -> int:
+        return 3

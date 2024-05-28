@@ -5,20 +5,36 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc_3_3
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
 clis = []
-# Paper says 200 actors, we'll use 192 so it's evenly divided by 32
-n_envs = 256
-minibatch_size = 32
-assert n_envs % minibatch_size == 0
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
-    for base_fn in [sokoban_drc_3_3]:
+
+
+for vf_coef in [0.25, 0.0625]:
+    for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
 
         def update_fn(config: Args) -> Args:
-            config.local_num_envs = n_envs
+            config.eval_envs = {}  # Don't evaluate
+            config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
+            config.local_num_envs = 256
             config.num_steps = 20
+            config.net = ConvLSTMConfig(
+                n_recurrent=3,
+                repeats_per_step=3,
+                skip_final=True,
+                embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+                recurrent=ConvLSTMCellConfig(
+                    ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+                    pool_and_inject="horizontal",
+                    pool_projection="per-channel",
+                    output_activation="sigmoid",
+                    fence_pad="valid",
+                    forget_bias=1.0,
+                ),
+                head_scale=5.0,
+            )
 
             world_size = 1
             len_actor_device_ids = 1
@@ -26,7 +42,8 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             global_step_multiplier = (
                 config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
             )
-            config.total_timesteps = 80_117_760
+
+            config.total_timesteps = 5_120_000
             num_updates = config.total_timesteps // global_step_multiplier
             assert (
                 num_updates * global_step_multiplier == config.total_timesteps
@@ -44,40 +61,40 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
 
             config.train_epochs = 1
             config.num_actor_threads = 1
-            config.num_minibatches = (config.local_num_envs * config.num_actor_threads) // minibatch_size
+            config.num_minibatches = 8
 
             config.seed = learn_seed
             config.sync_frequency = int(1e20)
 
-            logit_l2_coef = 1.5625e-6  # doesn't seem to matter much from now. May improve stability a tiny bit.
+            logit_l2_coef = 1.5625e-5
             config.loss = dataclasses.replace(
                 config.loss,
                 vtrace_lambda=0.97,
-                vf_coef=0.25,
+                vf_coef=vf_coef,
                 gamma=0.97,
-                ent_coef=0.01,
+                ent_coef=0.001,
                 normalize_advantage=False,
                 logit_l2_coef=logit_l2_coef,
                 weight_l2_coef=logit_l2_coef / 100,
             )
             config.base_fan_in = 1
-            config.anneal_lr = True
+            config.anneal_lr = False
 
             config.optimizer = "adam"
             config.adam_b1 = 0.9
-            config.rmsprop_decay = 0.99
+            config.rmsprop_decay = 0.999
             config.learning_rate = 4e-4
-            config.max_grad_norm = 2.5e-4
-            config.rmsprop_eps = 1.5625e-07
+            config.max_grad_norm = 1.5e-4
+            config.rmsprop_eps = 1.5625e-10
             config.optimizer_yang = False
 
             return config
 
-        cli, _ = update_fns_to_cli(base_fn, update_fn)
-        # Check that parsing doesn't error
-        _ = parse_cli(cli, Args)
-
+        cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
         print(shlex.join(cli))
+        # Check that parsing doesn't error
+        out = parse_cli(cli, Args)
+
         clis.append(cli)
 
 runs: list[FlamingoRun] = []
@@ -90,13 +107,13 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="high-batch",
+            PRIORITY="normal-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "3")
 
 if __name__ == "__main__":
     launch_jobs(

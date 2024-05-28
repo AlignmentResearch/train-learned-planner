@@ -1,3 +1,4 @@
+import contextlib
 import dataclasses
 
 import jax
@@ -18,15 +19,13 @@ class EvalConfig:
     safeguard_max_episode_steps: int = 30000
 
     def run(self, policy: Policy, get_action_fn, params, *, key: jnp.ndarray) -> dict[str, float]:
-        key, env_key, carry_key = jax.random.split(key, 3)
-        env_seed = int(jax.random.randint(env_key, (), minval=0, maxval=2**31 - 2))
-        envs = dataclasses.replace(self.env, seed=env_seed).make()
-
-        episode_starts_no = jnp.zeros(envs.num_envs, dtype=jnp.bool_)
+        key, carry_key = jax.random.split(key, 2)
+        episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
 
         metrics = {}
-        try:
-            for steps_to_think in self.steps_to_think:
+        for steps_to_think in self.steps_to_think:
+            # Create the environments every time with the same seed so the levels are the exact same
+            with contextlib.closing(self.env.make()) as envs:
                 all_episode_returns = []
                 all_episode_lengths = []
                 all_episode_successes = []
@@ -75,6 +74,4 @@ class EvalConfig:
                         f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
                     }
                 )
-        finally:
-            envs.close()
         return metrics

@@ -1,9 +1,9 @@
 import dataclasses
 from dataclasses import field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from cleanba.convlstm import ConvConfig, ConvLSTMConfig
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
@@ -64,6 +64,8 @@ class Args:
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
     concurrency: bool = True  # whether to run the actor and learner concurrently
+
+    load_path: Optional[Path] = None  # Where to load the initial training state from
 
 
 def sokoban_resnet() -> Args:
@@ -133,7 +135,7 @@ def sokoban_resnet() -> Args:
     )
 
 
-def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
+def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
     CACHE_PATH = Path("/opt/sokoban_cache")
     return Args(
         train_env=EnvpoolBoxobanConfig(
@@ -170,15 +172,35 @@ def sokoban_drc(num_layers: int, num_repeats: int) -> Args:
             ),
         ),
         log_frequency=10,
-        sync_frequency=int(4e9),
         net=ConvLSTMConfig(
             embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
-            recurrent=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * num_layers,
+            recurrent=ConvLSTMCellConfig(
+                ConvConfig(32, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal", fence_pad="same"
+            ),
+            n_recurrent=n_recurrent,
             mlp_hiddens=(256,),
             repeats_per_step=num_repeats,
-            pool_and_inject=True,
-            add_one_to_forget=True,
         ),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.97,
+            weight_l2_coef=1.5625e-07,
+            gamma=0.97,
+            logit_l2_coef=1.5625e-05,
+        ),
+        actor_update_cutoff=100000000000000000000,
+        sync_frequency=100000000000000000000,
+        num_minibatches=8,
+        rmsprop_eps=1.5625e-07,
+        local_num_envs=256,
+        total_timesteps=80117760,
+        base_run_dir=Path("/training/cleanba"),
+        learning_rate=0.0004,
+        eval_frequency=978,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=0.015,
+        num_actor_threads=1,
     )
 
 
