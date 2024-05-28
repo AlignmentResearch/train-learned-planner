@@ -12,7 +12,7 @@ import warnings
 from collections import deque
 from functools import partial
 from pathlib import Path
-from typing import Any, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional, Tuple
 
 import chex
 import farconf
@@ -36,7 +36,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
-from cleanba.network import AgentParams, label_and_learning_rate_for_params
+from cleanba.network import AgentParams, Policy, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -536,11 +536,16 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
 
+def initialize_policy(args: Args, key: jax.Array) -> Tuple[Policy, Any, Any]:
+    total_num_envs = args.local_num_envs * args.num_actor_threads * len(args.actor_device_ids)
+    with contextlib.closing(dataclasses.replace(args.train_env, num_envs=total_num_envs).make()) as envs:
+        return args.net.init_params(envs, key)
+
+
 def train(args: Args, *, writer: Optional[WandbWriter] = None):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
-    train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
-    with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
+    with initialize_multi_device(args) as runtime_info:
         pprint(runtime_info)
         if writer is None:
             writer = WandbWriter(args)
@@ -551,17 +556,16 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         key = jax.random.PRNGKey(random_seed())
 
         key, agent_params_subkey = jax.random.split(key, 2)
-
-        policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
+        policy, carry, agent_params = initialize_policy(args, agent_params_subkey)
 
         if args.load_path is None:
             agent_state = TrainState.create(
                 apply_fn=None,
-                params=agent_params,
+                params={"params": agent_params, "carry": carry},
                 tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
             )
         else:
-            old_args, agent_state = load_train_state(args.load_path)
+            old_args, agent_state = load_train_state(args.load_path, carry=carry)
             print(f"Loaded TrainState from {args.load_path}. Here are the differences from `args` to the loaded args:")
             farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args))
 
@@ -703,18 +707,18 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState):
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path) -> tuple[Args, TrainState]:
+def load_train_state(dir: Path, *, carry: Optional[Any] = None) -> tuple[Args, TrainState]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
     args = farconf.from_dict(args_dict, Args)
 
-    _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    _, carry, params = initialize_policy(args, jax.random.PRNGKey(1))
 
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
 
     target_state = TrainState.create(
         apply_fn=None,
-        params=params,
+        params={"params": params, "carry": carry},
         tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size),
     )
 
