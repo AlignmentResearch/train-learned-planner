@@ -285,13 +285,15 @@ class ConvLSTMCell(nn.RNNCellBase):
 
         batch, height, width, channels = inputs.shape
         if self.cfg.fence_pad == "same":
-            ones = jnp.ones((batch, height, width, channels))
+            ones = jnp.ones((batch, height, width, 1))
             fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
             processed_fence = dataclasses.replace(
                 self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="SAME"
             ).make_conv(name="fence")(fence)
         elif self.cfg.fence_pad == "valid":
-            ones = jnp.ones((batch, height + 2, width + 2, channels))
+            valid_height = height + (self.cfg.conv.kernel_size[0] - 1)
+            valid_width = width + (self.cfg.conv.kernel_size[1] - 1)
+            ones = jnp.ones((batch, valid_height, valid_width, 1))
             fence = ones.at[:, 1:-1, 1:-1, :].set(0.0)
             processed_fence = dataclasses.replace(
                 self.cfg.conv, features=4 * self.cfg.conv.features, use_bias=False, padding="VALID"

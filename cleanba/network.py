@@ -110,7 +110,7 @@ class Policy(nn.Module):
         assert len(x.shape) == 4, "x must be a NCHW image"
         assert (
             x.shape[2] == x.shape[3]
-        ), f"x is not a rectangular NHWC image, but is instead {x.shape=}. This is probably wrong."
+        ), f"x is not a rectangular NCHW image, but is instead {x.shape=}. This is probably wrong."
 
         x = jnp.transpose(x, (0, 2, 3, 1))
 

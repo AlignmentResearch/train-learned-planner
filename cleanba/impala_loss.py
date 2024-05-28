@@ -1,10 +1,11 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, List, NamedTuple
+from typing import Any, Callable, List, Literal, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 import rlax
 from flax.training.train_state import TrainState
 from numpy.typing import NDArray
@@ -33,6 +34,30 @@ class ImpalaLossConfig:
 
     logit_l2_coef: float = 0.0
     weight_l2_coef: float = 0.0
+
+    max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
+    vf_loss_type: Literal["square", "huber"] = "square"
+    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] = "one"
+
+    def vf_loss_fn(self, x: jax.Array) -> jax.Array:
+        if self.vf_loss_type == "square":
+            return jnp.square(x)
+        elif self.vf_loss_type == "huber":
+            return optax.losses.huber_loss(x)
+        else:
+            raise ValueError(f"{self.vf_loss_type=}")
+
+    def adv_multiplier(self, vtrace_errors: jax.Array) -> jax.Array | float:
+        if self.advantage_multiplier == "one":
+            return 1.0
+        elif self.advantage_multiplier == "mean":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.mean(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier == "max":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.max(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier == "elementwise":
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_errors), a_max=1.0))
+        else:
+            raise ValueError(f"{self.advantage_multiplier=}")
 
 
 class Rollout(NamedTuple):
@@ -132,16 +157,20 @@ def impala_loss(
 
     vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_t, discount_t, rhos_tm1)
 
+    # We're going to multiply advantages by this value, so the policy doesn't change too much in situations where the
+    # value error is large.
+    adv_multiplier = args.adv_multiplier(vtrace_returns.errors)
+
     # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
     # are implicit in `pg_advs`.
     norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
         jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
     )
-    pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
+    pg_advs = adv_multiplier * jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
-    # Value loss: MSE of VTrace-estimated errors
-    v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
+    # Value loss: Huber loss of VTrace-estimated errors
+    v_loss = jnp.mean(args.vf_loss_fn(vtrace_returns.errors))
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
@@ -162,13 +191,10 @@ def impala_loss(
         pg_loss=pg_loss,
         v_loss=v_loss,
         ent_loss=ent_loss,
-        max_ratio=jnp.max(rhos_tm1),
-        min_ratio=jnp.min(rhos_tm1),
-        avg_ratio=jnp.exp(jnp.mean(jnp.log(rhos_tm1))),
         var_explained=1 - jnp.var(vtrace_returns.errors, ddof=1) / jnp.var(targets_tm1, ddof=1),
         proportion_of_boxes=jnp.mean(minibatch.r_t > 0),
-        mean_error=jnp.mean(vtrace_returns.errors),
         **nn_metrics,
+        adv_multiplier=jnp.mean(adv_multiplier),
     )
     return total_loss, metrics_dict
 
