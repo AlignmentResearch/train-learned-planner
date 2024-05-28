@@ -17,13 +17,14 @@ from flax.training.train_state import TrainState
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.config import Args, sokoban_resnet
+from cleanba.convlstm import ConvConfig, ConvLSTMConfig
 from cleanba.environments import EnvpoolBoxobanConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
     Rollout,
-    impala_loss,
+    tree_flatten_and_concat,
 )
-from cleanba.network import AtariCNNSpec, RMSNorm, SokobanResNetConfig, label_and_learning_rate_for_params
+from cleanba.network import GuezResNetConfig
 
 
 def unreplicate(tree):
@@ -38,10 +39,11 @@ def collect_rollouts(args: Args, num_rollouts: int = 2, seed: int = 12345) -> li
     key = jax.random.PRNGKey(seed)
 
     key, params_key = jax.random.split(key, 2)
-    rollout_params = jax.jit(args.net.init_params, static_argnums=(0,))(
+    _policy, _carry, rollout_params = args.net.init_params(
         dataclasses.replace(args.train_env, num_envs=1).make(),
         params_key,
     )
+    assert isinstance(rollout_params, dict)
     param_queue = queue.Queue(num_rollouts)
     for _ in range(num_rollouts):
         param_queue.put_nowait((rollout_params, 2))
@@ -97,24 +99,24 @@ args = dataclasses.replace(
     train_env=EnvpoolBoxobanConfig(
         max_episode_steps=30,
         min_episode_steps=20,
-        cache_path=Path("/training/.sokoban_cache"),
+        cache_path=Path("/opt/sokoban_cache"),
         split="train",
         difficulty="unfiltered",
     ),
     eval_envs={},
-    net=SokobanResNetConfig(yang_init=True, norm=RMSNorm(), mlp_hiddens=(256,), channels=(32,)),
+    net=sokoban_resnet().net,
     local_num_envs=256,
     num_steps=20,
     log_frequency=1000000000,
 )
 # %% Collect rollouts
 
-ROLLOUT_PATH: Path = Path("/workspace/rollouts/")
+ROLLOUT_PATH: Path = Path("/opt/rollouts/")
 ROLLOUT_PATH.mkdir(exist_ok=True, parents=True)
 
 rollout_files = list(ROLLOUT_PATH.iterdir())
 
-NUM_ROLLOUTS = 20
+NUM_ROLLOUTS = 500
 if len(rollout_files) < NUM_ROLLOUTS:
     rollouts = collect_rollouts(args, num_rollouts=NUM_ROLLOUTS - len(rollout_files))
 
@@ -136,7 +138,7 @@ print(f"After: {len(rollout_files)=}")
 class RolloutDataset(torch.utils.data.Dataset):
     def __init__(self, fnames: Sequence[Path | str]):
         self.names = np.array([str(f) for f in fnames])
-        self._structure = jax.tree.structure(Rollout(2, 2, 2, 2, 2, 2))
+        self._structure = jax.tree.structure(Rollout(2, (), 2, 2, 2, 2, 2))
         assert len(self.names.shape) == 1
 
         self._leaves: Optional[dict[str, jax.Array]] = None
@@ -188,14 +190,27 @@ args.net = dataclasses.replace(args.net, yang_init=False)
 #     mlp_hiddens=(256,),
 #     last_activation="relu",
 # )
-net = AtariCNNSpec(yang_init=True, norm=RMSNorm(), channels=(64,) * 9, strides=(1,) * 9, mlp_hiddens=(256,), max_pool=False)
+_resnet = GuezResNetConfig()
+net = ConvLSTMConfig(
+    embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+    recurrent=ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+    n_recurrent=3,
+    mlp_hiddens=(256,),
+    repeats_per_step=3,
+    pool_and_inject=True,
+    normalize_input=False,
+    head_scale=1.0,
+)
+# _envs = dataclasses.replace(args.train_env, num_envs=1).make()
+# print("The new grad norm is: ", 2.5e-4 * (net.count_params(_envs) / _resnet.count_params(_envs)) ** 0.5)
 
-params = jax.jit(net.init_params, static_argnums=(0,))(
-    dataclasses.replace(args.train_env, num_envs=1).make(), jax.random.PRNGKey(1234)
+BATCH_SIZE = 256
+policy, carry, params = net.init_params(
+    dataclasses.replace(args.train_env, num_envs=BATCH_SIZE).make(), jax.random.PRNGKey(1234)
 )
 
-x = rollout_collate_fn([train_data[i] for i in range(256)])
-logits, value, _ = net.get_logits_and_value(params, x.obs_t)
+x = rollout_collate_fn([train_data[i] for i in range(BATCH_SIZE)])
+_carry, logits, value, _ = policy.apply(params, carry, x.obs_t, x.episode_starts_t, method=policy.get_logits_and_value)
 
 logits_std = np.mean(np.std(logits, axis=(0, 1)))
 print(f"{logits_std=}, {np.std(value)=}")
@@ -204,27 +219,25 @@ print(f"{logits_std=}, {np.std(value)=}")
 # %% Initialize parameters
 
 
-def adam_with_parameters(learning_rate, b1=0.95, b2=0.99, eps=1e-8, eps_root=0.0) -> optax.GradientTransformation:
+def adam_with_parameters(learning_rate, b1=0.9, b2=0.99, eps=0.00000015625, eps_root=0.0) -> optax.GradientTransformation:
     return optax.inject_hyperparams(optax.adam)(learning_rate=learning_rate, b1=b1, b2=b2, eps=eps, eps_root=eps_root)
 
 
-params = jax.jit(args.net.init_params, static_argnums=(0,))(
-    dataclasses.replace(args.train_env, num_envs=1).make(), jax.random.PRNGKey(1234)
+BATCH_SIZE = 32
+policy, zero_carry, params = net.init_params(
+    dataclasses.replace(args.train_env, num_envs=BATCH_SIZE).make(), jax.random.PRNGKey(1234)
 )
+zero_carry = jax.tree.map(lambda x: x[None, ...], zero_carry)
 
-learning_rates, param_labels = label_and_learning_rate_for_params(params)
+# learning_rates, param_labels = label_and_learning_rate_for_params(params)
 
 train_state = TrainState.create(
     apply_fn=None,
     params=params,
     tx=optax.MultiSteps(
         optax.chain(
-            # optax.clip_by_global_norm(0.0625),
-            # optax.multi_transform(
-            #     transforms={k: adam_with_parameters(lr * 0.001) for k, lr in learning_rates.items()},
-            #     param_labels=param_labels,
-            # ),
-            adam_with_parameters(0.001)
+            optax.clip_by_global_norm(1.6e-3),
+            adam_with_parameters(4e-4),
         ),
         every_k_schedule=1,
     ),
@@ -233,54 +246,57 @@ del params
 
 
 @jax.jit
-def update_minibatch_impala(train_state: TrainState, minibatch: Rollout):
-    minibatch = unreplicate(minibatch)
-
-    (loss, metrics_dict), grads = jax.value_and_grad(impala_loss, has_aux=True)(
-        train_state.params,
-        args.net.get_logits_and_value,
-        ImpalaLossConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
-        minibatch,
-    )
-    metrics_dict["loss"] = loss
-    train_state = train_state.apply_gradients(grads=grads)
-    return train_state, metrics_dict
-
-
-@jax.jit
 def update_minibatch(train_state: TrainState, minibatch: Rollout):
-    def loss_fn(params, get_logits_and_value, cfg: ImpalaLossConfig, minibatch: Rollout):
-        mask_t = jnp.float32(~minibatch.truncated_t)
-        discount_t = (~minibatch.episode_starts_t) * cfg.gamma
-        nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(params, minibatch.obs_t)
+    def loss_fn(params, get_logits_and_value, args: ImpalaLossConfig, minibatch: Rollout):
+        done_t = minibatch.episode_starts_t[1:]
+        discount_t = (~done_t) * args.gamma
+        del done_t
+
+        _final_carry, nn_logits_from_obs, nn_value_from_obs, nn_metrics = get_logits_and_value(
+            params, jax.tree.map(lambda x: x[0], minibatch.carry_t), minibatch.obs_t, minibatch.episode_starts_t
+        )
+        del _final_carry
         nn_logits_t = nn_logits_from_obs[:-1]
-        del nn_logits_from_obs
         v_t = nn_value_from_obs[1:]
         v_tm1 = nn_value_from_obs[:-1]
         del nn_value_from_obs
+
+        mask_t = jnp.float32(~minibatch.truncated_t)
+        r_t = jnp.where(minibatch.truncated_t, jax.lax.stop_gradient(v_tm1), minibatch.r_t)
+
         rhos_tm1 = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
 
         vtrace_td_error_and_advantage = jax.vmap(
             partial(
                 rlax.vtrace_td_error_and_advantage,
-                lambda_=cfg.vtrace_lambda,
-                clip_rho_threshold=cfg.clip_rho_threshold,
-                clip_pg_rho_threshold=cfg.clip_pg_rho_threshold,
+                lambda_=args.vtrace_lambda,
+                clip_rho_threshold=args.clip_rho_threshold,
+                clip_pg_rho_threshold=args.clip_pg_rho_threshold,
                 stop_target_gradients=False,
             ),
             in_axes=1,
             out_axes=1,
         )
-        vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, minibatch.r_t, discount_t, rhos_tm1)
+        vtrace_returns = vtrace_td_error_and_advantage(v_tm1, v_t, r_t, discount_t, rhos_tm1)
 
-        pg_advs = vtrace_returns.pg_advantage
+        # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
+        # are implicit in `pg_advs`.
+        norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
+            jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
+        )
+        pg_advs = jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
         pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
-        v_loss = jnp.mean(jnp.square(vtrace_returns.errors) * mask_t)
+
+        # Value loss: MSE of VTrace-estimated errors
+        v_loss = jnp.mean(jnp.square(vtrace_returns.errors))
+
+        # Entropy loss: negative average entropy of the policy across timesteps and environments
         ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
 
         total_loss = pg_loss
-        total_loss += cfg.vf_coef * v_loss
-        total_loss += cfg.ent_coef * ent_loss
+        total_loss += args.vf_coef * v_loss
+        total_loss += args.ent_coef * ent_loss
+        total_loss += args.logit_l2_coef * jnp.sum(jnp.square(nn_logits_from_obs))
 
         # end copy original impala
 
@@ -313,16 +329,25 @@ def update_minibatch(train_state: TrainState, minibatch: Rollout):
 
     (loss, metrics_dict), grads = jax.value_and_grad(loss_fn, has_aux=True)(
         train_state.params,
-        args.net.get_logits_and_value,
-        ImpalaLossConfig(gamma=0.97, vf_coef=1.0, vtrace_lambda=0.97),
+        partial(policy.apply, method=policy.get_logits_and_value),
+        ImpalaLossConfig(
+            gamma=0.97,
+            vf_coef=0.25,
+            vtrace_lambda=0.97,
+            normalize_advantage=False,
+            logit_l2_coef=1.5625e-6,
+            weight_l2_coef=1.5625e-8,
+        ),
         minibatch,
     )
     metrics_dict["loss"] = loss
     train_state = train_state.apply_gradients(grads=grads)
+    flat_grad = tree_flatten_and_concat(grads)
+    metrics_dict["grad_rms/avg"] = jnp.sqrt(jnp.mean(jnp.square(flat_grad)))
+    metrics_dict["grad_rms/total"] = metrics_dict["grad_rms/avg"] * np.sqrt(np.prod(flat_grad.shape))
     return train_state, metrics_dict
 
 
-BATCH_SIZE = 32
 train_loader = torch.utils.data.DataLoader(
     train_data, batch_size=BATCH_SIZE, shuffle=False, collate_fn=rollout_collate_fn, num_workers=0
 )
@@ -350,7 +375,18 @@ def evaluate(train_state, num_evaluate=5):
     it = iter(test_loader)
     for _ in range(num_evaluate):
         rollout = next(it)
-        _, metrics = update_minibatch(train_state, rollout)
+        _, metrics = update_minibatch(
+            train_state,
+            Rollout(
+                rollout.obs_t,
+                zero_carry,
+                rollout.a_t,
+                rollout.logits_t,
+                rollout.r_t,
+                rollout.episode_starts_t,
+                rollout.truncated_t,
+            ),
+        )
 
         for k, v in metrics.items():
             out[k].append(v)
@@ -381,13 +417,23 @@ for i, rollout in enumerate(train_loader):
         print(f"{i=}, loss={np.mean(metrics['loss'][-20:])}, fve={np.mean(metrics['fve'][-20:])}")
         # rich.pretty.pprint(evaluate(train_state, num_evaluate=5))
 
-    train_state, metrics_dict = update_minibatch(train_state, rollout)
-
+    train_state, metrics_dict = update_minibatch(
+        train_state,
+        Rollout(
+            rollout.obs_t,
+            zero_carry,
+            rollout.a_t,
+            rollout.logits_t,
+            rollout.r_t,
+            rollout.episode_starts_t,
+            rollout.truncated_t,
+        ),
+    )
 # %%
 
 window = np.ones((50,)) / 50
 
-_, axes = plt.subplots(3, 1, figsize=(8, 12))
+_, axes = plt.subplots(3, 1, figsize=(6, 10))
 
 steps_per_step = BATCH_SIZE * 20
 ax = axes[0]

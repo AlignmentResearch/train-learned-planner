@@ -1,6 +1,6 @@
 import abc
 import dataclasses
-from typing import Any, Generic, Literal, SupportsFloat, TypeVar
+from typing import Any, Literal, SupportsFloat
 
 import flax.linen as nn
 import gymnasium as gym
@@ -37,13 +37,15 @@ class IdentityNorm(NormConfig):
         return x
 
 
-PolicyCarryT = TypeVar("PolicyCarryT")
+PolicyCarryT = Any
 
 
 @dataclasses.dataclass(frozen=True)
-class PolicySpec(abc.ABC, Generic[PolicyCarryT]):
+class PolicySpec(abc.ABC):
     yang_init: bool = False
     norm: NormConfig = IdentityNorm()
+    normalize_input: bool = False
+    head_scale: float = 1.0
 
     @abc.abstractmethod
     def make(self) -> nn.Module:
@@ -101,7 +103,24 @@ class Policy(nn.Module):
         # These are called `_params` for backwards compatibility with the `AgentParams` dataclass.
         self.network_params = self.cfg.make()
         self.actor_params = Actor(self.n_actions, self.cfg.yang_init, self.cfg.norm)
-        self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm)
+        self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
+
+    def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
+        # Convert from NCHW to NHWC
+        assert len(x.shape) == 4, "x must be a NCHW image"
+        assert (
+            x.shape[2] == x.shape[3]
+        ), f"x is not a rectangular NHWC image, but is instead {x.shape=}. This is probably wrong."
+
+        x = jnp.transpose(x, (0, 2, 3, 1))
+
+        if self.cfg.normalize_input:
+            x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
+            x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
+        else:
+            x = x / 255.0
+
+        return x
 
     def get_action(
         self,
@@ -115,6 +134,8 @@ class Policy(nn.Module):
         assert len(obs.shape) == 4
         assert len(episode_starts.shape) == 1
         assert episode_starts.shape[:1] == obs.shape[:1]
+
+        obs = self._maybe_normalize_input_image(obs)
         if tree_is_empty(carry):
             hidden = self.network_params(obs)
         else:
@@ -142,6 +163,7 @@ class Policy(nn.Module):
         assert len(episode_starts.shape) == 2
         assert episode_starts.shape[:2] == obs.shape[:2]
 
+        obs = jax.vmap(self._maybe_normalize_input_image)(obs)
         if tree_is_empty(carry):
             hidden = jax.vmap(self.network_params)(obs)
         else:
@@ -153,12 +175,13 @@ class Policy(nn.Module):
 
     def initialize_carry(self, rng, input_shape):
         if hasattr(self.network_params, "initialize_carry"):
-            return self.network_params.initialize_carry(rng, input_shape)
+            x = jax.eval_shape(self._maybe_normalize_input_image, jax.ShapeDtypeStruct(input_shape, jnp.float32))
+            return self.network_params.initialize_carry(rng, x.shape)
         return ()  # Empty pytree if `network_params` is not recurrent
 
 
 @dataclasses.dataclass(frozen=True)
-class AtariCNNSpec(PolicySpec[tuple[()]]):
+class AtariCNNSpec(PolicySpec):
     channels: tuple[int, ...] = (16, 32, 32)  # the channels of the CNN
     strides: tuple[int, ...] = (2, 2, 2)
     mlp_hiddens: tuple[int, ...] = (256,)  # the hiddens size of the MLP
@@ -259,8 +282,6 @@ class AtariCNN(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
-        x = jnp.transpose(x, (0, 2, 3, 1))
         x = self.cfg.norm(x)
         for layer_i, (channels, strides) in enumerate(zip(self.cfg.channels, self.cfg.strides)):
             x = ConvSequence(
@@ -283,6 +304,7 @@ class AtariCNN(nn.Module):
 class Critic(nn.Module):
     yang_init: bool
     norm: NormConfig
+    kernel_scale: float
 
     @nn.compact
     def __call__(self, x):
@@ -292,7 +314,7 @@ class Critic(nn.Module):
             kernel_init = nn.initializers.orthogonal(1.0)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x) * self.kernel_scale
         bias = jnp.squeeze(self.variables["params"]["Output"]["bias"])
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
@@ -318,7 +340,7 @@ class Actor(nn.Module):
 
 
 @dataclasses.dataclass(frozen=True)
-class SokobanResNetConfig(PolicySpec[tuple[()]]):
+class SokobanResNetConfig(PolicySpec):
     channels: tuple[int, ...] = (64, 64, 64) * 3
     kernel_sizes: tuple[int, ...] = (4, 4, 4) * 3
 
@@ -335,11 +357,6 @@ class SokobanResNet(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # Normalize x
-        x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
-        x = jnp.transpose(x, (0, 2, 3, 1))
-        x = self.cfg.norm(x)
-
         if self.cfg.yang_init:
             kernel_init = bias_init = yang_initializer("input", "relu")
         else:
@@ -463,13 +480,12 @@ def label_and_learning_rate_for_params(
 
 
 @dataclasses.dataclass(frozen=True)
-class GuezResNetConfig(PolicySpec[tuple[()]]):
+class GuezResNetConfig(PolicySpec):
     channels: tuple[int, ...] = (32, 32, 64, 64, 64, 64, 64, 64, 64)
     strides: tuple[int, ...] = (1,) * 9
     kernel_sizes: tuple[int, ...] = (4,) * 9
 
     mlp_hiddens: tuple[int, ...] = (256,)
-    normalize_input: bool = False
 
     def make(self) -> nn.Module:
         return GuezResNet(self)
@@ -534,13 +550,6 @@ class GuezResNet(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        if self.cfg.normalize_input:
-            x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
-            x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
-        else:
-            x = x / 255.0
-
-        x = jnp.transpose(x, (0, 2, 3, 1))
         x = self.cfg.norm(x)
         for layer_i, (channels, strides, ksize) in enumerate(zip(self.cfg.channels, self.cfg.strides, self.cfg.kernel_sizes)):
             x = GuezConvSequence(

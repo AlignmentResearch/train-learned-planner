@@ -13,12 +13,20 @@ clis = []
 n_envs = 256
 minibatch_size = 32
 assert n_envs % minibatch_size == 0
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
-    for base_fn in [sokoban_drc_3_3]:
+for fence_pad in [True]:
+    for env_seed, learn_seed in [(1007432561, 778268931), (random_seed(), random_seed()), (random_seed(), random_seed())]:
 
         def update_fn(config: Args) -> Args:
             config.local_num_envs = n_envs
             config.num_steps = 20
+            config.net = dataclasses.replace(
+                config.net,
+                pool_and_inject=True,
+                pool_and_inject_horizontal=True,
+                fence_pad=fence_pad,
+                skip_final=True,
+                recurrent=dataclasses.replace(config.net.recurrent, initialization="lecun"),
+            )
 
             world_size = 1
             len_actor_device_ids = 1
@@ -26,7 +34,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             global_step_multiplier = (
                 config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
             )
-            config.total_timesteps = 80_117_760
+            config.total_timesteps = 80_117_760 * 5
             num_updates = config.total_timesteps // global_step_multiplier
             assert (
                 num_updates * global_step_multiplier == config.total_timesteps
@@ -49,7 +57,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             config.seed = learn_seed
             config.sync_frequency = int(1e20)
 
-            logit_l2_coef = 1.5625e-6  # doesn't seem to matter much from now. May improve stability a tiny bit.
+            logit_l2_coef = 1.5625e-5
             config.loss = dataclasses.replace(
                 config.loss,
                 vtrace_lambda=0.97,
@@ -67,17 +75,17 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
             config.adam_b1 = 0.9
             config.rmsprop_decay = 0.99
             config.learning_rate = 4e-4
-            config.max_grad_norm = 2.5e-4
+            config.max_grad_norm = 1.5e-2
             config.rmsprop_eps = 1.5625e-07
             config.optimizer_yang = False
 
             return config
 
-        cli, _ = update_fns_to_cli(base_fn, update_fn)
-        # Check that parsing doesn't error
-        _ = parse_cli(cli, Args)
-
+        cli, _ = update_fns_to_cli(sokoban_drc_3_3, update_fn)
         print(shlex.join(cli))
+        # Check that parsing doesn't error
+        out = parse_cli(cli, Args)
+
         clis.append(cli)
 
 runs: list[FlamingoRun] = []
