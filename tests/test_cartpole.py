@@ -152,7 +152,7 @@ class MountainCarConfig(EnvConfig):
         return partial(gym.vector.SyncVectorEnv, env_fns=[partial(tl_wrapper, MountainCarNormalized)] * self.num_envs)
 
 
-# %%
+# %% Train the cartpole
 
 
 def train_cartpole_no_vel(policy="resnet", env="cartpole", seed=None):
@@ -264,7 +264,7 @@ if __name__ == "__main__":
     writer = train_cartpole_no_vel("lstm", "cartpole_no_vel")
     # writer = train_cartpole_no_vel("resnet", "cartpole")
 
-# %%
+# %% Plot learning curves
 
 
 def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers=False):
@@ -273,8 +273,6 @@ def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers
     assert (y.shape[0],) == x.shape
 
     perc = np.asarray(percentiles)
-    # perc = np.unique(np.concatenate([1 - perc, perc]))
-    # np.sort(perc)
 
     to_plot = np.percentile(y, perc, axis=1)
     for i in range(to_plot.shape[0]):
@@ -317,18 +315,6 @@ if __name__ == "__main__":
 
     ax.set_ylabel("Value loss")
 
-    # This axis depends on `perc_plot` which depends on non-scalar metrics being collected, which is only true
-    # in this branch https://github.com/AlignmentResearch/lp-cleanba/tree/adria/cartpole-test-convlstm
-    #
-    # ax = axes[3]
-    # perc_plot(
-    #     ax,
-    #     writer.metrics.index[:-1],
-    #     [(np.ravel(writer.states[i, "vtrace_errors"])) for i in writer.metrics.index[:-1]],
-    #     percentiles=[0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0],
-    # )
-    # ax.set_ylabel("VTrace errors")
-
     ax = axes[4]
     writer.metrics["losses/entropy"].plot(ax=ax, color="C0")
     ax.set_ylabel("entropy loss")
@@ -341,28 +327,8 @@ if __name__ == "__main__":
     writer.metrics["adv_multiplier"].plot(ax=ax, color="C1")
     ax.set_ylabel("Advantage multiplier avg")
 
-    # ax = axes[5]
-    # perc_plot(
-    #     ax,
-    #     writer.metrics.index[:-1],
-    #     [np.ravel(writer.states[i, "pg_loss_disagg"]) for i in writer.metrics.index[:-1]],
-    #     percentiles=[0.0, 0.05, 0.25, 0.5, 0.75, 0.95, 1.0],
-    # )
-    # ax.set_ylabel("PG loss")
-
-    # # Plot grad_rms/total
-    # ax = axes[-1]
-    # writer.metrics["grad_rms/total"].plot(ax=ax)
-    # ax.set_xlabel("Global Step")
-    # ax.set_ylabel("RMS")
-
     # Adjust spacing between subplots
     plt.tight_layout()
-
-    # LOW = 0
-    # HIGH = 1e6
-    # for ax in axes:
-    #     ax.set_xlim(LOW, HIGH)
 
     # Display the plot
     plt.show()
