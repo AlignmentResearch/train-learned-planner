@@ -120,4 +120,4 @@ typecheck:
 
 PYTEST_ARGS ?=
 mactest:
-	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg4-shape4]'
+	pytest ${PYTEST_ARGS} -m 'not envpool'

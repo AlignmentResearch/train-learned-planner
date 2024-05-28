@@ -61,7 +61,7 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
             ),
             (80, 80),
         ),
-        (
+        pytest.param(
             EnvpoolBoxobanConfig(
                 MAX_EPISODE_STEPS,
                 NUM_ENVS,
@@ -70,6 +70,7 @@ MAX_EPISODE_STEPS, NUM_ENVS, SEED = 20, 5, 1234
                 cache_path=Path(__file__).parent,
             ),
             (10, 10),
+            marks=pytest.mark.envpool,
         ),
     ],
 )

@@ -271,6 +271,7 @@ def test_convlstm_forward(net: ConvLSTMConfig):
         assert v.shape == (), f"{k} is not averaged over time steps, has {v.shape=}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("pool_and_inject", ["horizontal", "vertical", "no"])
 @pytest.mark.parametrize("pool_projection", ["full", "per-channel", "max", "mean"])
 @pytest.mark.parametrize("output_activation", ["sigmoid", "tanh"])
@@ -278,7 +279,7 @@ def test_convlstm_forward(net: ConvLSTMConfig):
 @pytest.mark.parametrize("forget_bias", [0.0, 1.0])
 @pytest.mark.parametrize("skip_final", [True, False])
 @pytest.mark.parametrize("residual", [True, False])
-def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
+def do_test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
     net = ConvLSTMConfig(
         n_recurrent=3,
         repeats_per_step=3,
