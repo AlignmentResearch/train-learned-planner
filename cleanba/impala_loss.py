@@ -37,7 +37,7 @@ class ImpalaLossConfig:
 
     max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
     vf_loss_type: Literal["square", "huber"] = "square"
-    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] = "one"
+    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] | str = "one"
 
     def vf_loss_fn(self, x: jax.Array) -> jax.Array:
         if self.vf_loss_type == "square":
