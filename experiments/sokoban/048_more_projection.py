@@ -87,7 +87,7 @@ for drc_n_n in [3]:
                                 advantage_multiplier=advantage_multiplier,
                             )
                             config.base_fan_in = 1
-                            config.anneal_lr = True
+                            config.anneal_lr = False  # Keep the high learning rate all the way
 
                             config.optimizer = "adam"
                             config.adam_b1 = 0.9
@@ -95,7 +95,6 @@ for drc_n_n in [3]:
                             config.learning_rate = learning_rate
                             config.max_grad_norm = 1.5e-4
                             config.rmsprop_eps = 1.5625e-10
-                            config.anneal_lr = False  # Keep the high learning rate all the way
                             config.optimizer_yang = False
 
                             config.eval_envs["valid_medium"].steps_to_think = [0, 2, 4, 8, 12, 16, 24, 32]
