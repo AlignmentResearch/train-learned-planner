@@ -54,6 +54,10 @@ class ImpalaLossConfig:
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.mean(jnp.abs(vtrace_errors)), a_max=1.0))
         elif self.advantage_multiplier == "max":
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.max(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier.startswith("p"):
+            n = int(self.advantage_multiplier[1:])
+            pXX_err = jnp.percentile(jnp.abs(vtrace_errors), n)
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / pXX_err, a_max=1.0))
         elif self.advantage_multiplier == "elementwise":
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_errors), a_max=1.0))
         else:
