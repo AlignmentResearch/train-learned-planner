@@ -37,6 +37,7 @@ spec:
       containers:
       - name: devbox-container
         image: "ghcr.io/alignmentresearch/lp-cleanba:{CONTAINER_TAG}"
+        imagePullPolicy: Always
         command:
           - bash
           - -c

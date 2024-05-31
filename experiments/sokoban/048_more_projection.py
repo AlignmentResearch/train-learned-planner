@@ -95,6 +95,7 @@ for drc_n_n in [3]:
                             config.learning_rate = learning_rate
                             config.max_grad_norm = 1.5e-4
                             config.rmsprop_eps = 1.5625e-10
+                            config.anneal_lr = False  # Keep the high learning rate all the way
                             config.optimizer_yang = False
 
                             config.eval_envs["valid_medium"].steps_to_think = [0, 2, 4, 8, 12, 16, 24, 32]
@@ -129,7 +130,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "arch-variations")
+GROUP: str = group_from_fname(__file__, "always-pull")
 
 if __name__ == "__main__":
     launch_jobs(
