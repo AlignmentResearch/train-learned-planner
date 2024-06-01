@@ -37,7 +37,7 @@ class ConvConfig:
 class ConvLSTMCellConfig:
     conv: ConvConfig
     pool_and_inject: Literal["horizontal", "vertical", "no"] = "horizontal"
-    pool_projection: Literal["full", "per-channel", "max", "mean"] = "full"
+    pool_projection: Literal["full", "per-channel", "max", "mean", "overall"] = "full"
 
     output_activation: Literal["sigmoid", "tanh"] = "sigmoid"
     forget_bias: float = 0.0
@@ -271,6 +271,15 @@ class ConvLSTMCell(nn.RNNCellBase):
                 jnp.float32,
             )
             pooled_h = project[0] * h_max + project[1] * h_mean
+
+        elif self.cfg.pool_projection == "overall":
+            project = self.param(
+                "project",
+                nn.initializers.variance_scaling(1.0, "fan_in", "truncated_normal"),
+                (2, 1),
+                jnp.float32,
+            )
+            pooled_h = project[0] * h_max + project[1] * h_mean
         else:
             raise ValueError(f"{self.cfg.pool_projection=}")
 
@@ -327,6 +336,8 @@ class ConvLSTMCell(nn.RNNCellBase):
         if self.cfg.output_activation == "sigmoid":
             o = nn.sigmoid(o)
         elif self.cfg.output_activation == "tanh":
+            # Non-standard, but used in http://proceedings.mlr.press/v37/jozefowicz15.pdf which also suggests
+            # forget_gate=1
             o = jnp.tanh(o)
         else:
             raise ValueError(f"{self.cfg.output_activation=}")
