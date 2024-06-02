@@ -85,7 +85,7 @@ for ent in [1e-3, 1e-2]:
                                 logit_l2_coef=logit_l2_coef,
                                 weight_l2_coef=logit_l2_coef / 100,
                                 vf_loss_type="square",
-                                advantage_multiplier="p95",
+                                advantage_multiplier="one",
                             )
                             config.base_fan_in = 1
                             config.anneal_lr = False  # Keep the high learning rate all the way
@@ -130,7 +130,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__, "always-pull")
+GROUP: str = group_from_fname(__file__, "one")
 
 if __name__ == "__main__":
     launch_jobs(
