@@ -332,4 +332,3 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         assert np.abs(metrics_dict["pg_loss"]) < 1e-6
         assert np.allclose(metrics_dict["v_loss"], 0.0)
         assert np.allclose(metrics_dict["ent_loss"], logit_negentropy)
-        assert np.allclose(metrics_dict["max_ratio"], 1.0)

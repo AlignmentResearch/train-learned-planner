@@ -28,6 +28,7 @@ from rich.pretty import pprint
 from typing_extensions import Self
 
 from cleanba.config import Args
+from cleanba.convlstm import ConvLSTMConfig
 from cleanba.environments import random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
@@ -722,12 +723,13 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
         train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
     train_state = unreplicate(train_state)
-    for i in range(args.net.n_recurrent):
-        train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
-            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
-            axis=2,
-            keepdims=True,
-        )
+    if isinstance(args.net, ConvLSTMConfig):
+        for i in range(args.net.n_recurrent):
+            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
+                train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
+                axis=2,
+                keepdims=True,
+            )
     return args, train_state
 
 

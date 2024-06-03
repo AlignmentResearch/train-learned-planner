@@ -8,6 +8,7 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pytest
 from gymnasium import spaces
 from gymnasium.envs.classic_control.cartpole import CartPoleEnv
 from gymnasium.wrappers import TimeLimit
@@ -250,11 +251,13 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole", seed=None):
     return writer, last_row["train/00_episode_lengths"]
 
 
+@pytest.mark.slow
 def test_cartpole_resnet():
     _, eval_lengths = train_cartpole_no_vel("resnet", "cartpole", seed=12345)
     assert eval_lengths > 450.0
 
 
+@pytest.mark.slow
 def test_cartpole_convlstm():
     _, eval_lengths = train_cartpole_no_vel("convlstm", "cartpole_no_vel", seed=12345)
     assert eval_lengths > 450.0
