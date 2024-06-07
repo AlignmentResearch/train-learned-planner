@@ -1,7 +1,7 @@
 import dataclasses
 import queue
 from functools import partial
-from typing import Any, Callable, SupportsFloat
+from typing import Any
 
 import distrax
 import flax.linen as nn
@@ -11,10 +11,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 import rlax
-from numpy.typing import NDArray
 
 import cleanba.cleanba_impala as cleanba_impala
-from cleanba.environments import EnvConfig
+from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
 from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
 from cleanba.network import Policy, PolicySpec
 
@@ -97,100 +96,6 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
     assert np.allclose(total_loss, 0.0)
 
 
-class TrivialEnv(gym.Env[NDArray, np.int64]):
-    def __init__(self, cfg: "TrivialEnvConfig"):
-        """
-        truncation_probability: the probability that an entire *episode* is truncated prematurely
-        """
-        self.cfg = cfg
-        self.reward_range = (0.1, 2.0)
-        self.action_space = gym.spaces.Discrete(2)  # Two actions so we can test importance ratios
-        self.observation_space = gym.spaces.Box(low=0.0, high=float("inf"), shape=())
-
-        self.per_step_non_truncation_probability = 2 ** np.maximum(
-            -100000.0, (np.log2(1 - cfg.truncation_probability) / self.cfg.max_episode_steps)
-        )
-
-    def step(self, action: np.int64) -> tuple[NDArray, SupportsFloat, bool, bool, dict[str, Any]]:
-        # Pretend that we took the optimal action (there is only one action)
-        reward = self._rewards[self._t]
-
-        self._t += 1
-        terminated = truncated = False
-        if self._t > 1:
-            if self.np_random.uniform(0.0, 1.0) < (1 - self.per_step_non_truncation_probability):
-                terminated = False
-                truncated = True
-
-            # This goes after the previous if so takes precedence.
-            if self._t == len(self._rewards):
-                terminated = True
-                truncated = False
-        return (self._returns[self._t], reward, terminated, truncated, {})
-
-    def reset(
-        self,
-        *,
-        seed: int | None = None,
-        options: dict[str, Any] | None = None,
-    ) -> tuple[NDArray, dict[str, Any]]:
-        super().reset(seed=seed or self.cfg.seed, options=options)
-        num_timesteps = int(self.np_random.integers(2, self.cfg.max_episode_steps, size=()))
-        self._t = 0
-        self._rewards = self.np_random.uniform(self.reward_range[0], self.reward_range[1], size=num_timesteps)
-
-        # Bellman equation to compute returns
-        returns = np.zeros(num_timesteps + 1)
-        for i in range(num_timesteps - 1, -1, -1):
-            returns[i] = self._rewards[i] + self.cfg.gamma * returns[i + 1]
-        self._returns = returns
-
-        return self._returns[self._t], {}
-
-
-@dataclasses.dataclass
-class TrivialEnvConfig(EnvConfig):
-    gamma: float = 0.9
-    truncation_probability: float = 0.5
-
-    @property
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        seeds = np.random.default_rng(self.seed).integers(2**30 - 1, size=(self.num_envs,))
-        print("The seeds are", seeds)
-        env_fns = [partial(TrivialEnv, cfg=dataclasses.replace(self, seed=int(s))) for s in seeds]
-        return partial(gym.vector.SyncVectorEnv, env_fns)
-
-
-def test_trivial_env_correct_returns(num_envs: int = 7, gamma: float = 0.9):
-    np_rng = np.random.default_rng(1234)
-    envs = TrivialEnvConfig(max_episode_steps=10, num_envs=num_envs, gamma=gamma, truncation_probability=0.0, seed=1234).make()
-
-    returns = []
-    rewards = []
-    terminateds = []
-    obs, _ = envs.reset()
-    returns.append(obs)
-
-    num_timesteps = 30
-    for t in range(num_timesteps):
-        obs, reward, terminated, truncated, _ = envs.step(np.zeros(num_envs, dtype=np.int64))
-        returns.append(obs)
-        rewards.append(reward)
-        terminateds.append(terminated)
-        assert not np.any(truncated)
-
-    rho_tm1 = np_rng.lognormal(0.0, 1.0, size=num_timesteps)
-
-    v_t = np.array(returns[1:])
-    v_tm1 = np.array(returns[:-1])
-    discount_t = (~np.array(terminateds)) * gamma
-    r_t = np.array(rewards)
-    rho_tm1 = np_rng.lognormal(0.0, 1.0, size=(num_timesteps, num_envs))
-
-    out = jax.vmap(rlax.vtrace, 1, 1)(v_tm1, v_t, r_t, discount_t, rho_tm1)
-    assert np.allclose(out, np.zeros_like(out), atol=1e-6)
-
-
 class TrivialEnvPolicy(Policy):
     def get_action(
         self,
@@ -204,7 +109,7 @@ class TrivialEnvPolicy(Policy):
         actions = jnp.zeros(obs.shape[0], dtype=jnp.int32)
         logits = jnp.stack(
             [
-                obs,  # Use obs itself to vary logits in a repeatable way
+                MockSokobanEnv.compute_return(obs),  # Use obs itself to vary logits in a repeatable way
                 jnp.zeros((obs.shape[0],), dtype=jnp.float32),
             ],
             axis=1,
@@ -224,7 +129,7 @@ class TrivialEnvPolicy(Policy):
             jax.random.PRNGKey(1234),
         )
 
-        value = obs
+        value = MockSokobanEnv.compute_return(obs)
         return carry, logits, value, {}
 
 
@@ -238,13 +143,13 @@ class ZeroActionNetworkSpec(PolicySpec):
         return policy, (), {}
 
 
-@pytest.mark.parametrize("truncation_probability", [0.0, 0.5])
-def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma: float = 0.9, num_timesteps: int = 30):
+@pytest.mark.parametrize("min_episode_steps", (10, 7))
+def test_loss_of_rollout(min_episode_steps: int, num_envs: int = 5, gamma: float = 1.0, num_timesteps: int = 30):
     np.random.seed(1234)
 
     args = cleanba_impala.Args(
-        train_env=TrivialEnvConfig(
-            max_episode_steps=10, num_envs=0, gamma=gamma, truncation_probability=truncation_probability, seed=4
+        train_env=MockSokobanEnvConfig(
+            max_episode_steps=10, num_envs=0, gamma=gamma, min_episode_steps=min_episode_steps, seed=4
         ),
         eval_envs={},
         net=ZeroActionNetworkSpec(),
@@ -299,15 +204,16 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         assert isinstance(params_queue_get_time, float)
         assert device_thread_id == 1
 
-        assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs)
+        assert sharded_transition.obs_t.shape == (1, num_timesteps + 1, num_envs, 3, 10, 10)
         assert sharded_transition.r_t.shape == (1, num_timesteps, num_envs)
         assert sharded_transition.a_t.shape == (1, num_timesteps, num_envs)
         assert sharded_transition.logits_t.shape == (1, num_timesteps, num_envs, 2)
 
         transition = cleanba_impala.unreplicate(sharded_transition)
 
-        v_t = transition.obs_t[1:]
-        v_tm1 = transition.obs_t[:-1]
+        values = MockSokobanEnv.compute_return(transition.obs_t)
+        v_t = values[1:]
+        v_tm1 = values[:-1]
 
         # We have to use 1: with these because they represent the reward/discount of the *previous* step.
         r_t = transition.r_t
@@ -321,6 +227,17 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         assert np.allclose(out, np.zeros_like(out), atol=1e-5), f"Return was incorrect at {iteration=}"
 
         # Now check that the impala loss works here, i.e. an integration test
+
+        ## Check that the reward of truncated transitions affects nothing
+        transition = Rollout(
+            obs_t=transition.obs_t,
+            carry_t=transition.carry_t,
+            a_t=transition.a_t,
+            logits_t=transition.logits_t,
+            r_t=transition.r_t.at[transition.truncated_t].set(9999.9),
+            episode_starts_t=transition.episode_starts_t,
+            truncated_t=transition.truncated_t,
+        )
         (total_loss, metrics_dict) = impala_loss(
             params=params,
             get_logits_and_value=get_logits_and_value_fn,
@@ -329,6 +246,6 @@ def test_loss_of_rollout(truncation_probability: float, num_envs: int = 5, gamma
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy() * (~transition.truncated_t))
 
-        assert np.abs(metrics_dict["pg_loss"]) < 1e-6
+        assert np.allclose(metrics_dict["pg_loss"], 0.0)
         assert np.allclose(metrics_dict["v_loss"], 0.0)
         assert np.allclose(metrics_dict["ent_loss"], logit_negentropy)
