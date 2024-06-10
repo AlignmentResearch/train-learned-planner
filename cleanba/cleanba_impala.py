@@ -478,7 +478,7 @@ def rollout(
 
             writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
 
-        if update % args.eval_frequency == 0:
+        if update in args.eval_at_steps:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
@@ -687,7 +687,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
                 writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
-            if args.save_model and learner_policy_version % args.eval_frequency == 0:
+            if args.save_model and learner_policy_version in args.eval_at_steps == 0:
                 with writer.save_dir(global_step) as dir:
                     save_train_state(dir, args, agent_state)
 

@@ -23,7 +23,12 @@ class Args:
     eval_envs: dict[str, EvalConfig] = dataclasses.field(  # How to evaluate the algorithm? Including envs and seeds
         default_factory=lambda: dict(eval=EvalConfig(AtariEnv(env_id="Breakout-v5", num_envs=128)))
     )
-    eval_frequency: int = 1000  # How often to evaluate and maybe save the model
+    eval_at_steps: frozenset[int] = frozenset(
+        [195 * i for i in range(1, 10)]
+        + [1950 * i for i in range(10)]
+        + [19500 * i for i in range(10)]
+        + [195000 * i for i in range(10)]
+    )
 
     seed: int = dataclasses.field(default_factory=random_seed)  # A seed to make the experiment deterministic
 
@@ -125,7 +130,6 @@ def sokoban_resnet() -> Args:
                 n_episode_multiple=2,
             ),
         ),
-        eval_frequency=400_000,
         seed=1234,
         save_model=False,
         log_frequency=10,
@@ -195,7 +199,6 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
         total_timesteps=80117760,
         base_run_dir=Path("/training/cleanba"),
         learning_rate=0.0004,
-        eval_frequency=978,
         optimizer="adam",
         base_fan_in=1,
         anneal_lr=True,

@@ -15,9 +15,9 @@ drc_n_n = 3
 num_envs = 256
 gamma = 0.97
 
-for min_episode_steps in [30, 60, 90, 120, 0]:
-    for vtrace_lambda in [0.25, 0.5, 0.75, 0.97]:
-        for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
+for min_episode_steps in [30]:
+    for vtrace_lambda in [0.5]:
+        for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
 
             def update_fn(config: Args) -> Args:
                 config.train_env = dataclasses.replace(config.train_env, seed=env_seed, min_episode_steps=min_episode_steps)
@@ -48,15 +48,19 @@ for min_episode_steps in [30, 60, 90, 120, 0]:
                     config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
                 )
 
-                config.total_timesteps = 80_000_000
+                config.total_timesteps = 1_000_000_000
                 num_updates = config.total_timesteps // global_step_multiplier
                 assert (
                     num_updates * global_step_multiplier == config.total_timesteps
                 ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
                 # Evaluate (and save) EVAL_TIMES during training
-                EVAL_TIMES = 8
-                config.eval_frequency = num_updates // EVAL_TIMES
+                config.eval_at_steps = set(
+                    [195 * i for i in range(1, 10)]
+                    + [1950 * i for i in range(10)]
+                    + [19500 * i for i in range(10)]
+                    + [195000 * i for i in range(10)]
+                )
 
                 config.save_model = True
                 config.base_run_dir = Path("/training/cleanba")
@@ -85,7 +89,7 @@ for min_episode_steps in [30, 60, 90, 120, 0]:
                     advantage_multiplier="one",
                 )
                 config.base_fan_in = 1
-                config.anneal_lr = False  # Keep the high learning rate all the way
+                config.anneal_lr = True
 
                 config.optimizer = "adam"
                 config.adam_b1 = 0.9
