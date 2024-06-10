@@ -5,9 +5,9 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc_3_3
-from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
+from cleanba.network import GuezResNetConfig, IdentityNorm
 
 clis = []
 drc_n_n = 3
@@ -23,23 +23,7 @@ for min_episode_steps in [30]:
                 config.train_env = dataclasses.replace(config.train_env, seed=env_seed, min_episode_steps=min_episode_steps)
                 config.local_num_envs = num_envs
                 config.num_steps = 20
-                config.net = ConvLSTMConfig(
-                    n_recurrent=drc_n_n,
-                    repeats_per_step=drc_n_n,
-                    skip_final=True,
-                    residual=False,
-                    use_relu=False,
-                    embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
-                    recurrent=ConvLSTMCellConfig(
-                        ConvConfig(32, (3, 3), (1, 1), "SAME", True),
-                        pool_and_inject="horizontal",
-                        pool_projection="per-channel",
-                        output_activation="tanh",
-                        fence_pad="valid",
-                        forget_bias=0.0,
-                    ),
-                    head_scale=1.0,
-                )
+                config.net = GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False)
 
                 world_size = 1
                 len_actor_device_ids = 1
