@@ -38,7 +38,7 @@ for t in range(40):
             a_t=a_t,
             logits_t=logits_t,
             r_t=r_t,
-            done_t=done_t,
+            episode_starts_t=done_t,
             truncated_t=trunc_t,
         )
     )
@@ -50,13 +50,13 @@ out = Rollout(
     a_t=jnp.stack([r.a_t for r in storage]),
     logits_t=jnp.stack([r.logits_t for r in storage]),
     r_t=jnp.stack([r.r_t for r in storage]),
-    done_t=jnp.stack([r.done_t for r in storage]),
+    episode_starts_t=jnp.stack([r.episode_starts_t for r in storage]),
     truncated_t=jnp.stack([r.truncated_t for r in storage]),
 )
 
 # %%
 
-discount_t = (~out.done_t) * 0.97
+discount_t = (~out.episode_starts_t) * 0.97
 errors = jax.vmap(rlax.vtrace, in_axes=1, out_axes=1)(
     np.zeros((40, 64)) - 2.33333333, np.zeros((40, 64)) - 2.33333333, out.r_t, discount_t, np.ones((40, 64))
 )

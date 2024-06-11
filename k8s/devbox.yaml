@@ -29,7 +29,17 @@ spec:
           - bash
           - -c
           - |
-            sudo mkdir -p "/training/.sokoban_cache"; sudo chown -R dev:dev "/training"; git clone https://github.com/google-deepmind/boxoban-levels "/training/.sokoban_cache/boxoban-levels-master"; git pull; git checkout {COMMIT_FULL}; git submodule update --recursive; sleep 2d
+            sudo mkdir -p "/opt/sokoban_cache"
+            sudo chown -R dev:dev "/opt/"
+            sudo mkdir -p "/training/cleanba"
+            sudo chown dev:dev "/training/cleanba"
+            git clone https://github.com/google-deepmind/boxoban-levels "/opt/sokoban_cache/boxoban-levels-master"
+            git pull
+            git checkout {COMMIT_HASH}
+            git submodule update --recursive
+            pip install matplotlib jupyter
+            pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            sleep 1d
         resources:
           requests:
             cpu: {CPU}

@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import json
 import math
 import os
 import queue
@@ -238,29 +239,49 @@ def time_and_append(stats: list[float]):
 
 
 @partial(jax.jit, static_argnames=["len_learner_devices"])
-def _concat_and_shard_rollout_internal(storage: List[Rollout], last_obs: jax.Array, len_learner_devices: int) -> Rollout:
-    # Concatenate the Rollout steps over time
+def _concat_and_shard_rollout_internal(
+    storage: List[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, len_learner_devices: int
+) -> Rollout:
+    """
+    Stack the Rollout steps over time, splitting them for every learner device.
+
+    If element of `storage` has shape (batch, *others)
+
+    Then each returned element has shape (len_learner_devices, time, batch//len_learner_devices, *others)
+
+    where time=len(storage) for most things except:
+    - For `obs_t` and `episode_starts_t`, time=len(storage)+1
+    - for `carry_t` the return shape is (len_learner_devices, batch, *others)
+    """
+
+    def _split_over_batches(x):
+        """Split for every learner device over `num_envs`"""
+        batch, *others = x.shape
+        assert batch % len_learner_devices == 0, f"Number of envs {batch=} not divisible by {len_learner_devices=}"
+
+        return jnp.reshape(x, (len_learner_devices, batch // len_learner_devices, *others))
+
     out = Rollout(
         # Add the `last_obs` on the end of this rollout
-        obs_t=jnp.stack([*(r.obs_t for r in storage), last_obs]),
-        a_t=jnp.stack([r.a_t for r in storage]),
-        logits_t=jnp.stack([r.logits_t for r in storage]),
-        r_t=jnp.stack([r.r_t for r in storage]),
-        done_t=jnp.stack([r.done_t for r in storage]),
-        truncated_t=jnp.stack([r.truncated_t for r in storage]),
+        obs_t=jnp.stack([*(_split_over_batches(r.obs_t) for r in storage), _split_over_batches(last_obs)], axis=1),
+        # Only store the first recurrent state
+        carry_t=jax.tree.map(lambda x: jnp.expand_dims(_split_over_batches(x), axis=1), storage[0].carry_t),
+        a_t=jnp.stack([_split_over_batches(r.a_t) for r in storage], axis=1),
+        logits_t=jnp.stack([_split_over_batches(r.logits_t) for r in storage], axis=1),
+        r_t=jnp.stack([_split_over_batches(r.r_t) for r in storage], axis=1),
+        episode_starts_t=jnp.stack(
+            [*(_split_over_batches(r.episode_starts_t) for r in storage), _split_over_batches(last_episode_starts)], axis=1
+        ),
+        truncated_t=jnp.stack([_split_over_batches(r.truncated_t) for r in storage], axis=1),
     )
-    # Split for every learner device over `num_envs` and return
-    return jax.tree.map(lambda x: jnp.split(x, len_learner_devices, axis=1), out)
+    return out
 
 
-def concat_and_shard_rollout(storage: list[Rollout], last_obs: jax.Array, learner_devices: list[jax.Device]) -> Rollout:
-    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, len(learner_devices))
-    # partitioned_storage is a Rollout with lists inside
-    sharded_storage = jax.tree.map(
-        partial(jax.device_put_sharded, devices=learner_devices),
-        partitioned_storage,
-        is_leaf=lambda x: isinstance(x, list),
-    )
+def concat_and_shard_rollout(
+    storage: list[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, learner_devices: list[jax.Device]
+) -> Rollout:
+    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, last_episode_starts, len(learner_devices))
+    sharded_storage = jax.tree.map(lambda x: jax.device_put_sharded(list(x), devices=learner_devices), partitioned_storage)
     return sharded_storage
 
 
@@ -288,9 +309,9 @@ def rollout(
     this_thread_eval_cfg = [
         eval_envs[i] for i in range(actor_id, len(args.eval_envs), runtime_info.world_size * args.num_actor_threads)
     ]
-    this_thread_eval_keys = list(
-        jax.random.split(jax.random.PRNGKey(args.train_env.seed + actor_id), len(this_thread_eval_cfg))
-    )
+    key = jax.random.PRNGKey(args.train_env.seed + actor_id)
+    key, eval_keys = jax.random.split(key)
+    this_thread_eval_keys = list(jax.random.split(eval_keys, len(this_thread_eval_cfg)))
 
     len_actor_device_ids = len(args.actor_device_ids)
     global_step = 0
@@ -309,6 +330,12 @@ def rollout(
 
     # Store the first observation
     obs_t, _ = envs.reset()
+
+    # Initialize carry_t and episode_starts_t
+    key, carry_key = jax.random.split(key)
+    policy, carry_t, _ = args.net.init_params(envs, carry_key)
+    episode_starts_t = np.ones(envs.num_envs, dtype=np.bool_)
+    get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
     for update in range(1, runtime_info.num_updates + 2):
@@ -345,31 +372,33 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time):
-                        a_t, logits_t, key = args.net.get_action(params, obs_t, key)
+                        carry_tplus1, a_t, logits_t, key = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
 
                     with time_and_append(log_stats.device2host_time):
-                        # TODO: remove 1+ which is here to avoid noop
-                        cpu_action = np.array(a_t) + 1  # Add 1 to account for NOOP being action 0
+                        cpu_action = np.array(a_t)
 
                     with time_and_append(log_stats.env_send_time):
                         envs.step_async(cpu_action)
 
                     with time_and_append(log_stats.env_recv_time):
-                        obs_t_plus_1, r_t, term_t, trunc_t, info_t = envs.step_wait()
+                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
                         done_t = term_t | trunc_t
 
                     with time_and_append(log_stats.create_rollout_time):
                         storage.append(
                             Rollout(
                                 obs_t=obs_t,
+                                carry_t=carry_t,
                                 a_t=a_t,
                                 logits_t=logits_t,
                                 r_t=r_t,
-                                done_t=done_t,
+                                episode_starts_t=episode_starts_t,
                                 truncated_t=trunc_t,
                             )
                         )
-                        obs_t = obs_t_plus_1
+                        obs_t = obs_tplus1
+                        carry_t = carry_tplus1
+                        episode_starts_t = done_t
 
                         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
                         # the true return.
@@ -389,7 +418,7 @@ def rollout(
                         returned_episode_success[done_t] = term_t[done_t]
 
             with time_and_append(log_stats.storage_time):
-                sharded_storage = concat_and_shard_rollout(storage, obs_t, learner_devices)
+                sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, learner_devices)
                 storage.clear()
                 payload = (
                     global_step,
@@ -458,13 +487,59 @@ def rollout(
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
-                log_dict = env_config.run(args.net.get_action, params, key=eval_key)
+                log_dict = env_config.run(policy, get_action_fn, params, key=eval_key)
                 for k, v in log_dict.items():
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
-            if args.save_model:
-                print(f"Actor thread {device_thread_id} entering save barrier")
-                writer.maybe_save_barrier()
+
+def linear_schedule(
+    count: chex.Numeric, *, learning_rate: float, minibatches_per_update: int, total_updates: int
+) -> chex.Numeric:
+    # anneal learning rate linearly after one training iteration which contains
+    # (args.num_minibatches) gradient updates
+    frac = 1.0 - (count // minibatches_per_update) / total_updates
+    return learning_rate * frac
+
+
+def make_optimizer(args: Args, params: AgentParams, total_updates: int):
+    if args.optimizer_yang:
+        learning_rates, agent_param_labels = label_and_learning_rate_for_params(params, base_fan_in=args.base_fan_in)
+        transform_chain = [
+            optax.multi_transform(
+                transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
+            ),
+        ]
+    else:
+        transform_chain = []
+
+    _linear_schedule = partial(
+        linear_schedule,
+        learning_rate=args.learning_rate,
+        minibatches_per_update=args.num_minibatches,
+        total_updates=total_updates,
+    )
+
+    transform_chain += [
+        optax.clip_by_global_norm(args.max_grad_norm),
+        (
+            optax.inject_hyperparams(rmsprop_pytorch_style)(
+                learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
+                eps=args.rmsprop_eps,
+                decay=args.rmsprop_decay,
+            )
+            if args.optimizer == "rmsprop"
+            else (
+                optax.inject_hyperparams(optax.adam)(
+                    learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
+                    b1=args.adam_b1,
+                    b2=args.rmsprop_decay,
+                    eps=args.rmsprop_eps,
+                    eps_root=0.0,
+                )
+            )
+        ),
+    ]
+    return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
 
 def train(
@@ -487,58 +562,29 @@ def train(
         np.random.seed(random_seed())
         key = jax.random.PRNGKey(random_seed())
 
-        def linear_schedule(count: chex.Numeric) -> chex.Numeric:
-            # anneal learning rate linearly after one training iteration which contains
-            # (args.num_minibatches) gradient updates
-            frac = 1.0 - (count // (args.num_minibatches)) / runtime_info.num_updates
-            return args.learning_rate * frac
+        key, agent_params_subkey = jax.random.split(key, 2)
 
-        if agent_params is None:
-            key, agent_params_subkey = jax.random.split(key, 2)
-            agent_params = args.net.init_params(envs, agent_params_subkey)
+        policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
 
-        if args.optimizer_yang:
-            learning_rates, agent_param_labels = label_and_learning_rate_for_params(agent_params, base_fan_in=args.base_fan_in)
-            transform_chain = [
-                optax.multi_transform(
-                    transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
-                ),
-            ]
+        if args.load_path is None:
+            agent_state = TrainState.create(
+                apply_fn=None,
+                params=agent_params,
+                tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
+            )
         else:
-            transform_chain = []
-        transform_chain += [
-            optax.clip_by_global_norm(args.max_grad_norm),
-            (
-                optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                    eps=args.rmsprop_eps,
-                    decay=args.rmsprop_decay,
-                )
-                if args.optimizer == "rmsprop"
-                else (
-                    optax.inject_hyperparams(optax.adam)(
-                        learning_rate=linear_schedule if args.anneal_lr else args.learning_rate,
-                        b1=args.adam_b1,
-                        b2=args.rmsprop_decay,
-                        eps=args.rmsprop_eps,
-                        eps_root=0.0,
-                    )
-                )
-            ),
-        ]
-
-        agent_state = TrainState.create(
-            apply_fn=None,
-            params=agent_params,
-            tx=optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps),
-        )
+            old_args, agent_state = load_train_state(args.load_path)
+            print(f"Loaded TrainState from {args.load_path}. Here are the differences from `args` to the loaded args:")
+            farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args))
 
         multi_device_update = jax.pmap(
-            partial(
-                single_device_update,
-                num_batches=args.num_minibatches * args.gradient_accumulation_steps,
-                get_logits_and_value=args.net.get_logits_and_value,
-                impala_cfg=args.loss,
+            jax.jit(
+                partial(
+                    single_device_update,
+                    num_batches=args.num_minibatches * args.gradient_accumulation_steps,
+                    get_logits_and_value=partial(policy.apply, method=policy.get_logits_and_value),
+                    impala_cfg=args.loss,
+                )
             ),
             axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
             devices=runtime_info.global_learner_devices,
@@ -656,24 +702,48 @@ def train(
                 writer.maybe_save_barrier()
                 writer.reset_save_barrier()
 
-                with writer.save_dir(global_step) as dir, open(dir / "model", "wb") as f:
-                    f.write(
-                        flax.serialization.to_bytes(
-                            [
-                                learner_policy_version,
-                                farconf.to_dict(args, Args),
-                                [
-                                    agent_state.params.network_params,
-                                    agent_state.params.actor_params,
-                                    agent_state.params.critic_params,
-                                ],
-                            ]
-                        )
-                    )
+                with writer.save_dir(global_step) as dir:
+                    save_train_state(dir, args, agent_state)
 
             if learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
                 return
+
+
+def save_train_state(dir: Path, args: Args, train_state: TrainState):
+    with open(dir / "cfg.json", "w") as f:
+        json.dump(farconf.to_dict(args, Args), f)
+
+    with open(dir / "model", "wb") as f:
+        f.write(flax.serialization.to_bytes(train_state))
+
+
+def load_train_state(dir: Path) -> tuple[Args, TrainState]:
+    with open(dir / "cfg.json", "r") as f:
+        args_dict = json.load(f)
+    args = farconf.from_dict(args_dict, Args)
+
+    _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+
+    local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
+
+    target_state = TrainState.create(
+        apply_fn=None,
+        params=params,
+        tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size),
+    )
+
+    with open(dir / "model", "rb") as f:
+        train_state = flax.serialization.from_bytes(target_state, f.read())
+    assert isinstance(train_state, TrainState)
+    train_state = unreplicate(train_state)
+    for i in range(args.net.n_recurrent):
+        train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
+            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
+            axis=2,
+            keepdims=True,
+        )
+    return args, train_state
 
 
 if __name__ == "__main__":

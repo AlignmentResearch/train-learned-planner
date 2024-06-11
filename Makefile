@@ -6,7 +6,7 @@ export APPLICATION_NAME
 export APPLICATION_URL
 export DOCKERFILE
 
-COMMIT_FULL ?= $(shell git rev-parse HEAD)
+COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
 
 default: release/main
@@ -35,6 +35,7 @@ requirements.txt.new: pyproject.toml ${DOCKERFILE}
 	pip-compile --verbose -o requirements.txt.new \
 		--extra=dev --extra=launch_jobs pyproject.toml
 
+# To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
 	sed -E "s/^(jax==.*|jaxlib==.*|nvidia-.*|torchvision==.*|torch==.*|triton==.*)$$/# DISABLED \\1/g" requirements.txt.new > requirements.txt
 
@@ -74,7 +75,7 @@ DEVBOX_NAME ?= cleanba-devbox
 .PHONY: devbox devbox/%
 devbox/%:
 	git push
-	python -c "print(open('k8s/devbox.yaml').read().format(NAME='${DEVBOX_NAME}', IMAGE='${APPLICATION_URL}:${RELEASE_PREFIX}-$*', COMMIT_FULL='${COMMIT_FULL}', CPU='${CPU}', MEMORY='${MEMORY}', SHM_SIZE='${SHM_SIZE}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
+	python -c "print(open('k8s/devbox.yaml').read().format(NAME='${DEVBOX_NAME}', IMAGE='${APPLICATION_URL}:${RELEASE_PREFIX}-$*', COMMIT_HASH='${COMMIT_HASH}', CPU='${CPU}', MEMORY='${MEMORY}', SHM_SIZE='${SHM_SIZE}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
 devbox: devbox/main
 
 .PHONY: cuda-devbox cuda-devbox/%
@@ -103,10 +104,16 @@ envpool-docker: envpool-docker/envpool-ci
 .PHONY: lint format typecheck mactest
 
 lint:
-	ruff --fix .
+	ruff check --fix .
+
+lint-check:
+	ruff check .
 
 format:
 	ruff format .
+
+format-check:
+	ruff format --check .
 
 typecheck:
 	pyright .
@@ -114,4 +121,4 @@ typecheck:
 
 PYTEST_ARGS ?=
 mactest:
-	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg2]'
+	pytest ${PYTEST_ARGS} -k 'not test_environment_basics[cfg4-shape4]'

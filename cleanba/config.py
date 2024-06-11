@@ -1,14 +1,15 @@
 import dataclasses
 from dataclasses import field
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
 )
-from cleanba.network import AtariCNNSpec, NetworkSpec, SokobanResNetConfig
+from cleanba.network import AtariCNNSpec, PolicySpec, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -37,7 +38,7 @@ class Args:
 
     loss: ImpalaLossConfig = ImpalaLossConfig()
 
-    net: NetworkSpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
+    net: PolicySpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 
     # Algorithm specific arguments
     total_timesteps: int = 100_000_000  # total timesteps of the experiments
@@ -63,6 +64,8 @@ class Args:
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
     concurrency: bool = True  # whether to run the actor and learner concurrently
+
+    load_path: Optional[Path] = None  # Where to load the initial training state from
 
 
 def sokoban_resnet() -> Args:
@@ -130,3 +133,78 @@ def sokoban_resnet() -> Args:
         net=SokobanResNetConfig(),
         total_timesteps=int(1e9),
     )
+
+
+def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
+    CACHE_PATH = Path("/opt/sokoban_cache")
+    return Args(
+        train_env=EnvpoolBoxobanConfig(
+            max_episode_steps=120,
+            min_episode_steps=120 * 3 // 4,
+            num_envs=1,
+            cache_path=CACHE_PATH,
+            split="train",
+            difficulty="unfiltered",
+        ),
+        eval_envs=dict(
+            test_unfiltered=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="test",
+                    difficulty="unfiltered",
+                ),
+                n_episode_multiple=2,
+            ),
+            valid_medium=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="valid",
+                    difficulty="medium",
+                ),
+                n_episode_multiple=2,
+                steps_to_think=[0, 2, 4, 8],
+            ),
+        ),
+        log_frequency=10,
+        net=ConvLSTMConfig(
+            embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+            recurrent=ConvLSTMCellConfig(
+                ConvConfig(32, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal", fence_pad="same"
+            ),
+            n_recurrent=n_recurrent,
+            mlp_hiddens=(256,),
+            repeats_per_step=num_repeats,
+        ),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.97,
+            weight_l2_coef=1.5625e-07,
+            gamma=0.97,
+            logit_l2_coef=1.5625e-05,
+        ),
+        actor_update_cutoff=100000000000000000000,
+        sync_frequency=100000000000000000000,
+        num_minibatches=8,
+        rmsprop_eps=1.5625e-07,
+        local_num_envs=256,
+        total_timesteps=80117760,
+        base_run_dir=Path("/training/cleanba"),
+        learning_rate=0.0004,
+        eval_frequency=978,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=0.015,
+        num_actor_threads=1,
+    )
+
+
+# fmt: off
+def sokoban_drc_3_3(): return sokoban_drc(3, 3)
+def sokoban_drc_1_1(): return sokoban_drc(1, 1)
+# fmt: on
