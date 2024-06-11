@@ -1,11 +1,12 @@
 import argparse
 import contextlib
 import dataclasses
+import json
 import threading
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-import flax
+import farconf
 import ray
 from ray import train, tune
 from ray.train import Checkpoint
@@ -13,8 +14,7 @@ from ray.tune.schedulers import PopulationBasedTraining
 
 import cleanba.cleanba_impala
 from cleanba import cleanba_impala as impala
-from cleanba.config import Args, sokoban_resnet
-from cleanba.network import AgentParams, GuezResNetConfig, IdentityNorm
+from cleanba.config import Args, sokoban_drc_3_3
 
 
 class RayWriter(cleanba.cleanba_impala.WandbWriter):
@@ -71,15 +71,12 @@ def parse_args():
 cli_args = parse_args()
 
 
-def load(checkpoint_dir: Path) -> dict[str, Any]:
-    with open(checkpoint_dir / "model", "rb") as f:
-        data = f.read()
-
-    deserialized_data = flax.serialization.from_bytes(None, data)
-    learner_policy_version, args, [network_params, actor_params, critic_params] = deserialized_data
-    agent_params = AgentParams(network_params, actor_params, critic_params)
-    return learner_policy_version, args, agent_params
-
+def load_args(checkpoint_dir: Path) -> dict[str, Any]:
+    """Load the configuration from the checkpoint directory. Params (train_state) is loaded inside the training function."""
+    with open(checkpoint_dir / "cfg.json", "r") as f:
+        args_dict = json.load(f)
+    args = farconf.from_dict(args_dict, Args)
+    return args
 
 metric_to_track = "valid_unfiltered/episode_success"
 time_attr = "policy_versions/learner"
@@ -90,30 +87,28 @@ def trainable(config: dict[str, Any]):
     checkpoint = train.get_checkpoint()
     if checkpoint:
         with checkpoint.as_directory() as checkpoint_dir:
-            learner_policy_version, args, agent_params = load(checkpoint_dir)
+            args = load_args(checkpoint_dir)
+            args.load_path = checkpoint_dir
     else:
-        learner_policy_version = 0
         args = None
-        agent_params = None
 
     args = custom_explore_fn(args, config)
     impala.train(
         args,
-        learner_policy_version=learner_policy_version,
-        agent_params=agent_params,
         writer=RayWriter(args, metric_to_track=metric_to_track),
     )
 
 
 def custom_explore_fn(args: Optional[Args], config: dict[str, Any]) -> Args:
     if args is None:
-        args = sokoban_resnet()
+        args = sokoban_drc_3_3()
     args = update_fn(args, config["optimizer"], config["rmsprop_decay"], config["max_grad_norm_mul"])
 
     return args
 
 
 def update_fn(config: Args, optimizer, rmsprop_decay, max_grad_norm_mul):
+    # TODO: this needs to be updated to the latest hyperparams for drc
     minibatch_size = 32
     n_envs = 256  # the paper says 200 actors
     assert n_envs % minibatch_size == 0
@@ -166,8 +161,6 @@ def update_fn(config: Args, optimizer, rmsprop_decay, max_grad_norm_mul):
     config.max_grad_norm = 6.25e-5 * max_grad_norm_mul
     config.rmsprop_eps = 1.5625e-07
     config.optimizer_yang = False
-
-    config.net = GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False)
 
     config.save_model = True
     config.base_run_dir = Path("/training/cleanba")
