@@ -687,7 +687,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
                 writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
 
-            if args.save_model and learner_policy_version in args.eval_at_steps == 0:
+            if args.save_model and learner_policy_version in args.eval_at_steps:
                 with writer.save_dir(global_step) as dir:
                     save_train_state(dir, args, agent_state)
 
