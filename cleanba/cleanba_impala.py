@@ -60,6 +60,7 @@ def unreplicate(tree):
 
 class WandbWriter:
     step_digits: int
+    named_save_dir: Path
 
     def __init__(self, cfg: "Args"):
         wandb_kwargs: dict[str, Any]
@@ -71,12 +72,14 @@ class WandbWriter:
                 group=os.environ["WANDB_RUN_GROUP"],
                 mode=os.environ.get("WANDB_MODE", "online"),  # Default to online here
             )
+            job_name = wandb_kwargs["name"]
         except KeyError:
             # If any of the essential WANDB environment variables are missing,
             # simply don't upload this run.
             # It's fine to do this without giving any indication because Wandb already prints that the run is offline.
 
             wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
+            job_name = "develop"
 
         run_dir = args.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -94,8 +97,12 @@ class WandbWriter:
         )
 
         assert wandb.run is not None
-        self._save_dir = Path(wandb.run.dir).parent / "local-files"
+        save_dir_no_local_files = Path(wandb.run.dir).parent
+        self._save_dir = save_dir_no_local_files / "local-files"
         self._save_dir.mkdir()
+
+        self.named_save_dir = Path(wandb.run.dir).parent.parent / job_name
+        self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
 
         self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
@@ -448,7 +455,7 @@ def rollout(
             stats_dict: dict[str, float] = log_stats.avg_and_flush()
             steps_per_second = global_step / (time.time() - start_time)
             print(
-                f"{device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
+                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
 
             for k, v in stats_dict.items():
@@ -556,7 +563,17 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
         policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
 
+        load_path = args.load_path
         if args.load_path is None:
+            potential_load_path = writer.named_save_dir / "local-files"
+            cp_paths = os.listdir(potential_load_path)
+            cp_paths.sort()
+            if cp_paths:
+                load_path = Path(cp_paths[-1])
+                assert load_path.exists
+                print(f"Set {load_path=}")
+
+        if load_path is None:
             agent_state = TrainState.create(
                 apply_fn=None,
                 params=agent_params,
@@ -564,9 +581,9 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             )
             update = 1
         else:
-            old_args, agent_state, update = load_train_state(args.load_path)
+            old_args, agent_state, update = load_train_state(load_path)
             print(
-                f"Loaded TrainState at {update=} from {args.load_path}. Here are the differences from `args` "
+                f"Loaded TrainState at {update=} from {load_path=}. Here are the differences from `args` "
                 "to the loaded args:"
             )
             print(farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args)))

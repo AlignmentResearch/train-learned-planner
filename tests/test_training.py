@@ -29,7 +29,9 @@ class CheckingWriter(WandbWriter):
     def __init__(self, cfg: Args, save_dir: Path, eval_keys):
         self.last_global_step = -1
         self.metrics = {}
-        self._save_dir = save_dir
+        self._save_dir = save_dir / "local-files"
+        self._save_dir.mkdir()
+        self.named_save_dir = save_dir
 
         self.eval_keys = set(eval_keys)
         assert len(self.eval_keys) > 0
