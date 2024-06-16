@@ -239,7 +239,7 @@ def sokoban_resnet59():
                     difficulty="unfiltered",
                 ),
                 n_episode_multiple=2,
-                # steps_to_think=[0, 2, 4, 8, 12],
+                steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
             ),
             valid_medium=EvalConfig(
                 EnvpoolBoxobanConfig(
@@ -269,7 +269,7 @@ def sokoban_resnet59():
             advantage_multiplier="one",
         ),
         num_steps=20,
-        eval_at_steps=frozenset([0, 7810, 780, 156, 1562, 9372]),
+        eval_at_steps=frozenset([int(195600 / div * i) for div in [1000, 100, 10] for i in range(1, 21)]),
         actor_update_cutoff=int(1e20),
         sync_frequency=int(1e20),
         rmsprop_eps=1.5625e-07,
@@ -279,7 +279,7 @@ def sokoban_resnet59():
         optimizer_yang=False,
         local_num_envs=256,
         num_minibatches=8,
-        total_timesteps=256_000_000,
+        total_timesteps=2_002_944_000,
         base_run_dir=Path("/training/cleanba"),
         learning_rate=4e-4,
         base_fan_in=1,
