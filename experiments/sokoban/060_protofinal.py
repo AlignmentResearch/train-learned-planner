@@ -39,7 +39,7 @@ arch_fns = [
 ]
 
 
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
+for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
     for arch_fn in arch_fns:
         cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn)
 
@@ -69,7 +69,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "longer")
 
 if __name__ == "__main__":
     launch_jobs(
