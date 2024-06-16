@@ -570,8 +570,8 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             cp_paths = os.listdir(potential_load_path)
             cp_paths.sort()
             if cp_paths:
-                load_path = Path(cp_paths[-1])
-                assert load_path.exists
+                load_path = potential_load_path / Path(cp_paths[-1])
+                assert load_path.exists()
                 print(f"Set {load_path=}")
 
         if load_path is None:
