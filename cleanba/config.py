@@ -9,7 +9,7 @@ from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
 )
-from cleanba.network import AtariCNNSpec, PolicySpec, SokobanResNetConfig
+from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, PolicySpec, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -153,6 +153,7 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
         eval_envs=dict(
             test_unfiltered=EvalConfig(
                 EnvpoolBoxobanConfig(
+                    seed=5454,
                     max_episode_steps=240,
                     min_episode_steps=240,
                     num_envs=256,
@@ -164,6 +165,7 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
             ),
             valid_medium=EvalConfig(
                 EnvpoolBoxobanConfig(
+                    seed=5454,
                     max_episode_steps=240,
                     min_episode_steps=240,
                     num_envs=256,
@@ -211,3 +213,78 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
 def sokoban_drc_3_3(): return sokoban_drc(3, 3)
 def sokoban_drc_1_1(): return sokoban_drc(1, 1)
 # fmt: on
+
+
+def sokoban_resnet59():
+    CACHE_PATH = Path("/opt/sokoban_cache")
+    return Args(
+        train_env=EnvpoolBoxobanConfig(
+            seed=1234,
+            max_episode_steps=120,
+            min_episode_steps=30,
+            num_envs=1,
+            cache_path=CACHE_PATH,
+            split="train",
+            difficulty="unfiltered",
+        ),
+        eval_envs=dict(
+            test_unfiltered=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    seed=5454,
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="test",
+                    difficulty="unfiltered",
+                ),
+                n_episode_multiple=2,
+                # steps_to_think=[0, 2, 4, 8, 12],
+            ),
+            valid_medium=EvalConfig(
+                EnvpoolBoxobanConfig(
+                    seed=5454,
+                    max_episode_steps=240,
+                    min_episode_steps=240,
+                    num_envs=256,
+                    cache_path=CACHE_PATH,
+                    split="valid",
+                    difficulty="medium",
+                ),
+                n_episode_multiple=2,
+                steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
+            ),
+        ),
+        log_frequency=10,
+        net=GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.5,
+            gamma=0.97,
+            vf_coef=0.25,
+            ent_coef=0.01,
+            normalize_advantage=False,
+            logit_l2_coef=1.5625e-06,
+            weight_l2_coef=1.5625e-08,
+            vf_loss_type="square",
+            advantage_multiplier="one",
+        ),
+        num_steps=20,
+        eval_at_steps=frozenset([0, 7810, 780, 156, 1562, 9372]),
+        actor_update_cutoff=int(1e20),
+        sync_frequency=int(1e20),
+        rmsprop_eps=1.5625e-07,
+        rmsprop_decay=0.99,
+        adam_b1=0.9,
+        optimizer="adam",
+        optimizer_yang=False,
+        local_num_envs=256,
+        num_minibatches=8,
+        total_timesteps=256_000_000,
+        base_run_dir=Path("/training/cleanba"),
+        learning_rate=4e-4,
+        base_fan_in=1,
+        anneal_lr=False,
+        max_grad_norm=2.5e-4,
+        num_actor_threads=1,
+        seed=4242,
+    )

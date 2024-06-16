@@ -5,11 +5,11 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc_3_3
-from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 from cleanba.network import GuezResNetConfig, IdentityNorm
 
 clis = []
+all_args: list[Args] = []
 drc_n_n = 3
 
 num_envs = 256
@@ -28,7 +28,7 @@ update_fns_to_go_back = [
 ]
 
 for i in range(len(update_fns_to_go_back) + 1):
-    for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(2)]:
+    for env_seed, learn_seed in [(1234, 4242) for _ in range(2)]:
 
         def update_fn(config: Args) -> Args:
             config.train_env = dataclasses.replace(config.train_env, seed=env_seed, min_episode_steps=min_episode_steps)
@@ -43,14 +43,14 @@ for i in range(len(update_fns_to_go_back) + 1):
                 config.num_steps * config.local_num_envs * num_actor_threads * len_actor_device_ids * world_size
             )
 
-            config.total_timesteps = 80_000_000
+            config.total_timesteps = 256_000_000
             num_updates = config.total_timesteps // global_step_multiplier
             assert (
                 num_updates * global_step_multiplier == config.total_timesteps
             ), f"{config.total_timesteps=} != {num_updates=}*{global_step_multiplier=}"
 
             # Evaluate (and save) EVAL_TIMES during training
-            config.eval_at_steps = frozenset([156 * i for i in range(1, 10)] + [1562 * i for i in range(10)])
+            config.eval_at_steps = frozenset([0, 7810, 780, 156, 1562, 9372])
 
             config.save_model = True
             config.base_run_dir = Path("/training/cleanba")
@@ -79,7 +79,7 @@ for i in range(len(update_fns_to_go_back) + 1):
                 advantage_multiplier="one",
             )
             config.base_fan_in = 1
-            config.anneal_lr = True
+            config.anneal_lr = False
 
             config.optimizer = "adam"
             config.adam_b1 = 0.9
@@ -99,7 +99,9 @@ for i in range(len(update_fns_to_go_back) + 1):
         # Check that parsing doesn't error
         out = parse_cli(cli, Args)
 
+        all_args.append(out)
         clis.append((cli, "normal-batch"))
+
 
 runs: list[FlamingoRun] = []
 RUNS_PER_MACHINE = 1
