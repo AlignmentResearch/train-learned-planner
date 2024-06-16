@@ -102,7 +102,8 @@ class WandbWriter:
         self._save_dir.mkdir()
 
         self.named_save_dir = Path(wandb.run.dir).parent.parent / job_name
-        self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
+        if not self.named_save_dir.exists():
+            self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
 
         self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
