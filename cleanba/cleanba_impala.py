@@ -281,6 +281,7 @@ def concat_and_shard_rollout(
 
 
 def rollout(
+    initial_update: int,
     key: jax.random.PRNGKey,
     args: Args,
     runtime_info: RuntimeInformation,
@@ -333,7 +334,7 @@ def rollout(
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
-    for update in range(1, runtime_info.num_updates + 2):
+    for update in range(initial_update, runtime_info.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
 
@@ -561,10 +562,14 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 params=agent_params,
                 tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
             )
+            update = 1
         else:
-            old_args, agent_state = load_train_state(args.load_path)
-            print(f"Loaded TrainState from {args.load_path}. Here are the differences from `args` to the loaded args:")
-            farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args))
+            old_args, agent_state, update = load_train_state(args.load_path)
+            print(
+                f"Loaded TrainState at {update=} from {args.load_path}. Here are the differences from `args` "
+                "to the loaded args:"
+            )
+            print(farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args)))
 
         multi_device_update = jax.pmap(
             jax.jit(
@@ -594,6 +599,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 threading.Thread(
                     target=rollout,
                     args=(
+                        update,
                         jax.device_put(actor_keys[d_idx], runtime_info.local_devices[d_id]),
                         args,
                         runtime_info,
@@ -609,7 +615,6 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         rollout_queue_get_time = deque(maxlen=10)
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
-        global_step = 0
         actor_policy_version = 0
 
         global MUST_STOP_PROGRAM
@@ -689,25 +694,29 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
             if args.save_model and learner_policy_version in args.eval_at_steps:
                 with writer.save_dir(global_step) as dir:
-                    save_train_state(dir, args, agent_state)
+                    save_train_state(dir, args, agent_state, update)
 
             if learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
                 return
 
 
-def save_train_state(dir: Path, args: Args, train_state: TrainState):
+def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step: int):
     with open(dir / "cfg.json", "w") as f:
-        json.dump(farconf.to_dict(args, Args), f)
+        json.dump({"cfg": farconf.to_dict(args, Args), "update_step": update_step}, f)
 
     with open(dir / "model", "wb") as f:
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path) -> tuple[Args, TrainState]:
+def load_train_state(dir: Path) -> tuple[Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
-    args = farconf.from_dict(args_dict, Args)
+    try:
+        update_step = args_dict["update_step"]
+    except KeyError:
+        update_step = 1
+    args = farconf.from_dict(args_dict["cfg"], Args)
 
     _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
 
@@ -730,7 +739,7 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
                 axis=2,
                 keepdims=True,
             )
-    return args, train_state
+    return args, train_state, update_step
 
 
 if __name__ == "__main__":
