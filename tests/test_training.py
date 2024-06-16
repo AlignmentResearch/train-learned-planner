@@ -77,9 +77,10 @@ class CheckingWriter(WandbWriter):
             event.clear()
         self.done_saving.set()
 
-        args, train_state = load_train_state(dir)
+        args, train_state, update = load_train_state(dir)
         assert args == self._args
         assert isinstance(train_state, TrainState)
+        assert update == 1
 
 
 @pytest.mark.parametrize(
@@ -118,11 +119,12 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         asynchronous=False,
     )
 
+    eval_frequency = 4
     args = Args(
         train_env=env_cfg,
         eval_envs=dict(eval0=EvalConfig(env_cfg, steps_to_think=[0, 1]), eval1=EvalConfig(env_cfg, steps_to_think=[2])),
         net=net,
-        eval_frequency=4,
+        eval_at_steps=frozenset(range(1, eval_frequency * 20, eval_frequency)),
         save_model=True,
         log_frequency=1234,
         local_num_envs=1,
@@ -133,7 +135,7 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         queue_timeout=4,
     )
 
-    args.total_timesteps = args.num_steps * args.num_actor_threads * args.local_num_envs * args.eval_frequency
+    args.total_timesteps = args.num_steps * args.num_actor_threads * args.local_num_envs * eval_frequency
     assert args.total_timesteps < 20
 
     writer = CheckingWriter(

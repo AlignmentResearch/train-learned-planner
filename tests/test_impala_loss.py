@@ -173,6 +173,7 @@ def test_loss_of_rollout(min_episode_steps: int, num_envs: int = 5, gamma: float
     rollout_queue = queue.Queue(maxsize=5)
     key = jax.random.PRNGKey(seed=1234)
     cleanba_impala.rollout(
+        initial_update=1,
         key=key,
         args=args,
         runtime_info=cleanba_impala.RuntimeInformation(0, [], 0, 1, 0, 0, 0, 0, 0, [], []),

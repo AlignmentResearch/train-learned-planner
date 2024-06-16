@@ -190,7 +190,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole", seed=None):
         train_env=env_cfg,
         eval_envs=dict(train=EvalConfig(env_cfg, n_episode_multiple=4)),
         net=net,
-        eval_frequency=3900,  # Evaluate once at the end of training
+        eval_at_steps=frozenset([]),
         save_model=False,
         log_frequency=50,
         local_num_envs=NUM_ENVS,
