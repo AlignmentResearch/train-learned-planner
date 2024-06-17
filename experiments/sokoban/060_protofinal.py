@@ -41,7 +41,13 @@ arch_fns = [
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(5)]:
     for arch_fn in arch_fns:
-        cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn)
+
+        def update_seeds(config):
+            config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
+            config.seed = learn_seed
+            return config
+
+        cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn, update_seeds)
 
         print(shlex.join(cli))
         # Check that parsing doesn't error
