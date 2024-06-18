@@ -74,7 +74,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="normal-batch",
+            PRIORITY="high-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
