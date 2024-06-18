@@ -48,6 +48,7 @@ class Args:
     # Algorithm specific arguments
     total_timesteps: int = 100_000_000  # total timesteps of the experiments
     learning_rate: float = 0.0006  # the learning rate of the optimizer
+    final_learning_rate: float = 0.0  # The learning rate at the end of training
     local_num_envs: int = 64  # the number of parallel game environments for every actor device
     num_steps: int = 20  # the number of steps to run in each environment per policy rollout
     train_epochs: int = 1  # Repetitions of going through the collected training

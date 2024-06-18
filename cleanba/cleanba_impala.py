@@ -497,12 +497,17 @@ def rollout(
 
 
 def linear_schedule(
-    count: chex.Numeric, *, learning_rate: float, minibatches_per_update: int, total_updates: int
+    count: chex.Numeric,
+    *,
+    initial_learning_rate: float,
+    minibatches_per_update: int,
+    total_updates: int,
+    final_learning_rate: float = 0.0,
 ) -> chex.Numeric:
     # anneal learning rate linearly after one training iteration which contains
     # (args.num_minibatches) gradient updates
-    frac = 1.0 - (count // minibatches_per_update) / total_updates
-    return learning_rate * frac
+    frac = (count // minibatches_per_update) / total_updates
+    return initial_learning_rate + frac * (final_learning_rate - initial_learning_rate)
 
 
 def make_optimizer(args: Args, params: AgentParams, total_updates: int):
@@ -518,7 +523,8 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
 
     _linear_schedule = partial(
         linear_schedule,
-        learning_rate=args.learning_rate,
+        initial_learning_rate=args.learning_rate,
+        final_learning_rate=args.final_learning_rate,
         minibatches_per_update=args.num_minibatches,
         total_updates=total_updates,
     )
