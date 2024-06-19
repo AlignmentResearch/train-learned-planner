@@ -37,7 +37,7 @@ class ImpalaLossConfig:
 
     max_vf_error: float = 1.0  # The maximum value-function error allowed for a particular policy gradient to step.
     vf_loss_type: Literal["square", "huber"] = "square"
-    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] = "one"
+    advantage_multiplier: Literal["one", "mean", "max", "elementwise"] | str = "one"
 
     def vf_loss_fn(self, x: jax.Array) -> jax.Array:
         if self.vf_loss_type == "square":
@@ -54,6 +54,10 @@ class ImpalaLossConfig:
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.mean(jnp.abs(vtrace_errors)), a_max=1.0))
         elif self.advantage_multiplier == "max":
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.max(jnp.abs(vtrace_errors)), a_max=1.0))
+        elif self.advantage_multiplier.startswith("p"):
+            n = int(self.advantage_multiplier[1:])
+            pXX_err = jnp.percentile(jnp.abs(vtrace_errors), n)
+            return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / pXX_err, a_max=1.0))
         elif self.advantage_multiplier == "elementwise":
             return jax.lax.stop_gradient(jnp.clip(self.max_vf_error / jnp.abs(vtrace_errors), a_max=1.0))
         else:

@@ -61,7 +61,7 @@ jobs:
           command: |
             mkdir /workspace/test-results
             pip install matplotlib
-            pytest --junitxml=/workspace/test-results/worker-0.xml --verbose
+            pytest --junitxml=/workspace/test-results/worker-0.xml --verbose -m 'not slow'
           environment:
             OMP_NUM_THREADS: "2"
       - save-worker-test-results

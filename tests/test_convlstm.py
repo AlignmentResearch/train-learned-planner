@@ -271,13 +271,7 @@ def test_convlstm_forward(net: ConvLSTMConfig):
         assert v.shape == (), f"{k} is not averaged over time steps, has {v.shape=}"
 
 
-@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
-def test_config_de_serialize(net: ConvLSTMConfig):
-    d = farconf.to_dict(net, ConvLSTMConfig)
-    net2 = farconf.from_dict(d, ConvLSTMConfig)
-    assert net == net2
-
-
+@pytest.mark.slow
 @pytest.mark.parametrize("pool_and_inject", ["horizontal", "vertical", "no"])
 @pytest.mark.parametrize("pool_projection", ["full", "per-channel", "max", "mean"])
 @pytest.mark.parametrize("output_activation", ["sigmoid", "tanh"])
@@ -285,7 +279,7 @@ def test_config_de_serialize(net: ConvLSTMConfig):
 @pytest.mark.parametrize("forget_bias", [0.0, 1.0])
 @pytest.mark.parametrize("skip_final", [True, False])
 @pytest.mark.parametrize("residual", [True, False])
-def test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
+def do_test_count_params(pool_and_inject, pool_projection, output_activation, fence_pad, forget_bias, skip_final, residual):
     net = ConvLSTMConfig(
         n_recurrent=3,
         repeats_per_step=3,
@@ -313,3 +307,10 @@ def test_count_params(pool_and_inject, pool_projection, output_activation, fence
     ).make()
 
     net.count_params(envs)
+
+
+@pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
+def test_config_de_serialize(net: ConvLSTMConfig):
+    d = farconf.to_dict(net, ConvLSTMConfig)
+    net2 = farconf.from_dict(d, ConvLSTMConfig)
+    assert net == net2

@@ -144,3 +144,4 @@ requirements.txt.new
 envpool
 
 .sokoban_cache
+.build
