@@ -77,7 +77,7 @@ class WandbWriter:
 
             wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
 
-        run_dir = args.base_run_dir / wandb_kwargs["group"]
+        run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
         cfg_dict = farconf.to_dict(cfg, Args)
         assert isinstance(cfg_dict, dict)
@@ -107,6 +107,12 @@ class WandbWriter:
         out = self._save_dir / name
         out.mkdir()
         yield out
+
+    def maybe_save_barrier(self) -> None:
+        pass
+
+    def reset_save_barrier(self) -> None:
+        pass
 
 
 @dataclasses.dataclass(frozen=True)
@@ -536,7 +542,11 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
 
-def train(args: Args, *, writer: Optional[WandbWriter] = None):
+def train(
+    args: Args,
+    *,
+    writer: Optional[WandbWriter] = None,
+):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
@@ -581,7 +591,6 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
         params_queues = []
         rollout_queues = []
 
-        learner_policy_version = 0
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
         for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -589,7 +598,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
             for thread_id in range(args.num_actor_threads):
                 params_queues.append(queue.Queue(maxsize=1))
                 rollout_queues.append(queue.Queue(maxsize=1))
-                params_queues[-1].put((device_params, learner_policy_version))
+                params_queues[-1].put((device_params, args.learner_policy_version))
                 threading.Thread(
                     target=rollout,
                     args=(
@@ -613,7 +622,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
 
         global MUST_STOP_PROGRAM
         while not MUST_STOP_PROGRAM:
-            learner_policy_version += 1
+            args.learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
             sharded_storages = []
             for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -643,11 +652,11 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                     device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
                     for thread_id in range(args.num_actor_threads):
                         params_queues[d_idx * args.num_actor_threads + thread_id].put(
-                            (device_params, learner_policy_version), timeout=args.queue_timeout
+                            (device_params, args.learner_policy_version), timeout=args.queue_timeout
                         )
 
             # Copy the parameters from the first device to all other learner devices
-            if learner_policy_version % args.sync_frequency == 0:
+            if args.learner_policy_version % args.sync_frequency == 0:
                 # Check the maximum parameter difference
                 param_diff_stats = log_parameter_differences(agent_state.params)
                 for k, v in param_diff_stats.items():
@@ -658,7 +667,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 agent_state = jax.device_put_replicated(unreplicated_agent_state, devices=runtime_info.global_learner_devices)
 
             # record rewards for plotting purposes
-            if learner_policy_version % args.log_frequency == 0:
+            if args.learner_policy_version % args.log_frequency == 0:
                 writer.add_scalar(
                     "stats/rollout_queue_get_time",
                     np.mean(rollout_queue_get_time),
@@ -674,7 +683,7 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 writer.add_scalar("stats/params_queue_size", params_queues[-1].qsize(), global_step)
                 print(
                     global_step,
-                    f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={learner_policy_version}, training time: {time.time() - training_time_start}s",
+                    f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={args.learner_policy_version}, training time: {time.time() - training_time_start}s",
                 )
                 writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
                 writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
@@ -684,13 +693,17 @@ def train(args: Args, *, writer: Optional[WandbWriter] = None):
                 for name, value in metrics_dict.items():
                     writer.add_scalar(name, value[0].item(), global_step)
 
-                writer.add_scalar("policy_versions/learner", learner_policy_version, global_step)
+                writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
 
-            if args.save_model and learner_policy_version % args.eval_frequency == 0:
+            if args.save_model and args.learner_policy_version % args.eval_frequency == 0:
+                print("Learner thread entering save barrier (should be last)")
+                writer.maybe_save_barrier()
+                writer.reset_save_barrier()
+
                 with writer.save_dir(global_step) as dir:
                     save_train_state(dir, args, agent_state)
 
-            if learner_policy_version >= runtime_info.num_updates:
+            if args.learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
                 return
 
