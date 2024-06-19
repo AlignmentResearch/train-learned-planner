@@ -70,6 +70,7 @@ class Args:
     learner_device_ids: List[int] = field(default_factory=lambda: [0])  # the device ids that learner workers will use
     distributed: bool = False  # whether to use `jax.distributed`
     concurrency: bool = True  # whether to run the actor and learner concurrently
+    learner_policy_version: int = 0  # learner policy version that is updated every outer iteration of training
 
     load_path: Optional[Path] = None  # Where to load the initial training state from
 

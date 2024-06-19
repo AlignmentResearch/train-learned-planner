@@ -24,6 +24,10 @@ spec:
       - name: training
         persistentVolumeClaim:
           claimName: learned-planners
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "{SHM_SIZE}"
       containers:
       - name: devbox-container
         image: "ghcr.io/alignmentresearch/lp-cleanba:{CONTAINER_TAG}"
@@ -77,6 +81,8 @@ spec:
         - name: WANDB_MODE
           value: {WANDB_MODE}
         volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
         - name: training
           mountPath: {TRAINING_MOUNT}
       restartPolicy: Never

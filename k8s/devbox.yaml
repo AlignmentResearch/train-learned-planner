@@ -19,6 +19,10 @@ spec:
       - name: dotfiles
         configMap:
           name: dotfiles
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "{SHM_SIZE}"
 
       containers:
       - name: devbox-container
@@ -74,6 +78,8 @@ spec:
         - name: dotfiles
           mountPath: /home/dev/.tmux.conf
           subPath: tmux.conf
+        - name: dshm
+          mountPath: /dev/shm
 
       restartPolicy: Never
       imagePullSecrets:

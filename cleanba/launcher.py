@@ -45,6 +45,7 @@ class FlamingoRun:
     COMMIT_HASH: str = dataclasses.field(default_factory=git_latest_commit)
     CPU: int | str = 4
     MEMORY: str = "20G"
+    SHM_SIZE: str = "10G"
     GPU: int = 1
     TRAINING_MOUNT: Path = Path("/training")
     PRIORITY: str = "normal-batch"
