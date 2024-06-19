@@ -2,7 +2,7 @@ import abc
 import dataclasses
 import math
 from functools import partial
-from typing import Literal, Sequence, Tuple
+from typing import List, Literal, Tuple
 
 import flax.linen as nn
 import flax.struct
@@ -17,7 +17,7 @@ class ConvConfig:
     features: int
     kernel_size: Tuple[int, ...]
     strides: Tuple[int, ...]
-    padding: Literal["SAME", "VALID"] | Sequence[Tuple[int, ...]] = "SAME"
+    padding: Literal["SAME", "VALID"] | List[Tuple[int, ...]] = "SAME"
     use_bias: bool = True
     initialization: Literal["torch", "lecun"] = "lecun"
 
@@ -59,7 +59,7 @@ class BaseLSTMConfig(PolicySpec):
 
 @dataclasses.dataclass(frozen=True)
 class ConvLSTMConfig(BaseLSTMConfig):
-    embed: Sequence[ConvConfig] = dataclasses.field(default_factory=list)
+    embed: List[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: ConvLSTMCellConfig = ConvLSTMCellConfig(ConvConfig(32, (3, 3), (1, 1), "SAME", True))
     use_relu: bool = True
 
@@ -69,7 +69,7 @@ class ConvLSTMConfig(BaseLSTMConfig):
 
 @dataclasses.dataclass(frozen=True)
 class LSTMConfig(BaseLSTMConfig):
-    embed_hiddens: Sequence[int] = (200,)
+    embed_hiddens: Tuple[int, ...] = (200,)
     recurrent_hidden: int = 200
 
     def make(self) -> "LSTM":
