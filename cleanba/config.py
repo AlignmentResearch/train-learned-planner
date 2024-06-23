@@ -34,10 +34,14 @@ class Args:
 
     save_model: bool = True  # whether to save model into the wandb run folder
     log_frequency: int = 10  # the logging frequency of the model performance (in terms of `updates`)
-    sync_frequency: int = 400
+    sync_frequency: int = (
+        400  # how often to copy the first learner's parameters to all of them, with multiple learner devices.
+    )
 
-    actor_update_frequency: int = 1
-    actor_update_cutoff: int = int(1e9)
+    actor_update_frequency: int = (
+        1  # Update the actor every `actor_update_frequency` steps, until `actor_update_cutoff` is reached.
+    )
+    actor_update_cutoff: int = int(1e9)  # After this number of updates, update the actors every step
 
     base_run_dir: Path = Path("/tmp/cleanba")
 

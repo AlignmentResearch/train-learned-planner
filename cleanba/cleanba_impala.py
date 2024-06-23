@@ -686,7 +686,7 @@ def train(
                         )
 
             # Copy the parameters from the first device to all other learner devices
-            if args.learner_policy_version % args.sync_frequency == 0:
+            if len(runtime_info.global_learner_devices) > 1 and args.learner_policy_version % args.sync_frequency == 0:
                 # Check the maximum parameter difference
                 param_diff_stats = log_parameter_differences(agent_state.params)
                 for k, v in param_diff_stats.items():
