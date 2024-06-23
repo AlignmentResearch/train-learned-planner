@@ -288,9 +288,33 @@ def sokoban_resnet59():
         total_timesteps=2_002_944_000,
         base_run_dir=Path("/training/cleanba"),
         learning_rate=4e-4,
+        final_learning_rate=4e-6,
+        anneal_lr=True,
         base_fan_in=1,
-        anneal_lr=False,
         max_grad_norm=2.5e-4,
         num_actor_threads=1,
         seed=4242,
+    )
+
+
+def sokoban_drc33_59():
+    drc_n_n = 3
+
+    out = sokoban_resnet59()
+    out.net = ConvLSTMConfig(
+        n_recurrent=drc_n_n,
+        repeats_per_step=drc_n_n,
+        skip_final=True,
+        residual=False,
+        use_relu=False,
+        embed=[ConvConfig(32, (4, 4), (1, 1), "SAME", True)] * 2,
+        recurrent=ConvLSTMCellConfig(
+            ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            pool_and_inject="horizontal",
+            pool_projection="per-channel",
+            output_activation="tanh",
+            fence_pad="valid",
+            forget_bias=0.0,
+        ),
+        head_scale=1.0,
     )
