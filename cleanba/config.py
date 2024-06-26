@@ -297,7 +297,7 @@ def sokoban_resnet59():
     )
 
 
-def sokoban_drc33_59():
+def sokoban_drc33_59() -> ConvLSTMConfig:
     drc_n_n = 3
 
     out = sokoban_resnet59()
@@ -318,3 +318,4 @@ def sokoban_drc33_59():
         ),
         head_scale=1.0,
     )
+    return out

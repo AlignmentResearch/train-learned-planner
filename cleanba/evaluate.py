@@ -1,6 +1,5 @@
 import contextlib
 import dataclasses
-from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -8,7 +7,6 @@ import numpy as np
 
 from cleanba.environments import BoxobanConfig, EnvConfig
 from cleanba.network import Policy
-import numpy as np
 
 
 @dataclasses.dataclass
@@ -28,9 +26,10 @@ class EvalConfig:
         level_idxs = None
         if isinstance(self.env, BoxobanConfig) and self.env.level_idxs_path is not None:
             # gym sync/async env does not support different options for different environments
-            assert self.env.num_envs == 1, "Only one environment is supported for level_idxs"
             level_idxs = np.load(self.env.level_idxs_path)
-            assert len(level_idxs) == self.n_episode_multiple, "Number of level_idxs should match n_episode_multiple"
+            assert (
+                len(level_idxs) == self.n_episode_multiple * self.env.num_envs
+            ), "Number of level_idxs should match acdtual episode number"
 
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
@@ -38,10 +37,12 @@ class EvalConfig:
                 all_episode_returns = []
                 all_episode_lengths = []
                 all_episode_successes = []
-                for eps_idx in range(self.n_episode_multiple):
+                for minibatch_idx in range(self.n_episode_multiple):
                     if level_idxs is not None:
+                        level_file_idx, level_idx = map(list, zip(*level_idxs))
                         obs, _ = envs.reset(
-                            options={"level_file_idx": level_idxs[eps_idx][0], "level_idx": level_idxs[eps_idx][1]}
+                            options={"level_file_idx": level_file_idx, "level_idx": level_idx},
+                            seed=[minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)],
                         )
                     else:
                         obs, _ = envs.reset()
