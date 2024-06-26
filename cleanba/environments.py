@@ -104,8 +104,8 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
 
     # Not present in _SokobanEnvSpec
     cache_path: Path = Path("/opt/sokoban_cache")
-    split: Literal["train", "valid", "test", None] = "train"
-    difficulty: Literal["unfiltered", "medium", "hard", "planning"] = "unfiltered"
+    split: Literal["train", "valid", "test", "planning", None] = "train"
+    difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
 
     def __post_init__(self):
         assert self.env_id == "Sokoban-v0"
