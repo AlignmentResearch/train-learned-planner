@@ -69,10 +69,10 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
                         CACHE_PATH = Path("/opt/sokoban_cache")
                         config.eval_envs = {
                             "valid_medium": EvalConfig(
-                                n_episode_multiple=4,
+                                n_episode_multiple=20,
                                 env=BoxobanConfig(
-                                    max_episode_steps=240,
-                                    min_episode_steps=240,
+                                    max_episode_steps=120,
+                                    min_episode_steps=120,
                                     num_envs=256,
                                     cache_path=CACHE_PATH,
                                     tinyworld_obs=True,
