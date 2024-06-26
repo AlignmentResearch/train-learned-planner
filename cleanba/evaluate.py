@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.environments import EnvConfig, EnvpoolBoxobanConfig
+from cleanba.environments import EnvConfig
 from cleanba.network import Policy
 
 
@@ -25,16 +25,17 @@ class EvalConfig:
         metrics = {}
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
-            with contextlib.closing(self.env.make()) as envs:
-                all_episode_returns = []
-                all_episode_lengths = []
-                all_episode_successes = []
-                for minibatch_idx in range(self.n_episode_multiple):
-                    if isinstance(self.env, EnvpoolBoxobanConfig):
-                        seed = None
-                    else:
-                        seed = [self.env.seed + minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)]
-                    obs, _ = envs.reset(seed=seed)
+            all_episode_returns = []
+            all_episode_lengths = []
+            all_episode_successes = []
+            for minibatch_idx in range(self.n_episode_multiple):
+                # Re-create the environments, so we start at the beginning of the batch
+                with contextlib.closing(self.env.make()) as envs:
+                    obs, _ = envs.reset()
+                    # Reset more than once so we get to the Nth batch of levels
+                    for _ in range(minibatch_idx):
+                        obs, _ = envs.reset()
+
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 

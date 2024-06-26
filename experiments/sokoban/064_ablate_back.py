@@ -5,7 +5,7 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc33_59
-from cleanba.environments import BoxobanConfig, random_seed
+from cleanba.environments import EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
@@ -39,7 +39,7 @@ level_idxs_path = Path(__file__).absolute().parent.parent.parent / "val_medium_l
 assert level_idxs_path.exists()
 
 
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
+for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
     for output_activation in ["sigmoid", "tanh"]:
         for residual in [True, False]:
             for vtrace_lambda in [0.97, 0.5]:
@@ -65,22 +65,25 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
                         config.learning_rate = 4e-4
                         config.final_learning_rate = 3.604e-4
                         config.anneal_lr = True
+                        config.queue_timeout = 20 * 60  # 20 minutes for evaluation
 
                         CACHE_PATH = Path("/opt/sokoban_cache")
                         config.eval_envs = {
                             "valid_medium": EvalConfig(
                                 n_episode_multiple=2,
-                                env=BoxobanConfig(
-                                    max_episode_steps=120,
-                                    min_episode_steps=120,
-                                    num_envs=256,
-                                    cache_path=CACHE_PATH,
-                                    tinyworld_obs=True,
-                                    tinyworld_render=True,
-                                    split="valid",
-                                    difficulty="medium",
-                                    # level_idxs_path=level_idxs_path,
-                                    seed=42,
+                                env=EvalConfig(
+                                    EnvpoolBoxobanConfig(
+                                        seed=0,
+                                        load_sequentially=True,
+                                        max_episode_steps=120,
+                                        min_episode_steps=120,
+                                        num_envs=512,
+                                        cache_path=CACHE_PATH,
+                                        split="planning",
+                                        difficulty="medium",
+                                    ),
+                                    n_episode_multiple=2,
+                                    steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
                                 ),
                                 steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
                             )
@@ -111,7 +114,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="high-batch",
+            PRIORITY="normal-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
