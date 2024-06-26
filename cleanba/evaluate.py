@@ -45,7 +45,7 @@ class EvalConfig:
                             seed=[minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)],
                         )
                     else:
-                        obs, _ = envs.reset()
+                        obs, _ = envs.reset(seed=[minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)])
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 

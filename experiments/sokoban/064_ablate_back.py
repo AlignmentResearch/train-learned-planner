@@ -79,7 +79,8 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
                                     tinyworld_render=True,
                                     split="valid",
                                     difficulty="medium",
-                                    level_idxs_path=level_idxs_path,
+                                    # level_idxs_path=level_idxs_path,
+                                    seed=42,
                                 ),
                                 steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
                             )
