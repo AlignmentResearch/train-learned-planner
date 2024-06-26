@@ -35,8 +35,7 @@ update_fns_to_go_back = [
     ),
 ]
 
-level_idxs_path = Path(__file__).absolute().parent.parent.parent / "val_medium_level_idxs.npy"
-assert level_idxs_path.exists()
+level_idxs_path = Path("/workspace/val_medium_level_idxs.npy")
 
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
@@ -116,7 +115,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "2")
 
 if __name__ == "__main__":
     launch_jobs(
