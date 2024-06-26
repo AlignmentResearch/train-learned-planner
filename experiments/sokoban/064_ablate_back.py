@@ -34,9 +34,6 @@ update_fns_to_go_back = [
     ),
 ]
 
-level_idxs_path = Path(__file__).absolute().parent.parent.parent / "val_medium_level_idxs.npy"
-assert level_idxs_path.exists()
-
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
     for output_activation in ["sigmoid", "tanh"]:
