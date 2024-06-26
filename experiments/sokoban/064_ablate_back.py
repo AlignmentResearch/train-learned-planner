@@ -5,7 +5,8 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc33_59
-from cleanba.environments import random_seed
+from cleanba.environments import BoxobanConfig, random_seed
+from cleanba.evaluate import EvalConfig
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
 clis: list[list[str]] = []
@@ -34,6 +35,9 @@ update_fns_to_go_back = [
     ),
 ]
 
+level_idxs_path = Path(__file__).absolute().parent.parent.parent / "val_medium_level_idxs.npy"
+assert level_idxs_path.exists()
+
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
     for output_activation in ["sigmoid", "tanh"]:
@@ -61,6 +65,25 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
                         config.learning_rate = 4e-4
                         config.final_learning_rate = 3.604e-4
                         config.anneal_lr = True
+
+                        CACHE_PATH = Path("/opt/sokoban_cache")
+                        config.eval_envs = {
+                            "valid_medium": EvalConfig(
+                                n_episode_multiple=4,
+                                env=BoxobanConfig(
+                                    max_episode_steps=240,
+                                    min_episode_steps=240,
+                                    num_envs=256,
+                                    cache_path=CACHE_PATH,
+                                    tinyworld_obs=True,
+                                    tinyworld_render=True,
+                                    split="valid",
+                                    difficulty="medium",
+                                    level_idxs_path=level_idxs_path,
+                                ),
+                                steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
+                            )
+                        }
 
                         return config
 
