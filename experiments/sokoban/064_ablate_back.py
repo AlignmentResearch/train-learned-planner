@@ -109,13 +109,13 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
             CPU=6,
             MEMORY="20G",
             GPU=1,
-            PRIORITY="high-batch",
+            PRIORITY="normal-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
 
 
-GROUP: str = group_from_fname(__file__, "2")
+GROUP: str = group_from_fname(__file__, "3")
 
 if __name__ == "__main__":
     launch_jobs(
