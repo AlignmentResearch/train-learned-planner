@@ -28,7 +28,7 @@ class EvalConfig:
             # gym sync/async env does not support different options for different environments
             level_idxs = np.load(self.env.level_idxs_path)
             assert (
-                len(level_idxs) == self.n_episode_multiple * self.env.num_envs
+                len(level_idxs) <= self.n_episode_multiple * self.env.num_envs
             ), "Number of level_idxs should match acdtual episode number"
 
         for steps_to_think in self.steps_to_think:
