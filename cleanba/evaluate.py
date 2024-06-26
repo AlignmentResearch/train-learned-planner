@@ -1,12 +1,14 @@
 import contextlib
 import dataclasses
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.environments import EnvConfig
+from cleanba.environments import BoxobanConfig, EnvConfig
 from cleanba.network import Policy
+import numpy as np
 
 
 @dataclasses.dataclass
@@ -23,14 +25,26 @@ class EvalConfig:
         episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
 
         metrics = {}
+        level_idxs = None
+        if isinstance(self.env, BoxobanConfig) and self.env.level_idxs_path is not None:
+            # gym sync/async env does not support different options for different environments
+            assert self.env.num_envs == 1, "Only one environment is supported for level_idxs"
+            level_idxs = np.load(self.env.level_idxs_path)
+            assert len(level_idxs) == self.n_episode_multiple, "Number of level_idxs should match n_episode_multiple"
+
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
             with contextlib.closing(self.env.make()) as envs:
                 all_episode_returns = []
                 all_episode_lengths = []
                 all_episode_successes = []
-                for _ in range(self.n_episode_multiple):
-                    obs, _ = envs.reset()
+                for eps_idx in range(self.n_episode_multiple):
+                    if level_idxs is not None:
+                        obs, _ = envs.reset(
+                            options={"level_file_idx": level_idxs[eps_idx][0], "level_idx": level_idxs[eps_idx][1]}
+                        )
+                    else:
+                        obs, _ = envs.reset()
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 

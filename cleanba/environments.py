@@ -242,6 +242,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
     cache_path: Path = Path("/opt/sokoban_cache")
     split: Literal["train", "valid", "test", None] = "train"
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
+    level_idxs_path: Path | None = None
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
