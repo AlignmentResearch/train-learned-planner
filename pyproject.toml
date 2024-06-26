@@ -31,12 +31,6 @@ markers = [
 exclude = [
     "wandb/**",  # Saved old codes
     "third_party/**",  # Other libraries
-    "cleanba/legacy_scripts/**",
-    "cleanrl_utils/evals/cleanba_ppo_envpool_procgen_eval.py",
-    "cleanrl_utils/evals/ppo_envpool_jax_eval.py",
-    "cleanrl_utils/benchmark.py",
-    "cleanrl_utils/huggingface.py",
-    "cleanba/cleanba_ppo.py",
 ]
 reportPrivateImportUsage = "warning"
 
@@ -81,4 +75,4 @@ launch-jobs = [
 ]
 
 [tool.setuptools]
-packages = ["cleanba", "cleanrl_utils"]
+packages = ["cleanba"]

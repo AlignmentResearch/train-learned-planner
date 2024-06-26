@@ -48,6 +48,10 @@ cloudpickle==3.0.0
     #   tensorflow-probability
 cmdkit==2.7.4
     # via names-generator
+contourpy==1.2.1
+    # via matplotlib
+cycler==0.12.1
+    # via matplotlib
 databind @ git+https://github.com/rhaps0dy/python-databind.git@merge-fixes#subdirectory=databind
     # via farconf
 decorator==4.4.2
@@ -83,6 +87,8 @@ filelock==3.13.3
     #   virtualenv
 flax==0.8.2
     # via lp-cleanba (pyproject.toml)
+fonttools==4.53.0
+    # via matplotlib
 frozenlist==1.4.1
     # via
     #   aiosignal
@@ -144,12 +150,16 @@ jsonschema==4.21.1
     # via ray
 jsonschema-specifications==2023.12.1
     # via jsonschema
+kiwisolver==1.4.5
+    # via matplotlib
 markdown==3.6
     # via tensorboard
 markdown-it-py==3.0.0
     # via rich
 markupsafe==2.1.5
     # via werkzeug
+matplotlib==3.9.0
+    # via lp-cleanba (pyproject.toml)
 mdurl==0.1.2
     # via markdown-it-py
 ml-dtypes==0.4.0
@@ -179,6 +189,7 @@ nr-stream==1.1.5
 numpy==1.26.4
     # via
     #   chex
+    #   contourpy
     #   distrax
     #   dm-env
     #   flax
@@ -186,6 +197,7 @@ numpy==1.26.4
     #   imageio
     #   jax
     #   jaxlib
+    #   matplotlib
     #   ml-dtypes
     #   moviepy
     #   opencv-python
@@ -215,6 +227,7 @@ orbax-checkpoint==0.5.9
 packaging==24.0
     # via
     #   huggingface-hub
+    #   matplotlib
     #   pytest
     #   ray
     #   tensorboardx
@@ -223,7 +236,9 @@ pandas==2.2.2
 pathtools==0.1.2
     # via wandb
 pillow==10.3.0
-    # via imageio
+    # via
+    #   imageio
+    #   matplotlib
 platformdirs==4.2.0
     # via virtualenv
 pluggy==1.4.0
@@ -251,12 +266,16 @@ pyasn1-modules==0.4.0
     # via google-auth
 pygments==2.17.2
     # via rich
+pyparsing==3.1.2
+    # via matplotlib
 pyright==1.1.357
     # via lp-cleanba (pyproject.toml)
 pytest==7.3.2
     # via lp-cleanba (pyproject.toml)
 python-dateutil==2.9.0.post0
-    # via pandas
+    # via
+    #   matplotlib
+    #   pandas
 pytz==2024.1
     # via pandas
 pyyaml==6.0.1
