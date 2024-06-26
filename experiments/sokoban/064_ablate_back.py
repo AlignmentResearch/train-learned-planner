@@ -65,6 +65,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                         config.final_learning_rate = 3.604e-4
                         config.anneal_lr = True
                         config.queue_timeout = 20 * 60  # 20 minutes for evaluation
+                        config.eval_at_steps = config.eval_at_steps | frozenset(range(0, config.total_timesteps // 5120, 1000))
                         return config
 
                     cli, _ = update_fns_to_cli(sokoban_drc33_59, update_seeds, *update_fns_to_go_back[:update_fns_i])
