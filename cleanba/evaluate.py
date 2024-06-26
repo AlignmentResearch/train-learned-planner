@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.environments import BoxobanConfig, EnvConfig
+from cleanba.environments import EnvConfig
 from cleanba.network import Policy
 
 
@@ -23,14 +23,6 @@ class EvalConfig:
         episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
 
         metrics = {}
-        level_idxs = None
-        if isinstance(self.env, BoxobanConfig) and self.env.level_idxs_path is not None:
-            # gym sync/async env does not support different options for different environments
-            level_idxs = np.load(self.env.level_idxs_path)
-            assert (
-                len(level_idxs) == self.n_episode_multiple * self.env.num_envs
-            ), "Number of level_idxs should match acdtual episode number"
-
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
             with contextlib.closing(self.env.make()) as envs:
@@ -38,14 +30,9 @@ class EvalConfig:
                 all_episode_lengths = []
                 all_episode_successes = []
                 for minibatch_idx in range(self.n_episode_multiple):
-                    if level_idxs is not None:
-                        level_file_idx, level_idx = map(list, zip(*level_idxs))
-                        obs, _ = envs.reset(
-                            options={"level_file_idx": level_file_idx, "level_idx": level_idx},
-                            seed=[minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)],
-                        )
-                    else:
-                        obs, _ = envs.reset(seed=[minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)])
+                    obs, _ = envs.reset(
+                        seed=[self.env.seed + minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)]
+                    )
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 
