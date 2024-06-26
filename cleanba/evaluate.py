@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import time
 
 import jax
 import jax.numpy as jnp
@@ -31,6 +32,7 @@ class EvalConfig:
             for minibatch_idx in range(self.n_episode_multiple):
                 # Re-create the environments, so we start at the beginning of the batch
                 with contextlib.closing(self.env.make()) as envs:
+                    start_time = time.time()
                     obs, _ = envs.reset()
                     # Reset more than once so we get to the Nth batch of levels
                     for _ in range(minibatch_idx):
@@ -71,6 +73,9 @@ class EvalConfig:
                     all_episode_returns.append(episode_returns)
                     all_episode_lengths.append(episode_lengths)
                     all_episode_successes.append(episode_success)
+
+                    total_time = time.time() - start_time
+                    print(f"To evaluate the {minibatch_idx}th batch, {round(total_time, ndigits=3)}s")
 
                 metrics.update(
                     {
