@@ -240,7 +240,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
     "Sokoban levels from the Boxoban data set"
 
     cache_path: Path = Path("/opt/sokoban_cache")
-    split: Literal["train", "valid", "test", None] = "train"
+    split: Literal["train", "valid", "test", "planning", None] = "train"
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
     level_idxs_path: Path | None = None
 
