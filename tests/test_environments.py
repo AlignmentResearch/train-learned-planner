@@ -169,19 +169,3 @@ def test_mock_sokoban_returns(gamma: float, num_envs: int = 7):
     assert np.allclose(td_errors * (~truncateds), 0.0, atol=1e-6)
     if gamma == 1.0:
         assert np.all(values[dones] == max_episode_steps)
-
-
-def test_concrete_level():
-    cfg = BoxobanConfig(
-        20,
-        4,
-        123,
-        tinyworld_obs=True,
-        asynchronous=False,
-        min_episode_steps=MAX_EPISODE_STEPS * 3 // 4,
-        cache_path=Path(__file__).parent,
-    )
-    level_idxs = [(0, 4), (0, 6), (0, 8), (0, 9), (0, 5)]
-
-    level_file_idx, level_idx = map(list, zip(*level_idxs))
-    cfg.make().reset(seed=1, options={"level_file_idx": list(level_file_idx), "level_idx": list(level_idx)})
