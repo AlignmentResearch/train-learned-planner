@@ -5,8 +5,7 @@ from pathlib import Path
 from farconf import parse_cli, update_fns_to_cli
 
 from cleanba.config import Args, sokoban_drc33_59
-from cleanba.environments import EnvpoolBoxobanConfig, random_seed
-from cleanba.evaluate import EvalConfig
+from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
 clis: list[list[str]] = []
@@ -66,29 +65,6 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                         config.final_learning_rate = 3.604e-4
                         config.anneal_lr = True
                         config.queue_timeout = 20 * 60  # 20 minutes for evaluation
-
-                        CACHE_PATH = Path("/opt/sokoban_cache")
-                        config.eval_envs = {
-                            "valid_medium": EvalConfig(
-                                n_episode_multiple=2,
-                                env=EvalConfig(
-                                    EnvpoolBoxobanConfig(
-                                        seed=0,
-                                        load_sequentially=True,
-                                        max_episode_steps=120,
-                                        min_episode_steps=120,
-                                        num_envs=512,
-                                        cache_path=CACHE_PATH,
-                                        split="planning",
-                                        difficulty="medium",
-                                    ),
-                                    n_episode_multiple=2,
-                                    steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
-                                ),
-                                steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
-                            )
-                        }
-
                         return config
 
                     cli, _ = update_fns_to_cli(sokoban_drc33_59, update_seeds, *update_fns_to_go_back[:update_fns_i])
