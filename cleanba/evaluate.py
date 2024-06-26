@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.environments import EnvConfig
+from cleanba.environments import EnvConfig, EnvpoolBoxobanConfig
 from cleanba.network import Policy
 
 
@@ -30,9 +30,11 @@ class EvalConfig:
                 all_episode_lengths = []
                 all_episode_successes = []
                 for minibatch_idx in range(self.n_episode_multiple):
-                    obs, _ = envs.reset(
-                        seed=[self.env.seed + minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)]
-                    )
+                    if isinstance(self.env, EnvpoolBoxobanConfig):
+                        seed = None
+                    else:
+                        seed = [self.env.seed + minibatch_idx * self.env.num_envs + i for i in range(self.env.num_envs)]
+                    obs, _ = envs.reset(seed=seed)
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 
