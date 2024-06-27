@@ -46,6 +46,10 @@ class LoadAndEvalArgs:
         return 1
 
 
+def default_load_and_eval() -> LoadAndEvalArgs:
+    return LoadAndEvalArgs(Path("/path/to/nowhere"))
+
+
 def recursive_find_checkpoint(root: Path) -> Iterable[Path]:
     if (root / "cfg.json").exists():
         yield root
