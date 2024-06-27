@@ -174,7 +174,7 @@ runs_to_evaluate = [
 
 
 clis: list[list[str]] = []
-for load_path in runs_to_evaluate[:100]:
+for load_path in runs_to_evaluate:
 
     def update(config: LoadAndEvalArgs) -> LoadAndEvalArgs:
         config.load_other_run = load_path
@@ -200,7 +200,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
             MEMORY="40G",
             GPU=1,
             PRIORITY="normal-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".45"',
         )
     )
 
