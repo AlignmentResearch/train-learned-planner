@@ -38,11 +38,11 @@ level_idxs_path = Path(__file__).absolute().parent.parent.parent / "val_medium_l
 assert level_idxs_path.exists()
 
 
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
+for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
     for output_activation in ["sigmoid", "tanh"]:
         for residual in [True, False]:
             for vtrace_lambda in [0.97, 0.5]:
-                for update_fns_i in range(len(update_fns_to_go_back) + 1):
+                for update_fns_i in [0]:
 
                     def update_seeds(config: Args) -> Args:
                         config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -97,7 +97,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "fixed")
 
 if __name__ == "__main__":
     launch_jobs(
