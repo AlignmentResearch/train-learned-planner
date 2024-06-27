@@ -77,11 +77,11 @@ class EvalConfig:
                     total_time = time.time() - start_time
                     print(f"To evaluate the {minibatch_idx}th batch, {round(total_time, ndigits=3)}s")
 
-                metrics.update(
-                    {
-                        f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
-                        f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
-                        f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
-                    }
-                )
+            metrics.update(
+                {
+                    f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
+                    f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
+                    f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
+                }
+            )
         return metrics
