@@ -1,30 +1,31 @@
-# Train learned planners
+# Train Learned Planners
 
-This repository contains training code for the paper "Planning behavior in a recurrent neural network that plays
-Sokoban", from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) (arXiv TODO)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![Docker](https://img.shields.io/badge/docker-ready-blue)](https://www.docker.com/) [![License: Apache
+2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-The learned-planners repository (TODO: link) lets you download and use the trained neural networks. If you just want to
-do interpretability, you should go there.
 
-# Running training
+This repository contains training code for the paper ["Planning behavior in a recurrent neural network that plays Sokoban"](https://openreview.net/forum?id=T9sB3S2hok), from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) (arXiv TODO)
 
-First clone the repo with
-``` sh
+The [learned-planners repository](TODO: link) lets you download and use the trained neural networks. If you just want to do interpretability, you should go there.
+
+## :rocket: Running Training
+
+First, clone the repo with:
+
+```sh
 git clone --recurse-submodules https://github.com/AlignmentResearch/train-learned-planners
 # If you have already cloned the repo:
 git submodule init
 git submodule update --remote
 ```
 
-We use Docker (on Mac, [Orbstack](https://orbstack.dev)) to easily distribute dependencies. You can get a local
-development environment by running `make docker`. If you have a Kubernetes cluster, you can adapt `k8s/devbox.yaml` and
-run `make devbox` (or `make cuda-devbox`).
+We use Docker (on Mac, [Orbstack](https://orbstack.dev)) to easily distribute dependencies. You can get a local development environment by running `make docker`. If you have a Kubernetes cluster, you can adapt `k8s/devbox.yaml` and run `make devbox` (or `make cuda-devbox`).
 
-## Training commands
+## :gear: Training Commands
 
-The training code expects the [Boxoban levels](https://github.com/google-deepmind/boxoban-levels) in
-`/opt/sokoban_cache/boxoban-levels-master`, but it is possible to change that path. You can download them using
- 
+The training code expects the [Boxoban levels](https://github.com/google-deepmind/boxoban-levels) in `/opt/sokoban_cache/boxoban-levels-master`, but it is possible to change that path. You can download them using:
+
 ```sh
 BOXOBAN_CACHE="/opt/sokoban_cache/"  # change if desired
 mkdir -p "$BOXOBAN_CACHE"
@@ -36,12 +37,14 @@ The launcher scripts for the final runs are numbered [`061_pfinal2`](./experimen
 ### Training the ConvLSTM (DRC)
 
 For DRC(3, 3):
-``` sh
+
+```sh
 python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_drc33_59 "train_env.cache_path=$BOXOBAN_CACHE" "eval_envs.valid_medium.cache_path=$BOXOBAN_CACHE"
 ```
 
 For DRC(D, N) (e.g. DRC(1, 1)):
-``` sh
+
+```sh
 D=1
 N=1
 python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_drc33_59 "train_env.cache_path=$BOXOBAN_CACHE" "eval_envs.valid_medium.cache_path=$BOXOBAN_CACHE" net.n_recurrent=$D net.repeats_per_step=$N
@@ -49,32 +52,36 @@ python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_drc33_59 "t
 
 ### Training the ResNet
 
-``` sh
+```sh
 python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_resnet_59 "train_env.cache_path=$BOXOBAN_CACHE" "eval_envs.valid_medium.cache_path=$BOXOBAN_CACHE"
 ```
 
+## :package: Local Install (May Fail)
 
-## Local install (may fail)
+From inside your Python 3.10 local environment, run:
 
-From inside your Python 3.10 local environment, run `make local-install`. If you're not on Linux, Python 3.10 and x86_64, you will get the following error:
+```sh
+make local-install
+```
+
+If you're not on Linux, Python 3.10, and x86_64, you will get the following error:
 
 ```
 ERROR: envpool-0.8.4-cp310-cp310-linux_x86_64.whl is not a supported wheel on this platform.
 ```
 
-You can still use non-envpool environments, by using `BoxobanConfig` and `SokobanConfig` (in
-[`cleanba/environments.py`](cleanba/environments.py)).
+You can still use non-envpool environments by using `BoxobanConfig` and `SokobanConfig` (in [`cleanba/environments.py`](cleanba/environments.py)).
 
+## :hammer_and_wrench: Development
 
-# Development
+- **Experiment lists:** All the experiments we ran to debug and tune hyperparameters are under `experiments/`. Each experiment launches jobs in a Kubernetes cluster.
+- **Tests:** Run `make mactest` to run all the tests expected to succeed on a local machine.
+- **Linting:** Run `make lint format typecheck` to lint, format, and typecheck the code.
 
-- **Experiment lists:** All the experiments we ran to debug and tune hyperparameters are under `experiments/`. Each
-  experiment launches jobs in a Kubernetes cluster
-- **Tests:** `make mactest` should run all the tests that are expected to succeed in a local machine.
-- **Linting:** run `make lint format typecheck`.
+## :bookmark_tabs: Citation
 
-# Citation
+If you use this code, please cite our work:
 
-``` bibtex
+```bibtex
 TODO
 ```
