@@ -79,7 +79,7 @@ class CheckingWriter(WandbWriter):
             event.clear()
         self.done_saving.set()
 
-        args, train_state, update = load_train_state(dir)
+        _, _, args, train_state, update = load_train_state(dir)
         assert args == self._args
         assert isinstance(train_state, TrainState)
         assert update == 1

@@ -37,7 +37,7 @@ from cleanba.impala_loss import (
     single_device_update,
     tree_flatten_and_concat,
 )
-from cleanba.network import AgentParams, label_and_learning_rate_for_params
+from cleanba.network import AgentParams, Policy, PolicyCarryT, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
@@ -62,7 +62,7 @@ class WandbWriter:
     step_digits: int
     named_save_dir: Path
 
-    def __init__(self, cfg: "Args"):
+    def __init__(self, cfg: "Args", wandb_cfg: Optional[Any] = None):
         wandb_kwargs: dict[str, Any]
         try:
             wandb_kwargs = dict(
@@ -83,7 +83,7 @@ class WandbWriter:
 
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
-        cfg_dict = farconf.to_dict(cfg, Args)
+        cfg_dict = farconf.to_dict(cfg if wandb_cfg is None else wandb_cfg)
         assert isinstance(cfg_dict, dict)
 
         wandb.init(
@@ -598,7 +598,7 @@ def train(
             )
             update = 1
         else:
-            old_args, agent_state, update = load_train_state(load_path)
+            _, _, old_args, agent_state, update = load_train_state(load_path)
             print(
                 f"Loaded TrainState at {update=} from {load_path=}. Here are the differences from `args` "
                 "to the loaded args:"
@@ -746,7 +746,7 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path) -> tuple[Args, TrainState, int]:
+def load_train_state(dir: Path) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
     try:
@@ -755,7 +755,7 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState, int]:
         update_step = 1
     args = farconf.from_dict(args_dict["cfg"], Args)
 
-    _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    policy, carry, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
 
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
 
@@ -776,7 +776,7 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState, int]:
                 axis=2,
                 keepdims=True,
             )
-    return args, train_state, update_step
+    return policy, carry, args, train_state, update_step
 
 
 if __name__ == "__main__":
