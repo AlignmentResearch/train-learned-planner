@@ -33,6 +33,20 @@ git clone https://github.com/google-deepmind/boxoban-levels "$BOXOBAN_CACHE/boxo
 
 The launcher scripts for the final runs are numbered [`061_pfinal2`](./experiments/sokoban/061_pfinal2.py) and above.
 
+### Training the ConvLSTM (DRC)
+
+For DRC(3, 3):
+``` sh
+python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_drc33_59 "train_env.cache_path=$BOXOBAN_CACHE" "eval_envs.valid_medium.cache_path=$BOXOBAN_CACHE"
+```
+
+For DRC(D, N) (e.g. DRC(1, 1)):
+``` sh
+D=1
+N=1
+python -m cleanba.cleanba_impala --from-py-fn=cleanba.config:sokoban_drc33_59 "train_env.cache_path=$BOXOBAN_CACHE" "eval_envs.valid_medium.cache_path=$BOXOBAN_CACHE" net.n_recurrent=$D net.repeats_per_step=$N
+```
+
 ### Training the ResNet
 
 ``` sh
