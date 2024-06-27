@@ -62,7 +62,7 @@ class WandbWriter:
     step_digits: int
     named_save_dir: Path
 
-    def __init__(self, cfg: "Args", wandb_cfg: Optional[Any] = None):
+    def __init__(self, cfg: "Args", wandb_cfg_extra_data: dict[str, Any] = {}):
         wandb_kwargs: dict[str, Any]
         try:
             wandb_kwargs = dict(
@@ -83,12 +83,12 @@ class WandbWriter:
 
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
-        cfg_dict = farconf.to_dict(cfg if wandb_cfg is None else wandb_cfg)
+        cfg_dict = farconf.to_dict(cfg)
         assert isinstance(cfg_dict, dict)
 
         wandb.init(
             **wandb_kwargs,
-            config=cfg_dict,
+            config={**cfg_dict, **wandb_cfg_extra_data},
             save_code=True,  # Make sure git diff is saved
             dir=run_dir,
             monitor_gym=False,  # Must manually log videos to wandb

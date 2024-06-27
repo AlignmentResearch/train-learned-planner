@@ -23,6 +23,9 @@ spec:
         emptyDir:
           medium: Memory
           sizeLimit: "{SHM_SIZE}"
+      - name: training
+        persistentVolumeClaim:
+          claimName: learned-planners
 
       containers:
       - name: devbox-container
@@ -81,7 +84,8 @@ spec:
           subPath: tmux.conf
         - name: dshm
           mountPath: /dev/shm
-
+        - name: training
+          mountPath: /training
       restartPolicy: Never
       imagePullSecrets:
       - name: docker
