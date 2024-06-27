@@ -27,7 +27,8 @@ The training code expects the [Boxoban levels](https://github.com/google-deepmin
 ```sh
 BOXOBAN_CACHE="/opt/sokoban_cache/"  # change if desired
 mkdir -p "$BOXOBAN_CACHE"
-git clone https://github.com/google-deepmind/boxoban-levels "$BOXOBAN_CACHE/boxoban-levels-master"
+git clone https://github.com/google-deepmind/boxoban-levels \
+  "$BOXOBAN_CACHE/boxoban-levels-master"
 ```
 
 The launcher scripts for the final runs are numbered [`061_pfinal2`](./experiments/sokoban/061_pfinal2.py) and above.
