@@ -195,7 +195,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
             this_run_clis,
-            CONTAINER_TAG="5d26ad1-main",
+            CONTAINER_TAG="cbd47ce-main",
             CPU=12,
             MEMORY="40G",
             GPU=1,
