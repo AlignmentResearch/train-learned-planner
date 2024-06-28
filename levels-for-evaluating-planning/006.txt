@@ -1,4 +1,4 @@
-; 041 421
+; NOTE: THIS IS THE SAME FILE AS 001.TXT, OTHER THAN THIS NOTICE. 041 421
 ##########
 ###  #####
 # $  #####
