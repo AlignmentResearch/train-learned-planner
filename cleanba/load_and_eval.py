@@ -28,7 +28,7 @@ def default_eval_envs(CACHE_PATH=Path("/opt/sokoban_cache")) -> dict[str, EvalCo
                 difficulty="medium",
                 n_levels_to_load=-1,
             ),
-            n_episode_multiple=10,
+            n_episode_multiple=2,
             steps_to_think=[0, 1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32],
         )
     )
