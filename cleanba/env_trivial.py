@@ -82,8 +82,9 @@ class MockSokobanEnv(gym.Env[NDArray, np.int64]):
 
 class SeededSyncVectorEnv(gym.vector.SyncVectorEnv):
     """
-    Seed the environments only when `reset_async()` is called, not every time the environment is reset. This way, the
-    environment is not the same every time. This mimics the behavior
+    Seed the environments only when `reset_async()` is called, not every time the environment is reset. This way,
+    the environment is not the same every time. This mimics the behavior of Envpool and makes sure it's not the same
+    environment repeating over and over.
     """
 
     def __init__(
