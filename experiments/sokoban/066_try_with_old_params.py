@@ -4,7 +4,9 @@ from farconf import parse_cli_into_dict
 
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
-EVAL_AT_STEPS = "eval_at_steps=[0, 32000, 97800, 21000, 21516, 782, 195600, 10000, 293400, 31000, 1564, 15648, 391200, 20000, 9000, 2347, 37164, 30000, 11000, 9780, 58680, 3129, 19000, 31296, 156480, 8000, 3912, 254280, 586, 29000, 352080, 18000, 25428, 7000, 1369, 39000, 28000, 2151, 19560, 17000, 117360, 6000, 38000, 2934, 215160, 27000, 13692, 312960, 16000, 3716, 391, 35208, 5000, 37000, 7824, 26000, 1173, 15000, 29340, 78240, 4000, 36000, 1956, 176040, 25000, 23472, 273840, 2738, 14000, 371640, 3000, 35000, 3520, 24000, 195, 17604, 13000, 39120, 2000, 978, 34000, 11736, 136920, 23000, 1760, 234720, 12000, 33252, 332520, 1000, 33000, 5868, 2542, 22000, 27384, 3325]"
+IMPLICIT_ARGS = [
+    "eval_at_steps=[0, 32000, 97800, 21000, 21516, 782, 195600, 10000, 293400, 31000, 1564, 15648, 391200, 20000, 9000, 2347, 37164, 30000, 11000, 9780, 58680, 3129, 19000, 31296, 156480, 8000, 3912, 254280, 586, 29000, 352080, 18000, 25428, 7000, 1369, 39000, 28000, 2151, 19560, 17000, 117360, 6000, 38000, 2934, 215160, 27000, 13692, 312960, 16000, 3716, 391, 35208, 5000, 37000, 7824, 26000, 1173, 15000, 29340, 78240, 4000, 36000, 1956, 176040, 25000, 23472, 273840, 2738, 14000, 371640, 3000, 35000, 3520, 24000, 195, 17604, 13000, 39120, 2000, 978, 34000, 11736, 136920, 23000, 1760, 234720, 12000, 33252, 332520, 1000, 33000, 5868, 2542, 22000, 27384, 3325]"
+]
 
 clis: list[list[str]] = [
     [
@@ -20,7 +22,9 @@ clis: list[list[str]] = [
         "net.residual=true",
         "net.recurrent.forget_bias=1.0",
         "rmsprop_decay=0.999",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -34,7 +38,9 @@ clis: list[list[str]] = [
         "net.residual=true",
         "net.recurrent.forget_bias=1.0",
         "rmsprop_decay=0.999",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -47,7 +53,9 @@ clis: list[list[str]] = [
         "net.residual=true",
         "net.recurrent.forget_bias=1.0",
         "rmsprop_decay=0.999",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -59,7 +67,9 @@ clis: list[list[str]] = [
         "net.use_relu=false",
         "net.residual=true",
         "net.recurrent.forget_bias=1.0",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -70,7 +80,9 @@ clis: list[list[str]] = [
         "net.use_relu=false",
         "net.residual=true",
         "net.recurrent.forget_bias=1.0",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -79,7 +91,9 @@ clis: list[list[str]] = [
         "total_timesteps=256000000",
         "seed=1485693912",
         "net.recurrent.forget_bias=1.0",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -87,7 +101,28 @@ clis: list[list[str]] = [
         "train_env.seed=1221409641",
         "total_timesteps=256000000",
         "seed=1485693912",
-        EVAL_AT_STEPS,
+        "net.recurrent.forget_bias=1.0",
+        "loss.vtrace_lambda=0.97",
+        *IMPLICIT_ARGS,
+    ],
+    [
+        "--from-py-fn=cleanba.config:sokoban_drc33_59",
+        "eval_envs.valid_medium.env.seed=1581694829",
+        "train_env.seed=1221409641",
+        "total_timesteps=256000000",
+        "seed=1485693912",
+        "net.recurrent.forget_bias=1.0",
+        *IMPLICIT_ARGS,
+    ],
+    [
+        "--from-py-fn=cleanba.config:sokoban_drc33_59",
+        "eval_envs.valid_medium.env.seed=1581694829",
+        "train_env.seed=1221409641",
+        "total_timesteps=256000000",
+        "seed=1485693912",
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -96,7 +131,9 @@ clis: list[list[str]] = [
         "total_timesteps=256000000",
         "seed=1485693912",
         "net.residual=true",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
     [
         "--from-py-fn=cleanba.config:sokoban_drc33_59",
@@ -106,9 +143,13 @@ clis: list[list[str]] = [
         "seed=1485693912",
         "loss.ent_coef=0.001",
         "net.residual=true",
-        EVAL_AT_STEPS,
+        "loss.vtrace_lambda=0.97",
+        "net.recurrent.output_activation=sigmoid",
+        *IMPLICIT_ARGS,
     ],
 ]
+
+
 for cli in clis:
     parse_cli_into_dict(cli)
 
