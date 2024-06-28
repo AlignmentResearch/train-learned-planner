@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import time
 
 import jax
 import jax.numpy as jnp
@@ -25,12 +26,18 @@ class EvalConfig:
         metrics = {}
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
-            with contextlib.closing(self.env.make()) as envs:
-                all_episode_returns = []
-                all_episode_lengths = []
-                all_episode_successes = []
-                for _ in range(self.n_episode_multiple):
+            all_episode_returns = []
+            all_episode_lengths = []
+            all_episode_successes = []
+            for minibatch_idx in range(self.n_episode_multiple):
+                # Re-create the environments, so we start at the beginning of the batch
+                with contextlib.closing(self.env.make()) as envs:
+                    start_time = time.time()
                     obs, _ = envs.reset()
+                    # Reset more than once so we get to the Nth batch of levels
+                    for _ in range(minibatch_idx):
+                        obs, _ = envs.reset()
+
                     # reset the carry here so we can use `episode_starts_no` later
                     carry = policy.apply(params, carry_key, obs.shape, method=policy.initialize_carry)
 
@@ -67,11 +74,14 @@ class EvalConfig:
                     all_episode_lengths.append(episode_lengths)
                     all_episode_successes.append(episode_success)
 
-                metrics.update(
-                    {
-                        f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
-                        f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
-                        f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
-                    }
-                )
+                    total_time = time.time() - start_time
+                    print(f"To evaluate the {minibatch_idx}th batch, {round(total_time, ndigits=3)}s")
+
+            metrics.update(
+                {
+                    f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
+                    f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
+                    f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
+                }
+            )
         return metrics

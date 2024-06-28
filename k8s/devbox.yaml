@@ -40,6 +40,7 @@ spec:
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
+            ln -s "$(pwd)/levels-for-evaluating-planning" "/opt/sokoban_cache/boxoban-levels-master/medium/planning"
             pip install matplotlib jupyter
             pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
             sleep 1d

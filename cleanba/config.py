@@ -234,30 +234,18 @@ def sokoban_resnet59():
             difficulty="unfiltered",
         ),
         eval_envs=dict(
-            test_unfiltered=EvalConfig(
-                EnvpoolBoxobanConfig(
-                    seed=5454,
-                    max_episode_steps=240,
-                    min_episode_steps=240,
-                    num_envs=256,
-                    cache_path=CACHE_PATH,
-                    split="test",
-                    difficulty="unfiltered",
-                ),
-                n_episode_multiple=2,
-                steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
-            ),
             valid_medium=EvalConfig(
                 EnvpoolBoxobanConfig(
-                    seed=5454,
-                    max_episode_steps=240,
-                    min_episode_steps=240,
+                    seed=0,
+                    load_sequentially=True,
+                    max_episode_steps=120,
+                    min_episode_steps=120,
                     num_envs=256,
                     cache_path=CACHE_PATH,
-                    split="valid",
+                    split="planning",
                     difficulty="medium",
                 ),
-                n_episode_multiple=2,
+                n_episode_multiple=4,
                 steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
             ),
         ),
@@ -297,7 +285,7 @@ def sokoban_resnet59():
     )
 
 
-def sokoban_drc33_59():
+def sokoban_drc33_59() -> Args:
     drc_n_n = 3
 
     out = sokoban_resnet59()
@@ -318,3 +306,4 @@ def sokoban_drc33_59():
         ),
         head_scale=1.0,
     )
+    return out

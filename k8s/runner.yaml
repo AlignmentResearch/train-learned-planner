@@ -44,6 +44,7 @@ spec:
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
+            ln -s "$(pwd)/levels-for-evaluating-planning" "/opt/sokoban_cache/boxoban-levels-master/medium/planning"
             {COMMAND}
         resources:
           requests:
