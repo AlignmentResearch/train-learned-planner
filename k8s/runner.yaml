@@ -11,7 +11,7 @@ metadata:
     launch-id: {LAUNCH_ID}
 spec:
   suspend: true
-  backoffLimit: 1  # How many times to try to run the job until giving up
+  backoffLimit: 10  # How many times to try to run the job until giving up
   template:
     metadata:
       generateName: {NAME}
@@ -82,7 +82,7 @@ spec:
           value: {WANDB_MODE}
         volumeMounts:
         - name: dshm
-          mountPath: /dev/shm      
+          mountPath: /dev/shm
         - name: training
           mountPath: {TRAINING_MOUNT}
       restartPolicy: Never

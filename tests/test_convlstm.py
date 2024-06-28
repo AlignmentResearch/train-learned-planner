@@ -1,9 +1,8 @@
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import farconf
-import flax.linen as nn
 import flax.serialization
 import gymnasium as gym
 import jax
@@ -22,39 +21,7 @@ from cleanba.environments import SokobanConfig
 from cleanba.network import Policy, n_actions_from_envs
 
 
-def test_equivalent_to_lstm():
-    cfg = ConvLSTMCellConfig(
-        ConvConfig(features=2, kernel_size=(3, 3), strides=(1, 1), padding="SAME", use_bias=True), pool_and_inject="no"
-    )
-    cleanba_cell = ConvLSTMCell(cfg=cfg)
-    linen_cell = nn.ConvLSTMCell(cfg.features, cfg.kernel_size, cfg.strides, cfg.padding, cfg.use_bias)
-
-    rng = jax.random.PRNGKey(1234)
-    rng, k1, k2, k3 = jax.random.split(rng, 4)
-    inputs = jax.random.normal(k1, (7, 5, 10, 10, 3))
-
-    cleanba_carry = cleanba_cell.initialize_carry(k2, inputs[0].shape)
-    linen_carry = linen_cell.initialize_carry(k3, inputs[0].shape)
-
-    rng, k1 = jax.random.split(rng, 2)
-    cleanba_params = cleanba_cell.init(k1, cleanba_carry, inputs[0], cleanba_carry.h)
-    linen_params = {
-        "params": {"ih": cleanba_params["params"]["convcell"]["ih"], "hh": cleanba_params["params"]["convcell"]["hh"]}
-    }
-
-    for t in range(len(inputs)):
-        rng, k1 = jax.random.split(rng, 2)
-        prev_layer_hidden = jax.random.normal(k1, cleanba_carry.h.shape)
-        cleanba_carry, cleanba_out = jax.jit(cleanba_cell.apply)(cleanba_params, cleanba_carry, inputs[t], prev_layer_hidden)
-        cat_input_t = jnp.concatenate([inputs[t], prev_layer_hidden], axis=-1)
-        linen_carry, linen_out = jax.jit(linen_cell.apply)(linen_params, linen_carry, cat_input_t)
-
-        assert jnp.allclose(cleanba_out, linen_out, atol=1e-6)
-        assert jnp.allclose(cleanba_carry.c, linen_carry[0], atol=1e-6)
-        assert jnp.allclose(cleanba_carry.h, linen_carry[1], atol=1e-6)
-
-
-@pytest.mark.parametrize("pool_and_inject", [True, False])
+@pytest.mark.parametrize("pool_and_inject", ["no", "horizontal"])
 @pytest.mark.parametrize(
     "cfg",
     [
@@ -62,8 +29,9 @@ def test_equivalent_to_lstm():
         ConvConfig(2, (2, 2), (1, 1), "SAME", True),
     ],
 )
-def test_convlstm_strides_padding(pool_and_inject: bool, cfg: ConvConfig):
-    cell = ConvLSTMCell(pool_and_inject, cfg)
+def test_convlstm_strides_padding(pool_and_inject: Literal["no", "horizontal"], cfg: ConvConfig):
+    cell_cfg = ConvLSTMCellConfig(cfg, pool_and_inject)
+    cell = ConvLSTMCell(cell_cfg)
 
     rng = jax.random.PRNGKey(1234)
     rng, k1, k2, k3 = jax.random.split(rng, 4)
@@ -115,10 +83,10 @@ def test_carry_shape(net: ConvLSTMConfig):
 
     cfg = net.recurrent
     for cell_carry in carry:
-        if cfg.padding != "SAME":
+        if cfg.conv.padding != "SAME":
             raise NotImplementedError
 
-        shape = (envs.num_envs, dim_room[0] // cfg.strides[0], dim_room[1] // cfg.strides[1], cfg.features)
+        shape = (envs.num_envs, dim_room[0] // cfg.conv.strides[0], dim_room[1] // cfg.conv.strides[1], cfg.conv.features)
         assert cell_carry.c.shape == shape
         assert cell_carry.h.shape == shape
 

@@ -28,6 +28,7 @@ from rich.pretty import pprint
 from typing_extensions import Self
 
 from cleanba.config import Args
+from cleanba.convlstm import ConvLSTMConfig
 from cleanba.environments import random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
@@ -59,6 +60,7 @@ def unreplicate(tree):
 
 class WandbWriter:
     step_digits: int
+    named_save_dir: Path
 
     def __init__(self, cfg: "Args"):
         wandb_kwargs: dict[str, Any]
@@ -70,12 +72,14 @@ class WandbWriter:
                 group=os.environ["WANDB_RUN_GROUP"],
                 mode=os.environ.get("WANDB_MODE", "online"),  # Default to online here
             )
+            job_name = wandb_kwargs["name"]
         except KeyError:
             # If any of the essential WANDB environment variables are missing,
             # simply don't upload this run.
             # It's fine to do this without giving any indication because Wandb already prints that the run is offline.
 
             wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
+            job_name = "develop"
 
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -93,8 +97,13 @@ class WandbWriter:
         )
 
         assert wandb.run is not None
-        self._save_dir = Path(wandb.run.dir).parent / "local-files"
+        save_dir_no_local_files = Path(wandb.run.dir).parent
+        self._save_dir = save_dir_no_local_files / "local-files"
         self._save_dir.mkdir()
+
+        self.named_save_dir = Path(wandb.run.dir).parent.parent / job_name
+        if not self.named_save_dir.exists():
+            self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
 
         self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
@@ -286,6 +295,7 @@ def concat_and_shard_rollout(
 
 
 def rollout(
+    initial_update: int,
     key: jax.random.PRNGKey,
     args: Args,
     runtime_info: RuntimeInformation,
@@ -338,7 +348,7 @@ def rollout(
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
-    for update in range(1, runtime_info.num_updates + 2):
+    for update in range(initial_update, runtime_info.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
 
@@ -452,7 +462,7 @@ def rollout(
             stats_dict: dict[str, float] = log_stats.avg_and_flush()
             steps_per_second = global_step / (time.time() - start_time)
             print(
-                f"{device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
+                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
 
             for k, v in stats_dict.items():
@@ -483,7 +493,7 @@ def rollout(
 
             writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
 
-        if update % args.eval_frequency == 0:
+        if update in args.eval_at_steps:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
@@ -493,12 +503,17 @@ def rollout(
 
 
 def linear_schedule(
-    count: chex.Numeric, *, learning_rate: float, minibatches_per_update: int, total_updates: int
+    count: chex.Numeric,
+    *,
+    initial_learning_rate: float,
+    minibatches_per_update: int,
+    total_updates: int,
+    final_learning_rate: float = 0.0,
 ) -> chex.Numeric:
     # anneal learning rate linearly after one training iteration which contains
     # (args.num_minibatches) gradient updates
-    frac = 1.0 - (count // minibatches_per_update) / total_updates
-    return learning_rate * frac
+    frac = (count // minibatches_per_update) / total_updates
+    return initial_learning_rate + frac * (final_learning_rate - initial_learning_rate)
 
 
 def make_optimizer(args: Args, params: AgentParams, total_updates: int):
@@ -514,7 +529,8 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
 
     _linear_schedule = partial(
         linear_schedule,
-        learning_rate=args.learning_rate,
+        initial_learning_rate=args.learning_rate,
+        final_learning_rate=args.final_learning_rate,
         minibatches_per_update=args.num_minibatches,
         total_updates=total_updates,
     )
@@ -564,16 +580,30 @@ def train(
 
         policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
 
+        load_path = args.load_path
         if args.load_path is None:
+            potential_load_path = writer.named_save_dir / "local-files"
+            cp_paths = os.listdir(potential_load_path)
+            cp_paths.sort()
+            if cp_paths:
+                load_path = potential_load_path / Path(cp_paths[-1])
+                assert load_path.exists()
+                print(f"Set {load_path=}")
+
+        if load_path is None:
             agent_state = TrainState.create(
                 apply_fn=None,
                 params=agent_params,
                 tx=make_optimizer(args, agent_params, total_updates=runtime_info.num_updates),
             )
+            update = 1
         else:
-            old_args, agent_state = load_train_state(args.load_path)
-            print(f"Loaded TrainState from {args.load_path}. Here are the differences from `args` to the loaded args:")
-            farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args))
+            old_args, agent_state, update = load_train_state(load_path)
+            print(
+                f"Loaded TrainState at {update=} from {load_path=}. Here are the differences from `args` "
+                "to the loaded args:"
+            )
+            print(farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args)))
 
         multi_device_update = jax.pmap(
             jax.jit(
@@ -602,6 +632,7 @@ def train(
                 threading.Thread(
                     target=rollout,
                     args=(
+                        update,
                         jax.device_put(actor_keys[d_idx], runtime_info.local_devices[d_id]),
                         args,
                         runtime_info,
@@ -617,7 +648,6 @@ def train(
         rollout_queue_get_time = deque(maxlen=10)
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
-        global_step = 0
         actor_policy_version = 0
 
         global MUST_STOP_PROGRAM
@@ -656,7 +686,7 @@ def train(
                         )
 
             # Copy the parameters from the first device to all other learner devices
-            if args.learner_policy_version % args.sync_frequency == 0:
+            if len(runtime_info.global_learner_devices) > 1 and args.learner_policy_version % args.sync_frequency == 0:
                 # Check the maximum parameter difference
                 param_diff_stats = log_parameter_differences(agent_state.params)
                 for k, v in param_diff_stats.items():
@@ -695,31 +725,35 @@ def train(
 
                 writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
 
-            if args.save_model and args.learner_policy_version % args.eval_frequency == 0:
+            if args.save_model and args.learner_policy_version in args.eval_at_steps:
                 print("Learner thread entering save barrier (should be last)")
                 writer.maybe_save_barrier()
                 writer.reset_save_barrier()
 
                 with writer.save_dir(global_step) as dir:
-                    save_train_state(dir, args, agent_state)
+                    save_train_state(dir, args, agent_state, update)
 
             if args.learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
                 return
 
 
-def save_train_state(dir: Path, args: Args, train_state: TrainState):
+def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step: int):
     with open(dir / "cfg.json", "w") as f:
-        json.dump(farconf.to_dict(args, Args), f)
+        json.dump({"cfg": farconf.to_dict(args, Args), "update_step": update_step}, f)
 
     with open(dir / "model", "wb") as f:
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path) -> tuple[Args, TrainState]:
+def load_train_state(dir: Path) -> tuple[Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
-    args = farconf.from_dict(args_dict, Args)
+    try:
+        update_step = args_dict["update_step"]
+    except KeyError:
+        update_step = 1
+    args = farconf.from_dict(args_dict["cfg"], Args)
 
     _, _, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
 
@@ -735,13 +769,14 @@ def load_train_state(dir: Path) -> tuple[Args, TrainState]:
         train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
     train_state = unreplicate(train_state)
-    for i in range(args.net.n_recurrent):
-        train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
-            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
-            axis=2,
-            keepdims=True,
-        )
-    return args, train_state
+    if isinstance(args.net, ConvLSTMConfig):
+        for i in range(args.net.n_recurrent):
+            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
+                train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
+                axis=2,
+                keepdims=True,
+            )
+    return args, train_state, update_step
 
 
 if __name__ == "__main__":

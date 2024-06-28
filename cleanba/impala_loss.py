@@ -170,11 +170,14 @@ def impala_loss(
     norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
         jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
     )
-    pg_advs = adv_multiplier * jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
+    pg_advs = jax.lax.stop_gradient(  # Just in case
+        adv_multiplier * jax.lax.select(args.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
+    )
     pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
-    # Value loss: Huber loss of VTrace-estimated errors
-    v_loss = jnp.mean(args.vf_loss_fn(vtrace_returns.errors))
+    # Value loss: MSE/Huber loss of VTrace-estimated errors
+    ## Errors should be zero where mask_t is False, but we multiply anyways
+    v_loss = jnp.mean(args.vf_loss_fn(vtrace_returns.errors) * mask_t)
 
     # Entropy loss: negative average entropy of the policy across timesteps and environments
     ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
