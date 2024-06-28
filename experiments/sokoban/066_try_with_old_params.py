@@ -201,6 +201,7 @@ runs.append(
                 "rmsprop_decay=0.999",
             ]
         ],
+        COMMIT_HASH="df826f2b1986cb4c211c6093e9a5ca7f05eb0d43",
         CONTAINER_TAG="b08213f-main",
         CPU=8,
         MEMORY="20G",
