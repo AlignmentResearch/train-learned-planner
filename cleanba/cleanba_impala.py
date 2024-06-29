@@ -5,6 +5,7 @@ import math
 import os
 import queue
 import random
+import re
 import sys
 import threading
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterator, List, Optional
 
 import chex
+import databind.core.converter
 import farconf
 import flax
 import jax
@@ -757,7 +759,18 @@ def load_train_state(dir: Path) -> tuple[Policy, PolicyCarryT, Args, TrainState,
         loaded_cfg = args_dict["cfg"]
     except KeyError:
         loaded_cfg = args_dict
-    args = farconf.from_dict(loaded_cfg, Args)
+
+    try:
+        args = farconf.from_dict(loaded_cfg, Args)
+    except databind.core.converter.ConversionError as e:
+        if (m := re.fullmatch(r"^encountered extra keys: \{(.*)\}$", e.message)) is not None:
+            keys_to_remove = {k.strip("'") for k in m.group(1).split(",")}
+            print("Removing keys ", keys_to_remove)
+            for k in keys_to_remove:
+                del loaded_cfg[k]
+                args = farconf.from_dict(loaded_cfg, Args)
+        else:
+            raise
 
     policy, carry, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
 
