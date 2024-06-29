@@ -117,7 +117,7 @@ runs.append(
 )
 
 
-GROUP: str = group_from_fname(__file__)
+GROUP: str = group_from_fname(__file__, "buggy-envpool")
 
 if __name__ == "__main__":
     launch_jobs(
