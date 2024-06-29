@@ -166,7 +166,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
             this_run_clis,
-            CONTAINER_TAG="cbd47ce-main",
+            CONTAINER_TAG="12db6d3-main",
             CPU=8,
             MEMORY="20G",
             GPU=1,
@@ -174,47 +174,6 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
         )
     )
-
-
-runs.append(
-    FlamingoRun(
-        [
-            [
-                "python",
-                "-m",
-                "cleanba.cleanba_impala",
-                "--from-py-fn=cleanba.config:sokoban_drc_3_3",
-                "rmsprop_eps=1.5625e-10",
-                "eval_envs.valid_medium.env.seed=1581694829",
-                "eval_envs.valid_medium.steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32]",
-                "eval_envs.test_unfiltered.env.seed=751937061",
-                "eval_frequency=3125",
-                "train_env.seed=1221409641",
-                "train_env.min_episode_steps=30",
-                "eval_envs.valid_medium.env.min_episode_steps=120",
-                "eval_envs.valid_medium.env.max_episode_steps=120",
-                "loss.ent_coef=0.001",
-                "total_timesteps=256000000",
-                "seed=1485693912",
-                "max_grad_norm=0.00015",
-                "net.use_relu=false",
-                "net.residual=true",
-                "net.recurrent.pool_projection=per-channel",
-                "net.recurrent.fence_pad=valid",
-                "net.recurrent.forget_bias=1.0",
-                "rmsprop_decay=0.999",
-            ]
-        ],
-        COMMIT_HASH="df826f2b1986cb4c211c6093e9a5ca7f05eb0d43",
-        CONTAINER_TAG="b08213f-main",
-        CPU=8,
-        MEMORY="20G",
-        GPU=1,
-        PRIORITY="normal-batch",
-        XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',
-    )
-)
-
 
 GROUP: str = group_from_fname(__file__, "buggy-envpool")
 
