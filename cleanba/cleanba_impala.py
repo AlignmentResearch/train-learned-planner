@@ -753,7 +753,11 @@ def load_train_state(dir: Path) -> tuple[Policy, PolicyCarryT, Args, TrainState,
         update_step = args_dict["update_step"]
     except KeyError:
         update_step = 1
-    args = farconf.from_dict(args_dict["cfg"], Args)
+    try:
+        loaded_cfg = args_dict["cfg"]
+    except KeyError:
+        loaded_cfg = args_dict
+    args = farconf.from_dict(loaded_cfg, Args)
 
     policy, carry, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
 
