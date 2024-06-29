@@ -4,7 +4,7 @@ parameters:
   docker_img_version:
     # Docker image version for running tests.
     type: string
-    default: "cbd47ce-main"
+    default: "12db6d3-main"
 
 workflows:
   test-jobs:
