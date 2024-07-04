@@ -7,16 +7,15 @@ from cleanba.load_and_eval import LoadAndEvalArgs, default_load_and_eval
 
 group_to_subdir = {
     "/training/cleanba/061-pfinal2/wandb/run": [
-        "run-20240618_205932-syb50iz7",
         "run-20240618_205934-bkynosqi",
+        "run-20240618_205932-syb50iz7",
     ],
     "/training/cleanba/061-pfinal2-drc11/wandb/run": [
         "run-20240623_041343-eue6pax7",
     ],
 }
 
-runs_to_evaluate = [Path(k) / v for k, vs in group_to_subdir.items() for v in vs]
-
+runs_to_evaluate = list(reversed([Path(k) / v for k, vs in group_to_subdir.items() for v in vs]))
 
 clis: list[list[str]] = []
 for load_path in runs_to_evaluate:
@@ -30,7 +29,7 @@ for load_path in runs_to_evaluate:
 
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = 1
+RUNS_PER_MACHINE = 2
 for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
         ["python", "-m", "cleanba.load_and_eval", *clis[update_fns_i + j]]
