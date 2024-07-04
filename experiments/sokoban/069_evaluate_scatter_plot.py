@@ -6,7 +6,7 @@ from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 from cleanba.load_and_eval import LoadAndEvalArgs, default_load_and_eval
 
 group_to_subdir = {
-    "/training/cleanba/061-pfinal2/wandb/run": [
+    "/training/cleanba/061-pfinal2/wandb": [
         "run-20240618_205932-syb50iz7",
         "run-20240618_210240-28n07cac",
         "run-20240618_210241-qqp0kn15",
@@ -18,14 +18,14 @@ group_to_subdir = {
         "run-20240618_205941-gobfm3wm",
         "run-20240618_205934-jl6bq8ih",
     ],
-    "/training/cleanba/061-pfinal2-drc11/wandb/run": [
+    "/training/cleanba/061-pfinal2-drc11/wandb": [
         "run-20240623_041338-3i5nocf6",
         "run-20240623_041344-v2fm2qze",
         "run-20240623_041342-nom9jda6",
         "run-20240623_041343-3a2pv9yr",
         "run-20240623_041343-eue6pax7",
     ],
-    "/training/cleanba/064-ablate-back-fixed/wandb/run": [
+    "/training/cleanba/064-ablate-back-fixed/wandb": [
         "run-20240627_064349-m7mai9i8",
         "run-20240627_064413-jasi92bn",
         "run-20240627_064416-jo2nnr0k",
@@ -51,7 +51,7 @@ group_to_subdir = {
         "run-20240627_064405-lzazikkc",
         "run-20240627_064413-m3cs1npf",
     ],
-    "/training/cleanba/064-ablate-back/wandb/run": [
+    "/training/cleanba/064-ablate-back/wandb": [
         "run-20240626_120809-yr6do0ok",
         "run-20240626_211636-yclelqia",
         "run-20240626_154851-55ey3fe3",
@@ -183,7 +183,7 @@ group_to_subdir = {
         "run-20240626_114017-h4i9lfxd",
         "run-20240626_154900-9v4g706b",
     ],
-    "/training/cleanba/066-try-with-old-params/wandb/run": [
+    "/training/cleanba/066-try-with-old-params/wandb": [
         "run-20240628_054537-zwyqbhfi",
         "run-20240628_054527-204i1sft",
         "run-20240628_053822-ykcwwnv5",
@@ -218,11 +218,14 @@ for load_path in runs_to_evaluate:
         config.load_other_run = load_path
         config.only_last_checkpoint = True
 
-        for env_name, eval_env in config.eval_envs.items():
-            env = eval_env.env
-            env.steps_to_think = [0, 2, 4, 6, 8, 10, 12]
-            if env_name == "valid_medium":
-                env.n_levels_to_load = 5000
+        env = config.eval_envs.pop("valid_medium")
+        env.env.split = "planning"
+        env.env.n_levels_to_load = 5000
+        env.n_episode_multiple = 10
+        config.eval_envs["planning_medium"] = env
+
+        for env in config.eval_envs.values():
+            env.env.steps_to_think = [0, 2, 4, 6, 8, 10, 12]
         return config
 
     cli, _ = update_fns_to_cli(default_load_and_eval, update)
@@ -230,7 +233,7 @@ for load_path in runs_to_evaluate:
 
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = len(clis)
+RUNS_PER_MACHINE = len(clis) // 5
 for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
         ["python", "-m", "cleanba.load_and_eval", *clis[update_fns_i + j]]
@@ -240,7 +243,7 @@ for update_fns_i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
             this_run_clis,
-            CONTAINER_TAG="cbd47ce-main",
+            CONTAINER_TAG="6f8d92b-main",
             CPU=12,
             MEMORY="40G",
             GPU=1,
