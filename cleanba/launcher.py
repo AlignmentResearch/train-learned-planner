@@ -50,6 +50,7 @@ class FlamingoRun:
     TRAINING_MOUNT: Path = Path("/training")
     PRIORITY: str = "normal-batch"
     XLA_PYTHON_CLIENT_MEM_FRACTION: str = ".99"
+    parallel: bool = True
 
     def format_args(self) -> dict[str, str | int]:
         return {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if f.name != "cfg"}
@@ -110,7 +111,7 @@ def create_jobs(
                 [
                     f"WANDB_JOB_NAME={shlex.quote(wandb_job_name)}",
                     *map(shlex.quote, run_cli),
-                    "&",
+                    "&" if run.parallel else ";",
                 ]
             )
         split_command.append("wait")

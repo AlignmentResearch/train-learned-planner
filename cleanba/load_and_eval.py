@@ -15,8 +15,9 @@ from cleanba.evaluate import EvalConfig
 
 
 def default_eval_envs(CACHE_PATH=Path("/opt/sokoban_cache")) -> dict[str, EvalConfig]:
-    return dict(
-        planning_medium=EvalConfig(
+    steps_to_think = [0, 1, 2, 4, 6, 8, 10, 12, 16, 24, 32]
+    envs = dict(
+        test_unfiltered=EvalConfig(
             EnvpoolBoxobanConfig(
                 seed=0,
                 load_sequentially=True,
@@ -24,20 +25,54 @@ def default_eval_envs(CACHE_PATH=Path("/opt/sokoban_cache")) -> dict[str, EvalCo
                 min_episode_steps=120,
                 num_envs=500,
                 cache_path=CACHE_PATH,
-                split="planning",
-                difficulty="medium",
-                n_levels_to_load=-1,
+                split=None,
+                difficulty="hard",
+                n_levels_to_load=1000,
             ),
             n_episode_multiple=2,
-            steps_to_think=[0, 1, 2, 4, 6, 8, 12, 16, 20, 24, 28, 32],
-        )
+            steps_to_think=steps_to_think,
+        ),
+        valid_medium=EvalConfig(
+            EnvpoolBoxobanConfig(
+                seed=0,
+                load_sequentially=True,
+                max_episode_steps=120,
+                min_episode_steps=120,
+                num_envs=500,
+                cache_path=CACHE_PATH,
+                split="valid",
+                difficulty="medium",
+                n_levels_to_load=50_000,
+            ),
+            n_episode_multiple=100,
+            steps_to_think=steps_to_think,
+        ),
+        hard=EvalConfig(
+            EnvpoolBoxobanConfig(
+                seed=0,
+                load_sequentially=True,
+                max_episode_steps=120,
+                min_episode_steps=120,
+                num_envs=119,
+                cache_path=CACHE_PATH,
+                split=None,
+                difficulty="hard",
+                n_levels_to_load=3332,
+            ),
+            n_episode_multiple=28,
+            steps_to_think=steps_to_think,
+        ),
     )
+    for env in envs.values():
+        assert env.env.num_envs * env.n_episode_multiple == env.env.n_levels_to_load
+    return envs
 
 
 @dataclasses.dataclass
 class LoadAndEvalArgs:
     load_other_run: Path
     eval_envs: dict[str, EvalConfig] = dataclasses.field(default_factory=default_eval_envs)
+    only_last_checkpoint: bool = False
 
     # for Writer
     base_run_dir: Path = Path("/training/cleanba")
@@ -73,7 +108,8 @@ def load_and_eval(args: LoadAndEvalArgs):
     checkpoints_to_load.sort()
 
     assert len(set(cp_candidate.parent for _, cp_candidate in checkpoints_to_load)) == 1
-
+    if args.only_last_checkpoint:
+        checkpoints_to_load = checkpoints_to_load[-1:]
     print("Going to load from checkpoints: ", checkpoints_to_load)
     policy, _, cp_cfg, train_state, _ = load_train_state(checkpoints_to_load[0][1])
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
