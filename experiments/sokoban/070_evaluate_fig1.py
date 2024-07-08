@@ -6,11 +6,11 @@ from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 from cleanba.load_and_eval import LoadAndEvalArgs, default_load_and_eval
 
 group_to_subdir = {
-    "/training/cleanba/061-pfinal2/wandb/run": [
+    "/training/cleanba/061-pfinal2/wandb/": [
         "run-20240618_205934-bkynosqi",
         "run-20240618_205932-syb50iz7",
     ],
-    "/training/cleanba/061-pfinal2-drc11/wandb/run": [
+    "/training/cleanba/061-pfinal2-drc11/wandb/": [
         "run-20240623_041343-eue6pax7",
     ],
 }

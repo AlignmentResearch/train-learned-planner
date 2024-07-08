@@ -111,16 +111,17 @@ def create_jobs(
                 [
                     f"WANDB_JOB_NAME={shlex.quote(wandb_job_name)}",
                     *map(shlex.quote, run_cli),
-                    "&" if run.parallel else ";",
                 ]
+                + [("&" if run.parallel else " || true ;") if len(run.commands) > 1 else ""],
             )
-        split_command.append("wait")
+        if run.parallel and len(run.commands) > 1:
+            split_command.append("wait")
         assert wandb_job_name is not None
 
         job = job_template.format(
             WANDB_RUN_GROUP=group,
             WANDB_JOB_NAME=wandb_job_name,
-            NAME=job_name[:63],
+            NAME=job_name[:10],
             LAUNCH_ID=launch_id,
             WANDB_ENTITY=entity,
             WANDB_PROJECT=project,
