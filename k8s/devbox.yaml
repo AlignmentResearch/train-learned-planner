@@ -23,6 +23,9 @@ spec:
         emptyDir:
           medium: Memory
           sizeLimit: "{SHM_SIZE}"
+      - name: training
+        persistentVolumeClaim:
+          claimName: learned-planners
 
       containers:
       - name: devbox-container
@@ -40,7 +43,6 @@ spec:
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
-            ln -s "$(pwd)/levels-for-evaluating-planning" "/opt/sokoban_cache/boxoban-levels-master/medium/planning"
             pip install matplotlib jupyter
             pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
             sleep 1d
@@ -81,7 +83,8 @@ spec:
           subPath: tmux.conf
         - name: dshm
           mountPath: /dev/shm
-
+        - name: training
+          mountPath: /training
       restartPolicy: Never
       imagePullSecrets:
       - name: docker
