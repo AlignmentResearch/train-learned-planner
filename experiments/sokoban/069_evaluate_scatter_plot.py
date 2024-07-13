@@ -211,11 +211,9 @@ for load_path in runs_to_evaluate:
         config.load_other_run = load_path
         config.only_last_checkpoint = True
 
-        env = config.eval_envs.pop("valid_medium")
-        env.env.split = "planning"
+        env = config.eval_envs.get("valid_medium")
         env.env.n_levels_to_load = 5000
         env.n_episode_multiple = 10
-        config.eval_envs["planning_medium"] = env
 
         for env in config.eval_envs.values():
             env.env.steps_to_think = [0, 2, 4, 6, 8, 10, 12]
