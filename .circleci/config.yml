@@ -4,17 +4,13 @@ parameters:
   docker_img_version:
     # Docker image version for running tests.
     type: string
-    default: "cbd47ce-main"
+    default: "6f8d92b-main"
 
 workflows:
   test-jobs:
     jobs:
-      - format:
-          context:
-            - ghcr-auth
-      - py-tests:
-          context:
-            - ghcr-auth
+      - format
+      - py-tests
 
 commands:
   save-worker-test-results:
@@ -31,11 +27,8 @@ commands:
 jobs:
   format:
     docker:
-      - image: ghcr.io/alignmentresearch/lp-cleanba:<< pipeline.parameters.docker_img_version >>
-        auth:
-          username: "$GHCR_DOCKER_USER"
-          password: "$GHCR_DOCKER_TOKEN"
-    resource_class: alignmentresearch/small
+      - image: ghcr.io/alignmentresearch/train-learned-planner:<< pipeline.parameters.docker_img_version >>
+    resource_class: small
     working_directory: /workspace
     steps:
       - recursive-checkout
@@ -48,11 +41,8 @@ jobs:
 
   py-tests:
     docker:
-      - image: ghcr.io/alignmentresearch/lp-cleanba:<< pipeline.parameters.docker_img_version >>
-        auth:
-          username: "$GHCR_DOCKER_USER"
-          password: "$GHCR_DOCKER_TOKEN"
-    resource_class: alignmentresearch/medium
+      - image: ghcr.io/alignmentresearch/train-learned-planner:<< pipeline.parameters.docker_img_version >>
+    resource_class: medium
     working_directory: /workspace
     steps:
       - recursive-checkout
