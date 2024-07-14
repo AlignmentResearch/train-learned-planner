@@ -19,6 +19,7 @@ import chex
 import databind.core.converter
 import farconf
 import flax
+import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -748,7 +749,10 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
+def load_train_state(
+    dir: Path,
+    env: Optional[gym.vector.VectorEnv] = None,
+) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
     try:
@@ -772,7 +776,9 @@ def load_train_state(dir: Path) -> tuple[Policy, PolicyCarryT, Args, TrainState,
         else:
             raise
 
-    policy, carry, params = args.net.init_params(args.train_env.make(), jax.random.PRNGKey(1234))
+    if env is None:
+        env = args.train_env.make()
+    policy, carry, params = args.net.init_params(env, jax.random.PRNGKey(1234))
 
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
 
