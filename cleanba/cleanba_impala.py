@@ -749,7 +749,10 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
         f.write(flax.serialization.to_bytes(train_state))
 
 
-def load_train_state(dir: Path, env: Optional[gym.vector.VectorEnv] = None) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
+def load_train_state(
+    dir: Path,
+    env: Optional[gym.vector.VectorEnv] = None,
+) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
     try:
