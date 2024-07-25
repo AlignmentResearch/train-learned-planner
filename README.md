@@ -1,8 +1,8 @@
 # Train Learned Planners
 
-This repository contains training code for the paper ["Planning behavior in a recurrent neural network that plays Sokoban"](https://openreview.net/forum?id=T9sB3S2hok), from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) (arXiv TODO)
+This repository contains training code for the paper ["Planning behavior in a recurrent neural network that plays Sokoban"](https://openreview.net/forum?id=T9sB3S2hok), from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) ([arXiv](https://arxiv.org/abs/2407.15421))
 
-The [learned-planners repository](TODO: link) lets you download and use the trained neural networks. If you just want to do interpretability, you should go there.
+The [learned-planner repository](https://github.com/AlignmentResearch/learned-planner) lets you download and use the trained neural networks. If you just want to do interpretability, you should go there.
 
 ## :rocket: Running Training
 
@@ -91,5 +91,11 @@ You can still use non-envpool environments by using `BoxobanConfig` and `Sokoban
 If you use this code, please cite our work:
 
 ```bibtex
-TODO
+@inproceedings{garriga-alonso2024planning,
+    title={Planning behavior in a recurrent neural network that plays Sokoban},
+    author={Adri{\`a} Garriga-Alonso and Mohammad Taufeeque and Adam Gleave},
+    booktitle={ICML 2024 Workshop on Mechanistic Interpretability},
+    year={2024},
+    url={https://openreview.net/forum?id=T9sB3S2hok}
+}
 ```
