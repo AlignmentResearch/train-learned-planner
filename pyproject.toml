@@ -35,17 +35,18 @@ exclude = [
 reportPrivateImportUsage = "warning"
 
 [project]
-name = "lp-cleanba"
+name = "train-learned-planner"
 version = "1.0.0"
-description = ""
+description = "Code for training a DRC planner on Sokoban"
 authors = [
-    {name="Costa Huang", email="costa.huang@outlook.com"},
     {name="Adrià Garriga-Alonso", email="adria@far.ai"},
+    {name="Mohammad Taufeeque", email="taufeeque@far.ai"},
+    {name="Costa Huang", email="costa.huang@outlook.com"},
 ]
 readme = "README.md"
 
 dependencies = [
-    "tyro ~=0.5.5",
+    "rich ~= 13.7",
     "tensorboard ~=2.12.0",
     "flax ~=0.8.0",
     "optax ~=0.1.4",

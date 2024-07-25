@@ -1,6 +1,7 @@
 # Train Learned Planners
 
-This repository contains training code for the paper ["Planning behavior in a recurrent neural network that plays Sokoban"](https://openreview.net/forum?id=T9sB3S2hok), from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) ([arXiv](https://arxiv.org/abs/2407.15421))
+This repository contains training code for the paper ["Planning behavior in a recurrent neural network that plays Sokoban"](https://openreview.net/forum?id=T9sB3S2hok), from the ICML 2024 Mechanistic Interpretability Workshop. ([OpenReview](https://openreview.net/forum?id=T9sB3S2hok)) ([arXiv](https://arxiv.org/abs/2407.15421)). It is based on
+[CleanRL](https://github.com/vwxyzjn/cleanba).
 
 The [learned-planner repository](https://github.com/AlignmentResearch/learned-planner) lets you download and use the trained neural networks. If you just want to do interpretability, you should go there.
 
