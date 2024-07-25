@@ -1,4 +1,4 @@
-APPLICATION_NAME ?= lp-cleanba
+APPLICATION_NAME ?= train-learned-planner
 APPLICATION_URL ?= ghcr.io/alignmentresearch/${APPLICATION_NAME}
 DOCKERFILE ?= Dockerfile
 
@@ -16,6 +16,7 @@ default: release/main
 RELEASE_PREFIX ?= latest
 BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 
+# NOTE: to bootstrap `pip-tools` image, comment out the `requirements.txt` dependency here and run `make release/main-pip-tools`
 .build/with-reqs/${BUILD_PREFIX}/%: requirements.txt
 	mkdir -p .build/with-reqs/${BUILD_PREFIX}
 	docker pull "${APPLICATION_URL}:${BUILD_PREFIX}-$*" || true
