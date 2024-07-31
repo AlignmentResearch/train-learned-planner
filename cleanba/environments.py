@@ -295,9 +295,14 @@ def convert_to_cleanba_config(env_config, asynchronous=False):
     if isinstance(env_config, EnvConfig):
         return env_config
     cls_name = env_config.__class__.__name__
+    all_classes = globals()
+    all_classes["EnvpoolSokobanVecEnvConfig"] = EnvpoolBoxobanConfig
     assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
-    args["asynchronous"] = asynchronous
     args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
+    if cls_name == "EnvpoolSokobanVecEnvConfig":
+        args.pop("px_scale", None)
+    else:
+        args["asynchronous"] = asynchronous
     return globals()[cls_name](**args)
