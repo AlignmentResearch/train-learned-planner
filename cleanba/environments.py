@@ -143,6 +143,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     min_episode_steps: int = 60
     tinyworld_obs: bool = False
     tinyworld_render: bool = False
+    render_mode: str = "rgb_8x8"  # can be "rgb_array" or "rgb_8x8"
     terminate_on_first_box: bool = False
 
     reward_finished: float = 10.0  # Reward for completing a level
@@ -157,7 +158,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             num_envs=self.n_envs,
             tinyworld_obs=self.tinyworld_obs,
             tinyworld_render=self.tinyworld_render,
-            render_mode="rgb_8x8",
+            render_mode=self.render_mode,
             # Sokoban env uses `max_steps` internally
             max_steps=self.max_episode_steps,
             # Passing `max_episode_steps` to Gymnasium makes it add a TimeLimitWrapper
@@ -294,4 +295,6 @@ def convert_to_cleanba_config(env_config):
         return env_config
     cls_name = env_config.__class__.__name__
     assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
-    return globals()[cls_name](**dataclasses.asdict(env_config))
+    args = dataclasses.asdict(env_config)
+    args.pop("n_envs_to_render", None)
+    return globals()[cls_name](**args)
