@@ -296,5 +296,6 @@ def convert_to_cleanba_config(env_config):
     cls_name = env_config.__class__.__name__
     assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
+    args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
     return globals()[cls_name](**args)
