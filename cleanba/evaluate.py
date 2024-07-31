@@ -21,7 +21,7 @@ class EvalConfig:
 
     def run(self, policy: Policy, get_action_fn, params, *, key: jnp.ndarray) -> dict[str, float]:
         key, carry_key = jax.random.split(key, 2)
-        episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
+        episode_starts_no = jnp.zeros(self.env.n_envs, dtype=jnp.bool_)
 
         metrics = {}
         for steps_to_think in self.steps_to_think:

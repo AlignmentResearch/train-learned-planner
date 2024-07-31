@@ -16,12 +16,12 @@ from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, Policy
 class Args:
     train_env: EnvConfig = dataclasses.field(  # Environment to do training, including seed
         # default_factory=lambda: SokobanConfig(
-        #     asynchronous=False, max_episode_steps=40, num_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
+        #     asynchronous=False, max_episode_steps=40,n_envs=64, tinyworld_obs=True, dim_room=(5, 5), num_boxes=1
         # )
         default_factory=lambda: AtariEnv(env_id="Breakout-v5"),
     )
     eval_envs: dict[str, EvalConfig] = dataclasses.field(  # How to evaluate the algorithm? Including envs and seeds
-        default_factory=lambda: dict(eval=EvalConfig(AtariEnv(env_id="Breakout-v5", num_envs=128)))
+        default_factory=lambda: dict(eval=EvalConfig(AtariEnv(env_id="Breakout-v5", n_envs=128)))
     )
     eval_at_steps: frozenset[int] = frozenset(
         [195 * i for i in range(1, 10)]
@@ -85,7 +85,7 @@ def sokoban_resnet() -> Args:
         train_env=EnvpoolBoxobanConfig(
             max_episode_steps=120,
             min_episode_steps=120 * 3 // 4,
-            num_envs=1,
+            n_envs=1,
             cache_path=CACHE_PATH,
             split="train",
             difficulty="unfiltered",
@@ -95,7 +95,7 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="valid",
                     difficulty="unfiltered",
@@ -106,7 +106,7 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="test",
                     difficulty="unfiltered",
@@ -117,7 +117,7 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="train",
                     difficulty="medium",
@@ -128,7 +128,7 @@ def sokoban_resnet() -> Args:
                 EnvpoolBoxobanConfig(
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="valid",
                     difficulty="medium",
@@ -151,7 +151,7 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
         train_env=EnvpoolBoxobanConfig(
             max_episode_steps=120,
             min_episode_steps=120 * 3 // 4,
-            num_envs=1,
+            n_envs=1,
             cache_path=CACHE_PATH,
             split="train",
             difficulty="unfiltered",
@@ -162,7 +162,7 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
                     seed=5454,
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="test",
                     difficulty="unfiltered",
@@ -174,7 +174,7 @@ def sokoban_drc(n_recurrent: int, num_repeats: int) -> Args:
                     seed=5454,
                     max_episode_steps=240,
                     min_episode_steps=240,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="valid",
                     difficulty="medium",
@@ -228,7 +228,7 @@ def sokoban_resnet59():
             seed=1234,
             max_episode_steps=120,
             min_episode_steps=30,
-            num_envs=1,
+            n_envs=1,
             cache_path=CACHE_PATH,
             split="train",
             difficulty="unfiltered",
@@ -240,7 +240,7 @@ def sokoban_resnet59():
                     load_sequentially=True,
                     max_episode_steps=120,
                     min_episode_steps=120,
-                    num_envs=256,
+                    n_envs=256,
                     cache_path=CACHE_PATH,
                     split="planning",
                     difficulty="medium",

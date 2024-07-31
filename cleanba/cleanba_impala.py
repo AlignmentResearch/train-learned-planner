@@ -314,7 +314,7 @@ def rollout(
     envs = dataclasses.replace(
         args.train_env,
         seed=args.train_env.seed + actor_id,
-        num_envs=args.local_num_envs,
+        n_envs=args.local_num_envs,
     ).make()
 
     eval_envs: list[tuple[str, EvalConfig]] = list(args.eval_envs.items())
@@ -347,7 +347,7 @@ def rollout(
     # Initialize carry_t and episode_starts_t
     key, carry_key = jax.random.split(key)
     policy, carry_t, _ = args.net.init_params(envs, carry_key)
-    episode_starts_t = np.ones(envs.num_envs, dtype=np.bool_)
+    episode_starts_t = np.ones(envs.n_envs, dtype=np.bool_)
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
@@ -568,7 +568,7 @@ def train(
 ):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
-    train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
+    train_env_cfg = dataclasses.replace(args.train_env, n_envs=args.local_num_envs)
     with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
         pprint(runtime_info)
         if writer is None:

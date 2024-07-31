@@ -64,7 +64,7 @@ def default_eval_envs(CACHE_PATH=Path("/opt/sokoban_cache")) -> dict[str, EvalCo
         ),
     )
     for env in envs.values():
-        assert env.env.num_envs * env.n_episode_multiple == env.env.n_levels_to_load
+        assert env.env.n_envs * env.n_episode_multiple == env.env.n_levels_to_load
     return envs
 
 

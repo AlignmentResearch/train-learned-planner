@@ -113,5 +113,5 @@ class MockSokobanEnvConfig(EnvConfig):
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        env_fns = [partial(MockSokobanEnv, cfg=self)] * self.num_envs
+        env_fns = [partial(MockSokobanEnv, cfg=self)] * self.n_envs
         return partial(SeededSyncVectorEnv, env_fns, seed=self.seed)

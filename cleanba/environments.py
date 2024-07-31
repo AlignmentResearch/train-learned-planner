@@ -21,7 +21,7 @@ def random_seed() -> int:
 @dataclasses.dataclass
 class EnvConfig(abc.ABC):
     max_episode_steps: int
-    num_envs: int = 0  # gets overwritten anyways
+    n_envs: int = 0  # gets overwritten anyways
     seed: int = dataclasses.field(default_factory=random_seed)
 
     @property
@@ -48,7 +48,7 @@ class EnvpoolEnvConfig(EnvConfig):
 
         dummy_spec = envpool.make_spec(self.env_id)
         special_kwargs = dict(
-            batch_size=self.num_envs,
+            batch_size=self.n_envs,
         )
         SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
         env_kwargs = {}
@@ -61,7 +61,7 @@ class EnvpoolEnvConfig(EnvConfig):
 
         vec_envs_fn = partial(
             EnvpoolVectorEnv,
-            self.num_envs,
+            self.n_envs,
             partial(envpool.make_gymnasium, self.env_id, **special_kwargs, **env_kwargs),
         )
         return vec_envs_fn
@@ -154,7 +154,7 @@ class BaseSokobanEnvConfig(EnvConfig):
 
     def env_kwargs(self) -> dict[str, Any]:
         return dict(
-            num_envs=self.num_envs,
+            num_envs=self.n_envs,
             tinyworld_obs=self.tinyworld_obs,
             tinyworld_render=self.tinyworld_render,
             render_mode="rgb_8x8",
@@ -287,3 +287,11 @@ class AtariEnv(EnvpoolEnvConfig):
     noop_max: int = 1
     full_action_space: bool = True  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
     reward_clip: bool = True
+
+
+def convert_to_cleanba_config(env_config):
+    if isinstance(env_config, EnvConfig):
+        return env_config
+    cls_name = env_config.__class__.__name__
+    assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
+    return globals()[cls_name](**dataclasses.asdict(env_config))
