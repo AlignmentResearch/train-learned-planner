@@ -19,7 +19,6 @@ import chex
 import databind.core.converter
 import farconf
 import flax
-import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -32,7 +31,7 @@ from typing_extensions import Self
 
 from cleanba.config import Args
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import EnvConfig, convert_to_cleanba_config, random_seed
+from cleanba.environments import convert_to_cleanba_config, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
