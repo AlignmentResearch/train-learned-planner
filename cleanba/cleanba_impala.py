@@ -751,7 +751,7 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
 
 def load_train_state(
     dir: Path,
-    env_cfg: Optional[EnvConfig] = None,  # environment config from the learned_planner package are also supported
+    env_cfg=None,  # environment config from the learned_planner package are also supported
 ) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
