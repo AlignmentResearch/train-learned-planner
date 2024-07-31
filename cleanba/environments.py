@@ -291,11 +291,14 @@ class AtariEnv(EnvpoolEnvConfig):
 
 
 def convert_to_cleanba_config(env_config):
+    """Converts an environment config from the learned_planner package to a cleanba environment config.
+    Asynchronous is set to False."""
     if isinstance(env_config, EnvConfig):
         return env_config
     cls_name = env_config.__class__.__name__
     assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
+    args["asynchronous"] = False
     args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
     return globals()[cls_name](**args)
