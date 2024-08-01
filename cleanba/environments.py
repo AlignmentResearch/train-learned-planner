@@ -294,10 +294,13 @@ def convert_to_cleanba_config(env_config, asynchronous=False):
     """Converts an environment config from the learned_planner package to a cleanba environment config."""
     if isinstance(env_config, EnvConfig):
         return env_config
+    env_classes_map = dict(
+        EnvpoolSokobanVecEnvConfig=EnvpoolBoxobanConfig,
+        BoxobanConfig=BoxobanConfig,
+        SokobanConfig=SokobanConfig,
+    )
     cls_name = env_config.__class__.__name__
-    all_classes = globals()
-    all_classes["EnvpoolSokobanVecEnvConfig"] = EnvpoolBoxobanConfig
-    assert cls_name in globals(), f"{cls_name=} not available in cleanba.environments"
+    assert cls_name in env_classes_map, f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
     args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
@@ -305,4 +308,4 @@ def convert_to_cleanba_config(env_config, asynchronous=False):
         args.pop("px_scale", None)
     else:
         args["asynchronous"] = asynchronous
-    return globals()[cls_name](**args)
+    return env_classes_map[cls_name](**args)
