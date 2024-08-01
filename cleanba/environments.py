@@ -143,6 +143,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     min_episode_steps: int = 60
     tinyworld_obs: bool = False
     tinyworld_render: bool = False
+    render_mode: str = "rgb_8x8"  # can be "rgb_array" or "rgb_8x8"
     terminate_on_first_box: bool = False
 
     reward_finished: float = 10.0  # Reward for completing a level
@@ -157,7 +158,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             num_envs=self.num_envs,
             tinyworld_obs=self.tinyworld_obs,
             tinyworld_render=self.tinyworld_render,
-            render_mode="rgb_8x8",
+            render_mode=self.render_mode,
             # Sokoban env uses `max_steps` internally
             max_steps=self.max_episode_steps,
             # Passing `max_episode_steps` to Gymnasium makes it add a TimeLimitWrapper
@@ -287,3 +288,24 @@ class AtariEnv(EnvpoolEnvConfig):
     noop_max: int = 1
     full_action_space: bool = True  # Machado et al. 2017 (Revisitng ALE: Eval protocols) Tab. 5
     reward_clip: bool = True
+
+
+def convert_to_cleanba_config(env_config, asynchronous=False):
+    """Converts an environment config from the learned_planner package to a cleanba environment config."""
+    if isinstance(env_config, EnvConfig):
+        return env_config
+    env_classes_map = dict(
+        EnvpoolSokobanVecEnvConfig=EnvpoolBoxobanConfig,
+        BoxobanConfig=BoxobanConfig,
+        SokobanConfig=SokobanConfig,
+    )
+    cls_name = env_config.__class__.__name__
+    assert cls_name in env_classes_map, f"{cls_name=} not available in cleanba.environments"
+    args = dataclasses.asdict(env_config)
+    args["num_envs"] = args.pop("n_envs")
+    args.pop("n_envs_to_render", None)
+    if cls_name == "EnvpoolSokobanVecEnvConfig":
+        args.pop("px_scale", None)
+    else:
+        args["asynchronous"] = asynchronous
+    return env_classes_map[cls_name](**args)

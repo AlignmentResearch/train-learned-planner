@@ -19,7 +19,6 @@ import chex
 import databind.core.converter
 import farconf
 import flax
-import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -32,7 +31,7 @@ from typing_extensions import Self
 
 from cleanba.config import Args
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import random_seed
+from cleanba.environments import convert_to_cleanba_config, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -751,7 +750,7 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
 
 def load_train_state(
     dir: Path,
-    env: Optional[gym.vector.VectorEnv] = None,
+    env_cfg=None,  # environment config from the learned_planner package are also supported
 ) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
@@ -776,8 +775,10 @@ def load_train_state(
         else:
             raise
 
-    if env is None:
-        env = args.train_env.make()
+    if env_cfg is None:
+        env_cfg = args.train_env
+    env_cfg = convert_to_cleanba_config(env_cfg)  # converts environment config from the learned_planner package
+    env = env_cfg.make()
     policy, carry, params = args.net.init_params(env, jax.random.PRNGKey(1234))
 
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
