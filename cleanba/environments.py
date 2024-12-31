@@ -97,6 +97,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
+    reward_noop: float = 0.0  # Addtional Reward for doing nothing
     verbose: int = 0  # Verbosity level [0-2]
     min_episode_steps: int = 0  # The minimum length of an episode.
     load_sequentially: bool = False
@@ -149,6 +150,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
+    reward_noop: float = 0.0  # Addtional reward for doing nothing
 
     reset: bool = False
     asynchronous: bool = True
@@ -175,6 +177,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             reward_box_on_target=self.reward_box,
             penalty_box_off_target=-self.reward_box,
             penalty_for_step=self.reward_step,
+            reward_noop=self.reward_noop,
         )
 
 
