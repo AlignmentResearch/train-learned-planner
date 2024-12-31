@@ -110,7 +110,7 @@ def get_cycles(
     cycle_starts_within=40,
     min_cycle_length=2,
 ):
-    assert all_obs.shape[1:] == (3, 10, 10)
+    assert all_obs.shape[1] == 3 and all_obs.shape[2] == all_obs.shape[3], all_obs.shape
     assert last_box_time_step is not None
     all_obs = all_obs[:last_box_time_step]
     all_obs = all_obs.reshape(all_obs.shape[0], 1, *all_obs.shape[1:])
