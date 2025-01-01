@@ -29,7 +29,7 @@ class EvalConfig:
             all_episode_returns = []
             all_episode_lengths = []
             all_episode_successes = []
-            all_episode_num_cycles = []
+            num_cycles = 0
             cycle_lens = 0
             num_noops = 0
             for minibatch_idx in range(self.n_episode_multiple):
@@ -54,6 +54,7 @@ class EvalConfig:
                     episode_success = np.zeros(envs.num_envs, dtype=np.bool_)
                     episode_returns = np.zeros(envs.num_envs, dtype=np.float64)
                     episode_lengths = np.zeros(envs.num_envs, dtype=np.int64)
+                    last_box_time_step = -1 * np.ones(envs.num_envs, dtype=np.int64)
 
                     i = 0
                     all_obs = [obs]
@@ -73,6 +74,9 @@ class EvalConfig:
                         episode_lengths[~eps_done] += 1
                         episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
 
+                        # assumes only box pushes are positive rewards. 
+                        last_box_time_step[~eps_done][rewards[~eps_done] > 0] = episode_lengths[~eps_done][rewards[~eps_done] > 0]
+
                         # Set as done the episodes which are done
                         eps_done |= truncated | terminated
 
@@ -80,11 +84,13 @@ class EvalConfig:
                     all_episode_lengths.append(episode_lengths)
                     all_episode_successes.append(episode_success)
                     for env_idx in range(envs.num_envs):
+                        if last_box_time_step[env_idx] == -1:
+                            continue
                         cycles = get_cycles(
                             np.stack([all_obs[time_idx][env_idx] for time_idx in range(episode_lengths[env_idx])]),
-                            last_box_time_step=episode_lengths[env_idx],
+                            last_box_time_step=last_box_time_step[env_idx],
                         )
-                        all_episode_num_cycles.append(len(cycles))
+                        num_cycles += len(cycles)
                         cycle_lens += sum(cyc_len for _, cyc_len in cycles)
 
                     total_time = time.time() - start_time
@@ -95,7 +101,7 @@ class EvalConfig:
                     f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
                     f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
                     f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
-                    f"{steps_to_think:02d}_episode_num_cycles": float(np.mean(all_episode_num_cycles)),
+                    f"{steps_to_think:02d}_episode_num_cycles": num_cycles / (self.n_episode_multiple * self.env.num_envs),
                     f"{steps_to_think:02d}_episode_cycle_lens": cycle_lens / (self.n_episode_multiple * self.env.num_envs),
                     f"{steps_to_think:02d}_episode_num_noops_per_eps": num_noops
                     / (self.n_episode_multiple * self.env.num_envs),
