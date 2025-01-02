@@ -145,3 +145,5 @@ envpool
 
 .sokoban_cache
 .build
+.vscode
+k8s_copy/
