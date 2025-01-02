@@ -43,6 +43,7 @@ click==8.1.8
 cloudpickle==3.1.0
     # via
     #   gym
+    #   gymnasium
     #   tensorflow-probability
 cmdkit==2.7.7
     # via names-generator
@@ -114,6 +115,10 @@ gym==0.26.2
     # via train-learned-planner (pyproject.toml)
 gym-notices==0.0.8
     # via gym
+gymnasium==0.26.3
+    # via train-learned-planner (pyproject.toml)
+gymnasium-notices==0.0.1
+    # via gymnasium
 huggingface-hub==0.23.5
     # via train-learned-planner (pyproject.toml)
 humanize==4.11.0
@@ -193,6 +198,7 @@ numpy==1.26.4
     #   dm-env
     #   flax
     #   gym
+    #   gymnasium
     #   imageio
     #   jax
     #   jaxlib
