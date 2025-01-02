@@ -74,8 +74,10 @@ class EvalConfig:
                         episode_lengths[~eps_done] += 1
                         episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
 
-                        # assumes only box pushes are positive rewards. 
-                        last_box_time_step[~eps_done][rewards[~eps_done] > 0] = episode_lengths[~eps_done][rewards[~eps_done] > 0]
+                        # assumes only box pushes are positive rewards.
+                        last_box_time_step[~eps_done][rewards[~eps_done] > 0] = episode_lengths[~eps_done][
+                            rewards[~eps_done] > 0
+                        ]
 
                         # Set as done the episodes which are done
                         eps_done |= truncated | terminated
