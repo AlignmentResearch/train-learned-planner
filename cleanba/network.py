@@ -81,6 +81,7 @@ class PolicySpec(abc.ABC):
 
         key = jax.random.PRNGKey(0)
         params = jax.eval_shape(init_params, key)
+        return params
         return sum(np.prod(v.shape) for v in jax.tree.leaves(params))
 
 

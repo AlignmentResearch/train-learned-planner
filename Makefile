@@ -1,4 +1,4 @@
-APPLICATION_NAME ?= train-learned-planner
+APPLICATION_NAME ?= lp-cleanba
 APPLICATION_URL ?= ghcr.io/alignmentresearch/${APPLICATION_NAME}
 DOCKERFILE ?= Dockerfile
 
@@ -67,7 +67,7 @@ release: release/main
 # Section 2: Make Devboxes and local devboxes (with Docker)
 DEVBOX_UID ?= 1001
 CPU ?= 1
-MEMORY ?= 60G
+MEMORY ?= 20G
 SHM_SIZE ?= 20G
 GPU ?= 0
 
@@ -87,7 +87,8 @@ cuda-devbox/%: devbox/%
 cuda-devbox: cuda-devbox/main
 
 .PHONY: envpool-devbox
-envpool-devbox: devbox/envpool-ci
+envpool-devbox: DEVBOX_UID=0
+envpool-devbox: devbox/envpool
 
 
 .PHONY: docker docker/%
@@ -98,7 +99,7 @@ docker: docker/main
 .PHONY: envpool-docker envpool-docker/%
 envpool-docker/%:
 	docker run -v "$(shell pwd)/third_party/envpool:/app" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
-envpool-docker: envpool-docker/envpool-ci
+envpool-docker: envpool-docker/envpool
 
 # Section 3: project commands
 
