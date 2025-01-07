@@ -1,4 +1,5 @@
 import dataclasses
+import pickle
 import re
 import sys
 from functools import partial
@@ -74,6 +75,7 @@ class LoadAndEvalArgs:
     eval_envs: dict[str, EvalConfig] = dataclasses.field(default_factory=default_eval_envs)
     only_last_checkpoint: bool = False
     checkpoints_to_load: List[str] = dataclasses.field(default_factory=list)
+    save_logs: bool = True
 
     # for Writer
     base_run_dir: Path = Path("/training/cleanba")
@@ -125,6 +127,11 @@ def load_and_eval(args: LoadAndEvalArgs):
         print("Evaluating", cp_path)
         for eval_name, evaluator in args.eval_envs.items():
             log_dict = evaluator.run(policy, get_action_fn, train_state.params, key=jax.random.PRNGKey(1234))
+            if args.save_logs:
+                with writer.save_dir(0) as output_base_path:
+                    with open(output_base_path / f"{eval_name}_metrics_dict.pkl", "wb") as f:
+                        pickle.dump(log_dict, f)
+
             for k, v in log_dict.items():
                 writer.add_scalar(f"{eval_name}/{k}", v, cp_step)
 

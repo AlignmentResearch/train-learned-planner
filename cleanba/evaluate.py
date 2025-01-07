@@ -21,6 +21,7 @@ class EvalConfig:
 
     def run(self, policy: Policy, get_action_fn, params, *, key: jnp.ndarray) -> dict[str, float]:
         key, carry_key = jax.random.split(key, 2)
+        max_steps = min(self.safeguard_max_episode_steps, self.env.max_episode_steps)
         episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
 
         metrics = {}
@@ -29,6 +30,9 @@ class EvalConfig:
             all_episode_returns = []
             all_episode_lengths = []
             all_episode_successes = []
+            all_acts = []
+            all_rewards = []
+            all_cycles = []
             num_cycles = 0
             cycle_lens = 0
             num_noops = 0
@@ -54,12 +58,14 @@ class EvalConfig:
                     episode_success = np.zeros(envs.num_envs, dtype=np.bool_)
                     episode_returns = np.zeros(envs.num_envs, dtype=np.float64)
                     episode_lengths = np.zeros(envs.num_envs, dtype=np.int64)
-                    last_box_time_step = -1 * np.ones(envs.num_envs, dtype=np.int64)
+                    episode_acts = np.zeros((max_steps, envs.num_envs), dtype=np.int32)
+                    episode_rewards = np.zeros((max_steps, envs.num_envs), dtype=np.float32)
 
+                    last_box_time_step = -1 * np.ones(envs.num_envs, dtype=np.int64)
+                    noops_array = np.zeros((envs.num_envs, max_steps), dtype=bool)
                     i = 0
                     all_obs = [obs]
                     while not np.all(eps_done):
-                        i += 1
                         if i >= self.safeguard_max_episode_steps:
                             break
                         carry, action, _, key = get_action_fn(
@@ -67,30 +73,40 @@ class EvalConfig:
                         )
 
                         cpu_action = np.asarray(action)
-                        num_noops += np.sum(cpu_action == 4)
                         obs, rewards, terminated, truncated, infos = envs.step(cpu_action)
                         all_obs.append(obs)
                         episode_returns[~eps_done] += rewards[~eps_done]
                         episode_lengths[~eps_done] += 1
                         episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
 
+                        episode_acts[i, ~eps_done] = cpu_action[~eps_done]
+                        episode_rewards[i, ~eps_done] = rewards[~eps_done]
+                        noops_array[i] = (cpu_action == 4)
                         # assumes only box pushes are positive rewards.
                         indices = np.where((~eps_done) & (rewards > 0))
                         last_box_time_step[indices] = episode_lengths[indices]
 
                         # Set as done the episodes which are done
                         eps_done |= truncated | terminated
+                        i += 1
 
                     all_episode_returns.append(episode_returns)
                     all_episode_lengths.append(episode_lengths)
                     all_episode_successes.append(episode_success)
+
+                    all_acts += [episode_acts[: episode_lengths[i], i] for i in range(envs.num_envs)]
+                    all_rewards += [episode_rewards[: episode_lengths[i], i] for i in range(envs.num_envs)]
+
                     for env_idx in range(envs.num_envs):
                         if last_box_time_step[env_idx] == -1:
+                            all_cycles.append([])
                             continue
+                        num_noops += np.sum(noops_array[env_idx, : last_box_time_step[env_idx]])
                         cycles = get_cycles(
                             np.stack([all_obs[time_idx][env_idx] for time_idx in range(episode_lengths[env_idx])]),
                             last_box_time_step=last_box_time_step[env_idx],
                         )
+                        all_cycles.append(cycles)
                         num_cycles += len(cycles)
                         cycle_lens += sum(cyc_len for _, cyc_len in cycles)
 
@@ -106,6 +122,14 @@ class EvalConfig:
                     f"{steps_to_think:02d}_episode_cycle_lens": cycle_lens / (self.n_episode_multiple * self.env.num_envs),
                     f"{steps_to_think:02d}_episode_num_noops_per_eps": num_noops
                     / (self.n_episode_multiple * self.env.num_envs),
+                    f"{steps_to_think:02d}_all_episode_info": dict(
+                        episode_returns=all_episode_returns,
+                        episode_lengths=all_episode_lengths,
+                        episode_successes=all_episode_successes,
+                        episode_acts=all_acts,
+                        episode_rewards=all_rewards,
+                        all_cycles=all_cycles,
+                    ),
                 }
             )
         return metrics
