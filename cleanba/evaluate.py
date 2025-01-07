@@ -81,7 +81,7 @@ class EvalConfig:
 
                         episode_acts[i, ~eps_done] = cpu_action[~eps_done]
                         episode_rewards[i, ~eps_done] = rewards[~eps_done]
-                        noops_array[i] = (cpu_action == 4)
+                        noops_array[:, i] = (cpu_action == 4)
                         # assumes only box pushes are positive rewards.
                         indices = np.where((~eps_done) & (rewards > 0))
                         last_box_time_step[indices] = episode_lengths[indices]
