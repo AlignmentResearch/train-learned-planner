@@ -95,13 +95,13 @@ def recursive_find_checkpoint(root: Path) -> Iterable[Path]:
             yield from recursive_find_checkpoint(root / x)
 
 
-cp_expr = re.compile("^.*/cp_([0-9]+)$")
+cp_expr = re.compile("^.*/?cp_([0-9]+)$")
 
 
 def load_and_eval(args: LoadAndEvalArgs):
     if args.checkpoints_to_load:
         assert args.only_last_checkpoint is False, "Can't specify both checkpoints_to_load and only_last_checkpoint."
-        checkpoints_to_load = [(int(cp_expr.match(cp).group(1)), Path(cp)) for cp in args.checkpoints_to_load] # type: ignore
+        checkpoints_to_load = [(int(cp_expr.match(cp).group(1)), args.load_other_run / cp) for cp in args.checkpoints_to_load] # type: ignore
     else:
         checkpoints_to_load: List[Tuple[int, Path]] = []
         for cp_candidate in recursive_find_checkpoint(args.load_other_run):
