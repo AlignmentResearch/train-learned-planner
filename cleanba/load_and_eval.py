@@ -73,6 +73,7 @@ class LoadAndEvalArgs:
     load_other_run: Path
     eval_envs: dict[str, EvalConfig] = dataclasses.field(default_factory=default_eval_envs)
     only_last_checkpoint: bool = False
+    checkpoints_to_load: List[str] = dataclasses.field(default_factory=list)
 
     # for Writer
     base_run_dir: Path = Path("/training/cleanba")
@@ -98,13 +99,17 @@ cp_expr = re.compile("^.*/cp_([0-9]+)$")
 
 
 def load_and_eval(args: LoadAndEvalArgs):
-    checkpoints_to_load: List[Tuple[int, Path]] = []
-    for cp_candidate in recursive_find_checkpoint(args.load_other_run):
-        match = cp_expr.match(str(cp_candidate))
-        if match is None:
-            print("Skipping (not matching)", cp_candidate)
-        else:
-            checkpoints_to_load.append((int(match.group(1)), cp_candidate))
+    if args.checkpoints_to_load:
+        assert args.only_last_checkpoint is False, "Can't specify both checkpoints_to_load and only_last_checkpoint."
+        checkpoints_to_load = [(int(cp_expr.match(cp).group(1)), Path(cp)) for cp in args.checkpoints_to_load] # type: ignore
+    else:
+        checkpoints_to_load: List[Tuple[int, Path]] = []
+        for cp_candidate in recursive_find_checkpoint(args.load_other_run):
+            match = cp_expr.match(str(cp_candidate))
+            if match is None:
+                print("Skipping (not matching)", cp_candidate)
+            else:
+                checkpoints_to_load.append((int(match.group(1)), cp_candidate))
     checkpoints_to_load.sort()
 
     assert len(set(cp_candidate.parent for _, cp_candidate in checkpoints_to_load)) == 1
