@@ -138,11 +138,12 @@ class EvalConfig:
 def get_cycles(
     all_obs,
     last_box_time_step,
-    cycle_starts_within=40,
-    min_cycle_length=2,
+    cycle_starts_within=None,
+    min_cycle_length=1,
 ):
     assert all_obs.shape[1] == 3 and all_obs.shape[2] == all_obs.shape[3], all_obs.shape
     assert last_box_time_step is not None
+    cycle_starts_within = cycle_starts_within or all_obs.shape[0]
     all_obs = all_obs[:last_box_time_step]
     all_obs = all_obs.reshape(all_obs.shape[0], 1, *all_obs.shape[1:])
     obs_repeat = np.all(all_obs == all_obs.transpose(1, 0, 2, 3, 4), axis=(2, 3, 4))
