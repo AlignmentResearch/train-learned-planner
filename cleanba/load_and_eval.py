@@ -125,12 +125,12 @@ def load_and_eval(args: LoadAndEvalArgs):
     for cp_step, cp_path in checkpoints_to_load:
         _, _, _, train_state, _ = load_train_state(cp_path)
         print("Evaluating", cp_path)
+
         for eval_name, evaluator in args.eval_envs.items():
             log_dict = evaluator.run(policy, get_action_fn, train_state.params, key=jax.random.PRNGKey(1234))
             if args.save_logs:
-                with writer.save_dir(0) as output_base_path:
-                    with open(output_base_path / f"{eval_name}_metrics_dict.pkl", "wb") as f:
-                        pickle.dump(log_dict, f)
+                with open(cp_path / f"{eval_name}_metrics_dict.pkl", "wb") as f:
+                    pickle.dump(log_dict, f)
 
             for k, v in log_dict.items():
                 writer.add_scalar(f"{eval_name}/{k}", v, cp_step)
