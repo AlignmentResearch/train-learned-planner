@@ -131,8 +131,9 @@ def load_and_eval(args: LoadAndEvalArgs):
             if args.save_logs:
                 with open(cp_path / f"{eval_name}_metrics_dict.pkl", "wb") as f:
                     pickle.dump(log_dict, f)
-
             for k, v in log_dict.items():
+                if k.endswith("_all_episode_info"):
+                    continue
                 writer.add_scalar(f"{eval_name}/{k}", v, cp_step)
 
 
