@@ -1,3 +1,5 @@
+# Taken from 061_pfinal2.py which was the script that trained the drc3,3 used in the paper
+# https://huggingface.co/AlignmentResearch/learned-planner/tree/main/drc33/bkynosqi
 import dataclasses
 import shlex
 from pathlib import Path
@@ -9,14 +11,11 @@ from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
 from cleanba.environments import EnvpoolBoxobanConfig, random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
-# from cleanba.network import GuezResNetConfig, IdentityNorm
-
 clis: list[list[str]] = []
 all_args: list[Args] = []
 
 drc_n_n = 3
 arch_fns = [
-    # lambda cfg: dataclasses.replace(cfg, net=GuezResNetConfig(yang_init=False, norm=IdentityNorm(), normalize_input=False)),
     lambda cfg: dataclasses.replace(
         cfg,
         net=ConvLSTMConfig(
@@ -40,31 +39,33 @@ arch_fns = [
 ]
 
 
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(3)]:
+for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
     for arch_fn in arch_fns:
-        for reward_noop in [5e-2]:
+        for reward_noop in [1e-2, 5e-3, 0.0]:
+            for ent_coef in [1e-2, 3e-2]:
 
-            def update_seeds(config: Args) -> Args:
-                config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
-                config.seed = learn_seed
+                def update_seeds(config: Args) -> Args:
+                    config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
+                    config.seed = learn_seed
 
-                config.learning_rate = 4e-4
-                config.final_learning_rate = 4e-6
-                config.anneal_lr = True
+                    config.learning_rate = 4e-4
+                    config.final_learning_rate = 4e-6
+                    config.anneal_lr = True
 
-                assert isinstance(config.train_env, EnvpoolBoxobanConfig)
-                config.train_env.reward_noop = reward_noop
+                    config.loss = dataclasses.replace(config.loss, ent_coef=ent_coef)
+                    assert isinstance(config.train_env, EnvpoolBoxobanConfig)
+                    config.train_env.reward_noop = reward_noop
 
-                return config
+                    return config
 
-            cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn, update_seeds)
+                cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn, update_seeds)
 
-            print(shlex.join(cli))
-            # Check that parsing doesn't error
-            out = parse_cli(cli, Args)
+                print(shlex.join(cli))
+                # Check that parsing doesn't error
+                out = parse_cli(cli, Args)
 
-            all_args.append(out)
-            clis.append(cli)
+                all_args.append(out)
+                clis.append(cli)
 
 runs: list[FlamingoRun] = []
 RUNS_PER_MACHINE = 1
@@ -75,7 +76,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
             this_run_clis,
-            CONTAINER_TAG="dcf0f9f-main",
+            CONTAINER_TAG="2369b92-main",
             CPU=6,
             MEMORY="30G",
             GPU=1,
