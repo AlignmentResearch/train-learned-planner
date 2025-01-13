@@ -113,10 +113,7 @@ def parse_args() -> Namespace:
         "--set-run-name",
         "--set_run_name",
         type=str,
-        help=(
-            "Run name for merged run. If not specified, the name of first run being merged"
-            " will be used."
-        ),
+        help=("Run name for merged run. If not specified, the name of first run being merged" " will be used."),
     )
     parser.add_argument(
         "--merge-run-save-dir",
@@ -150,9 +147,7 @@ def parse_args() -> Namespace:
         raise RuntimeError("Found empty string for --merge-run-save-dir")
 
     if len(args.run_names) == 0 and len(args.run_ids) == 0:
-        raise RuntimeError(
-            "Expected either --run-names or --run-ids to query runs to merge"
-        )
+        raise RuntimeError("Expected either --run-names or --run-ids to query runs to merge")
 
     return args
 
@@ -170,9 +165,7 @@ def _backup_wandb_resume(save_dir: Union[Path, str]) -> None:
     wandb_resume = Path(save_dir, "wandb", "wandb-resume.json")
     wandb_resume_backup = Path(save_dir, "wandb", "wandb-resume_backup.json")
     if wandb_resume.exists():
-        print(
-            f"Backing up current resume file: {wandb_resume} -> {wandb_resume_backup}"
-        )
+        print(f"Backing up current resume file: {wandb_resume} -> {wandb_resume_backup}")
         shutil.copyfile(wandb_resume, wandb_resume_backup)
         wandb_resume.unlink()
 
@@ -215,11 +208,7 @@ def _find_wandb_dir(save_dir: Path) -> Optional[Path]:
             # Current path is a subdir of other path
             remove_indices.append(idx)
 
-    wandb_dirs = [
-        Path(save_dir, folder)
-        for idx, folder in enumerate(wandb_folders)
-        if idx not in remove_indices
-    ]
+    wandb_dirs = [Path(save_dir, folder) for idx, folder in enumerate(wandb_folders) if idx not in remove_indices]
 
     if len(wandb_dirs) == 0:
         pass  # Keep save_dir
@@ -228,8 +217,7 @@ def _find_wandb_dir(save_dir: Path) -> Optional[Path]:
     else:
         wandb_dirs_str = "\n  " + "\n  ".join([str(d) for d in wandb_dirs])
         raise RuntimeError(
-            f"Found {len(wandb_dirs)} 'wandb' subdirs in work_dir={str(save_dir)}, expected 1."
-            f"\nSubdirs: {wandb_dirs_str}"
+            f"Found {len(wandb_dirs)} 'wandb' subdirs in work_dir={str(save_dir)}, expected 1." f"\nSubdirs: {wandb_dirs_str}"
         )
 
     return save_dir
@@ -260,9 +248,7 @@ def merge_runs(args: Namespace) -> None:
                 continue
 
             if args.skip_run_tags is not None:
-                matching_tags = [
-                    tag for tag in args.skip_run_tags if tag in _get_run_tags(run)
-                ]
+                matching_tags = [tag for tag in args.skip_run_tags if tag in _get_run_tags(run)]
                 if len(matching_tags) > 0:
                     continue
 
@@ -270,14 +256,11 @@ def merge_runs(args: Namespace) -> None:
                 matching_runs.append(run)
 
     if len(matching_runs) < 2:
-        print(
-            f"Found {len(matching_runs)} matching runs. Need >= 2 runs to merge, skipping merge."
-        )
+        print(f"Found {len(matching_runs)} matching runs. Need >= 2 runs to merge, skipping merge.")
         return
 
     print(
-        f"Found {len(matching_runs)} matching runs, verifying non-overlaping using metric"
-        f" '{args.verify_overlap_metric}'"
+        f"Found {len(matching_runs)} matching runs, verifying non-overlaping using metric" f" '{args.verify_overlap_metric}'"
     )
 
     # Get the start/end iterations for each run
@@ -319,10 +302,7 @@ def merge_runs(args: Namespace) -> None:
         for run, iter_range in sorted_tuples
     ]
 
-    print(
-        f"Merging {len(matching_runs)} runs into a new run:"
-        f"\n{pprint.pformat(matching_runs_dicts, sort_dicts=False)}"
-    )
+    print(f"Merging {len(matching_runs)} runs into a new run:" f"\n{pprint.pformat(matching_runs_dicts, sort_dicts=False)}")
     response = input("Continue with merge? (y/N): ")
     if response.lower() == "y":
         print("Merging runs (response=y)")
@@ -389,10 +369,7 @@ def merge_runs(args: Namespace) -> None:
             f" Pass in --into-save-dir to force a directory which will be created."
         )
 
-    print(
-        f"Creating new run for merging into with init() kwargs:"
-        f"\n{pprint.pformat(init_kwargs, sort_dicts=False)}"
-    )
+    print(f"Creating new run for merging into with init() kwargs:" f"\n{pprint.pformat(init_kwargs, sort_dicts=False)}")
     combined_run: SdkRun = wandb.init(**init_kwargs)
     combined_run_id = combined_run.id
     print(f"Created new run with run.id={combined_run_id}")
@@ -406,18 +383,12 @@ def merge_runs(args: Namespace) -> None:
         header = f"[Run {idx + 1}/{len(matching_runs)}]"
 
         # Update config
-        wandb.config.update(
-            partial_run.config, allow_val_change=True
-        )  # pyright: ignore[reportCallIssue]
+        wandb.config.update(partial_run.config, allow_val_change=True)  # pyright: ignore[reportCallIssue]
 
         # Update tags for new run, adding new tags and --tag-combined-run
         partial_run_tags = _get_run_tags(partial_run)
         combined_run_tags = _get_run_tags(combined_run)
-        add_combined_run_tags = [
-            tag
-            for tag in partial_run_tags
-            if tag not in [combined_run_tags, args.tag_partial_runs]
-        ]
+        add_combined_run_tags = [tag for tag in partial_run_tags if tag not in [combined_run_tags, args.tag_partial_runs]]
         combined_run.tags = combined_run_tags + add_combined_run_tags
 
         # Update tags for old run, adding --tag-partial-runs
@@ -461,9 +432,7 @@ def merge_runs(args: Namespace) -> None:
                 draft_artifact = saved_artifact.new_draft()
                 print(f"Logging artifact {draft_artifact.name}")
                 wandb.log_artifact(draft_artifact)
-            except (
-                ValueError
-            ) as e:  # If type is `wandb-`, e.g. `wandb-history`, it's reserved
+            except ValueError as e:  # If type is `wandb-`, e.g. `wandb-history`, it's reserved
                 if "reserved for internal use" in str(e):
                     pass
 

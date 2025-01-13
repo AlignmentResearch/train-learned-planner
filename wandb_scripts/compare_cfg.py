@@ -8,6 +8,7 @@ run2 = api.run("farai/lp-cleanba/runs/bkynosqi")
 cfg1 = run1.config
 cfg2 = run2.config
 
+
 def recursive_diff(cfg1, cfg2, prefix=""):
     if cfg1 == cfg2:
         return {}
@@ -23,6 +24,7 @@ def recursive_diff(cfg1, cfg2, prefix=""):
             diff[f"{prefix}{k}"] = (None, v)
 
     return diff
+
 
 diff = recursive_diff(cfg1, cfg2)
 for k, v in diff.items():
