@@ -102,6 +102,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     min_episode_steps: int = 0  # The minimum length of an episode.
     load_sequentially: bool = False
     n_levels_to_load: int = -1  # -1 means "all levels". Used only when `load_sequentially` is True.
+    nn_without_noop: bool = True  # Use a neural network that can predict noops
 
     # Not present in _SokobanEnvSpec
     cache_path: Path = Path("/opt/sokoban_cache")
@@ -151,6 +152,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
     reward_noop: float = 0.0  # Addtional reward for doing nothing
+    nn_without_noop: bool = False  # Use a neural network without the noop action
 
     reset: bool = False
     asynchronous: bool = True
@@ -182,7 +184,7 @@ class BaseSokobanEnvConfig(EnvConfig):
 
 
 class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv):
+    def __init__(self, env: gym.vector.VectorEnv, nn_without_noop: bool = True):
         super().__init__(env)
         obs_space = env.single_observation_space
         if isinstance(obs_space, gym.spaces.Box):
@@ -197,6 +199,9 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
         self.single_action_space = env.single_action_space
         self.action_space = env.action_space
+        if nn_without_noop:
+            self.single_action_space.n -= 1 # type: ignore
+            self.action_space.nvec -= 1 # type: ignore
 
     def reset_wait(self, **kwargs) -> tuple[Any, dict]:
         obs, info = super().reset_wait(**kwargs)
@@ -207,8 +212,8 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         return np.moveaxis(obs, 3, 1), reward, terminated, truncated, info
 
     @classmethod
-    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv]) -> gym.vector.VectorEnv:
-        return cls(fn())
+    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv], nn_without_noop) -> gym.vector.VectorEnv:
+        return cls(fn(), nn_without_noop)
 
 
 @dataclasses.dataclass
@@ -235,6 +240,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
                 **kwargs,
                 **self.env_reward_kwargs(),
             ),
+            self.nn_without_noop,
         )
         return make_fn
 
@@ -272,6 +278,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 **self.env_kwargs(),
                 **self.env_reward_kwargs(),
             ),
+            self.nn_without_noop,
         )
         return make_fn
 
