@@ -75,6 +75,8 @@ etils[epath,epy]==1.11.0
     # via orbax-checkpoint
 exceptiongroup==1.2.2
     # via pytest
+farama-notifications==0.0.4
+    # via gymnasium
 farconf @ git+https://github.com/AlignmentResearch/farconf.git
     # via train-learned-planner (pyproject.toml)
 filelock==3.16.1
@@ -115,10 +117,8 @@ gym==0.26.2
     # via train-learned-planner (pyproject.toml)
 gym-notices==0.0.8
     # via gym
-gymnasium==0.26.3
+gymnasium==0.29.1
     # via train-learned-planner (pyproject.toml)
-gymnasium-notices==0.0.1
-    # via gymnasium
 huggingface-hub==0.23.5
     # via train-learned-planner (pyproject.toml)
 humanize==4.11.0
@@ -370,6 +370,7 @@ typing-extensions==4.12.2
     #   databind
     #   etils
     #   flax
+    #   gymnasium
     #   huggingface-hub
     #   orbax-checkpoint
     #   pyright
