@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import time
+from typing import Optional
 
 import jax
 import jax.numpy as jnp
@@ -136,11 +137,23 @@ class EvalConfig:
 
 
 def get_cycles(
-    all_obs,
-    last_box_time_step,
-    cycle_starts_within=None,
-    min_cycle_length=1,
-):
+    all_obs: np.ndarray,
+    last_box_time_step: int,
+    cycle_starts_within: Optional[int] = None,
+    min_cycle_length: int = 1,
+) -> list[tuple[int, int]]:
+    """
+    Given a sequence of observations, find all cycles in the sequence.
+    A cycle is a sequence of observations with the same starting and ending observations.
+
+    Args:
+        :param all_obs: A sequence of observations, shape (time, 3, H, W) where H == W.
+        :param last_box_time_step: The last time step where a box was pushed onto a target.
+        :param cycle_starts_within: Only consider cycles starting within the first `cycle_starts_within` time steps.
+        :param min_cycle_length: Only consider cycles of length at least `min_cycle_length`.
+    Returns:
+        A list of tuples, where each tuple is a cycle (start, length).
+    """
     assert all_obs.shape[1] == 3 and all_obs.shape[2] == all_obs.shape[3], all_obs.shape
     assert last_box_time_step is not None
     cycle_starts_within = cycle_starts_within or all_obs.shape[0]
@@ -149,14 +162,10 @@ def get_cycles(
     obs_repeat = np.all(all_obs == all_obs.transpose(1, 0, 2, 3, 4), axis=(2, 3, 4))
     np.fill_diagonal(obs_repeat, False)
     obs_repeat = [np.where(obs_repeat[j])[0] for j in range(min(cycle_starts_within, len(obs_repeat)))]
-    # obs_repeat = [
-    #     (j, arr[-1] - j)
-    #     for j, arr in enumerate(obs_repeat)
-    #     if arr.size > 0 and min_cycle_length <= arr[-1] - j
-    # ]
     dedup_obs_repeat = []
     i = 0
-    # this way of deduplicating will break some 8 shaped cycles into two circles (at different starts)
+    # this way of deduplicating will break some 8 shaped cycles into two circles (at different starts).
+    # such cycles occur rarely and this simplification is fine for our purpose.
     while i < len(obs_repeat):
         if obs_repeat[i].size > 0 and min_cycle_length <= obs_repeat[i][-1] - i:
             dedup_obs_repeat.append((i, obs_repeat[i][-1] - i))  # max length cycle starting at i

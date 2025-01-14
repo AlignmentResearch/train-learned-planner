@@ -63,13 +63,17 @@ class EnvpoolEnvConfig(EnvConfig):
             EnvpoolVectorEnv,
             self.num_envs,
             partial(envpool.make_gymnasium, self.env_id, **special_kwargs, **env_kwargs),
+            remove_last_action=getattr(self, "nn_without_noop", False),
         )
         return vec_envs_fn
 
 
 class EnvpoolVectorEnv(gym.vector.VectorEnv):
-    def __init__(self, num_envs: int, envs_fn: Callable[[], Any]):
+    def __init__(self, num_envs: int, envs_fn: Callable[[], Any], remove_last_action: bool = False):
         envs = envs_fn()
+        if remove_last_action:
+            envs.action_space.n -= 1  # type: ignore
+            envs.action_space.nvec -= 1  # type: ignore
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
@@ -102,7 +106,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     min_episode_steps: int = 0  # The minimum length of an episode.
     load_sequentially: bool = False
     n_levels_to_load: int = -1  # -1 means "all levels". Used only when `load_sequentially` is True.
-    nn_without_noop: bool = True  # Use a neural network that can predict noops
+    nn_without_noop: bool = False  # Use a neural network without the noop action
 
     # Not present in _SokobanEnvSpec
     cache_path: Path = Path("/opt/sokoban_cache")
@@ -184,7 +188,7 @@ class BaseSokobanEnvConfig(EnvConfig):
 
 
 class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv, nn_without_noop: bool = True):
+    def __init__(self, env: gym.vector.VectorEnv, remove_last_action: bool = False):
         super().__init__(env)
         obs_space = env.single_observation_space
         if isinstance(obs_space, gym.spaces.Box):
@@ -199,9 +203,9 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
         self.single_action_space = env.single_action_space
         self.action_space = env.action_space
-        if nn_without_noop:
-            self.single_action_space.n -= 1 # type: ignore
-            self.action_space.nvec -= 1 # type: ignore
+        if remove_last_action:
+            self.single_action_space.n -= 1  # type: ignore
+            self.action_space.nvec -= 1  # type: ignore
 
     def reset_wait(self, **kwargs) -> tuple[Any, dict]:
         obs, info = super().reset_wait(**kwargs)

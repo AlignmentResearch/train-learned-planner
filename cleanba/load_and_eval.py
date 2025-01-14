@@ -101,11 +101,16 @@ cp_expr = re.compile("^.*/?cp_([0-9]+)$")
 
 
 def load_and_eval(args: LoadAndEvalArgs):
+    checkpoints_to_load: List[Tuple[int, Path]] = []
     if args.checkpoints_to_load:
         assert args.only_last_checkpoint is False, "Can't specify both checkpoints_to_load and only_last_checkpoint."
-        checkpoints_to_load = [(int(cp_expr.match(cp).group(1)), args.load_other_run / cp) for cp in args.checkpoints_to_load]  # type: ignore
+        for cp in args.checkpoints_to_load:
+            match = cp_expr.match(str(cp))
+            if match is None:
+                raise ValueError(f"Invalid checkpoint path: {cp}")
+            else:
+                checkpoints_to_load.append((int(match.group(1)), args.load_other_run / cp))
     else:
-        checkpoints_to_load: List[Tuple[int, Path]] = []
         for cp_candidate in recursive_find_checkpoint(args.load_other_run):
             match = cp_expr.match(str(cp_candidate))
             if match is None:

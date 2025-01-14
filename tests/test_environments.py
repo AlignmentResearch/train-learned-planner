@@ -196,7 +196,7 @@ def test_mock_sokoban_returns(gamma: float, num_envs: int = 7):
             ),
             marks=pytest.mark.envpool,
         ),
-    ], 
+    ],
 )
 @pytest.mark.parametrize("nn_without_noop", [True, False])
 def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bool):
@@ -212,7 +212,9 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
     key = jax.random.PRNGKey(42)
     key, agent_params_subkey, carry_key = jax.random.split(key, 3)
     policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
-    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (not nn_without_noop), "NOOP action not set correctly"
+    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (
+        not nn_without_noop
+    ), "NOOP action not set correctly"
     carry = policy.apply(agent_params, carry_key, next_obs.shape, method=policy.initialize_carry)
     episode_starts_no = jnp.zeros(cfg.num_envs, dtype=jnp.bool_)
 
