@@ -73,7 +73,6 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
         envs = envs_fn()
         if remove_last_action:
             envs.action_space.n -= 1  # type: ignore
-            envs.action_space.nvec -= 1  # type: ignore
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
