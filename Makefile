@@ -8,6 +8,7 @@ export DOCKERFILE
 
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
+JAX_DATE=2024-04-08
 
 default: release/main
 
@@ -23,15 +24,14 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 	docker build --platform "linux/amd64" \
 		--tag "${APPLICATION_URL}:${BUILD_PREFIX}-$*" \
 		--build-arg "APPLICATION_NAME=${APPLICATION_NAME}" \
+		--build-arg "JAX_DATE=${JAX_DATE}" \
 		--target "$*" \
 		-f "${DOCKERFILE}" .
 	touch ".build/with-reqs/${BUILD_PREFIX}/$*"
 
 # NOTE: --extra=extra is for stable-baselines3 testing.
-#
-# We use python 3.12.3 because it is what's in our base ghcr.io/nvidia/jax:base-2025-01-14
 requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "python:3.12.3" \
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:base-${JAX_DATE}" \
     bash -c "pip install pip-tools \
 		&& cd /workspace \
 		&& pip-compile --verbose -o requirements.txt.new \
