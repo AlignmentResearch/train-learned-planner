@@ -65,7 +65,7 @@ class EvalConfig:
                     last_box_time_step = -1 * np.ones(envs.num_envs, dtype=np.int64)
                     noops_array = np.zeros((envs.num_envs, max_steps), dtype=bool)
                     i = 0
-                    all_obs = [obs]
+                    this_minibatch_obs = [obs]
                     while not np.all(eps_done):
                         if i >= self.safeguard_max_episode_steps:
                             break
@@ -75,7 +75,7 @@ class EvalConfig:
 
                         cpu_action = np.asarray(action)
                         obs, rewards, terminated, truncated, infos = envs.step(cpu_action)
-                        all_obs.append(obs)
+                        this_minibatch_obs.append(obs)
                         episode_returns[~eps_done] += rewards[~eps_done]
                         episode_lengths[~eps_done] += 1
                         episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
@@ -104,7 +104,7 @@ class EvalConfig:
                             continue
                         num_noops += np.sum(noops_array[env_idx, : last_box_time_step[env_idx]])
                         cycles = get_cycles(
-                            np.stack([all_obs[time_idx][env_idx] for time_idx in range(episode_lengths[env_idx])]),
+                            np.stack([this_minibatch_obs[time_idx][env_idx] for time_idx in range(episode_lengths[env_idx])]),
                             last_box_time_step=last_box_time_step[env_idx],
                         )
                         all_cycles.append(cycles)
