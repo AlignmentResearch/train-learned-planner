@@ -64,7 +64,7 @@ release/%: push/%
 	docker push "${APPLICATION_URL}:${RELEASE_PREFIX}-$*"
 release: release/main
 
-.PHONY: release-remote
+.PHONY: release-remote release-remote/%
 release-remote/%:
 	git push
 	python -c "print(open('k8s/kaniko-build.yaml').read().format(APPLICATION_NAME='${APPLICATION_NAME}', JAX_DATE='${JAX_DATE}', BUILD_TAG='${BUILD_PREFIX}-$*', RELEASE_TAG='${RELEASE_PREFIX}-$*', COMMIT_HASH='${COMMIT_HASH}', BRANCH_NAME='${BRANCH_NAME}'))" | kubectl create -f -
