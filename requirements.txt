@@ -116,8 +116,6 @@ gymnasium==0.29.1
     # via train-learned-planner (pyproject.toml)
 huggingface-hub==0.23.5
     # via train-learned-planner (pyproject.toml)
-huggingface-hub==0.23.5
-    # via train-learned-planner (pyproject.toml)
 humanize==4.11.0
     # via orbax-checkpoint
 identify==2.6.4
