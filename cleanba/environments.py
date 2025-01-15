@@ -72,7 +72,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
     def __init__(self, num_envs: int, envs_fn: Callable[[], Any], remove_last_action: bool = False):
         envs = envs_fn()
         if remove_last_action:
-            envs.action_space = gym.spaces.Discrete(envs.action_space.n - 1)
+            envs.action_space.n -= 1 # can't set envs.action_space directly as it has no setter
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
@@ -200,12 +200,13 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
 
         self.num_envs = env.num_envs
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
+        
+        if remove_last_action:
+            assert isinstance(env.single_action_space, gym.spaces.Discrete)
+            env.single_action_space = gym.spaces.Discrete(env.single_action_space.n - 1)
+            env.action_space = batch_space(env.single_action_space, n=self.num_envs)
         self.single_action_space = env.single_action_space
         self.action_space = env.action_space
-        if remove_last_action:  
-            assert isinstance(self.single_action_space, gym.spaces.Discrete)  
-            self.single_action_space = gym.spaces.Discrete(self.single_action_space.n - 1)
-            self.action_space = batch_space(self.single_action_space, n=self.num_envs) 
 
     def reset_wait(self, **kwargs) -> tuple[Any, dict]:
         obs, info = super().reset_wait(**kwargs)
