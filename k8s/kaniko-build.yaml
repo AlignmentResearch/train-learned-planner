@@ -22,7 +22,7 @@ spec:
             # The repository to get the Dockerfile and context from, with #refs/heads/branch or #commit-hash
             # One should specify the branch name AND the commit hash. The branch name is needed so Kaniko accurately
             # downloads the submodules from that branch.
-            - --context=git://github.com/AlignmentResearch/{APPLICATION_NAME}.git#refs/heads/{BRANCH_NAME}#{COMMIT_FULL}
+            - --context=git://github.com/AlignmentResearch/{APPLICATION_NAME}.git#refs/heads/{BRANCH_NAME}#{COMMIT_HASH}
             - --git=recurse-submodules=true
             # Save intermediate cache. Intermediate cache images get pushed to the cache-repo.
             - --cache=true
