@@ -8,6 +8,7 @@ export DOCKERFILE
 
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
+JAX_DATE=2024-04-08
 
 default: release/main
 
@@ -23,18 +24,17 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 	docker build --platform "linux/amd64" \
 		--tag "${APPLICATION_URL}:${BUILD_PREFIX}-$*" \
 		--build-arg "APPLICATION_NAME=${APPLICATION_NAME}" \
+		--build-arg "JAX_DATE=${JAX_DATE}" \
 		--target "$*" \
 		-f "${DOCKERFILE}" .
 	touch ".build/with-reqs/${BUILD_PREFIX}/$*"
 
 # NOTE: --extra=extra is for stable-baselines3 testing.
-#
-# We use RELEASE_PREFIX as the image so we don't have to re-build it constantly. Once we have bootstrapped
-# `requirements.txt`, we can push the image with `make release/main-pip-tools`
 requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "${APPLICATION_URL}:${RELEASE_PREFIX}-main-pip-tools" \
-	pip-compile --verbose -o requirements.txt.new \
-		--extra=dev --extra=launch_jobs pyproject.toml
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:base-${JAX_DATE}" \
+    bash -c "pip install pip-tools \
+		&& cd /workspace \
+		&& pip-compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
@@ -63,6 +63,12 @@ release/%: push/%
 	docker tag "${APPLICATION_URL}:${BUILD_PREFIX}-$*" "${APPLICATION_URL}:${RELEASE_PREFIX}-$*"
 	docker push "${APPLICATION_URL}:${RELEASE_PREFIX}-$*"
 release: release/main
+
+.PHONY: release-remote release-remote/%
+release-remote/%:
+	git push
+	python -c "print(open('k8s/kaniko-build.yaml').read().format(APPLICATION_NAME='${APPLICATION_NAME}', JAX_DATE='${JAX_DATE}', BUILD_TAG='${BUILD_PREFIX}-$*', RELEASE_TAG='${RELEASE_PREFIX}-$*', COMMIT_HASH='${COMMIT_HASH}', BRANCH_NAME='${BRANCH_NAME}'))" | kubectl create -f -
+release-remote: release-remote/main
 
 # Section 2: Make Devboxes and local devboxes (with Docker)
 DEVBOX_UID ?= 1001

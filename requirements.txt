@@ -42,7 +42,6 @@ click==8.1.8
     #   wandb
 cloudpickle==3.1.0
     # via
-    #   gym
     #   gymnasium
     #   tensorflow-probability
 cmdkit==2.7.7
@@ -113,10 +112,6 @@ google-auth-oauthlib==1.0.0
     # via tensorboard
 grpcio==1.68.1
     # via tensorboard
-gym==0.26.2
-    # via train-learned-planner (pyproject.toml)
-gym-notices==0.0.8
-    # via gym
 gymnasium==0.29.1
     # via train-learned-planner (pyproject.toml)
 huggingface-hub==0.23.5
@@ -197,7 +192,6 @@ numpy==1.26.4
     #   distrax
     #   dm-env
     #   flax
-    #   gym
     #   gymnasium
     #   imageio
     #   jax
@@ -217,7 +211,7 @@ numpy==1.26.4
     #   tensorstore
 oauthlib==3.2.2
     # via requests-oauthlib
-opencv-python==4.7.0.72
+opencv-python==4.10.0.84
     # via train-learned-planner (pyproject.toml)
 opt-einsum==3.4.0
     # via jax
@@ -290,7 +284,7 @@ pyyaml==6.0.2
     #   pre-commit
     #   ray
     #   wandb
-ray[tune]==2.11.0
+ray[tune]==2.40.0
     # via train-learned-planner (pyproject.toml)
 referencing==0.35.1
     # via
@@ -351,6 +345,8 @@ tensorstore==0.1.71
     # via
     #   flax
     #   orbax-checkpoint
+toml==0.10.2
+    # via cmdkit
 tomli==2.2.1
     # via pytest
 toolz==1.0.0

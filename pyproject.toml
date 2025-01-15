@@ -54,13 +54,12 @@ dependencies = [
     "wandb ~=0.17.4",
     "tensorboardx ~=2.6",
     "chex ~= 0.1.5",
-    "gym ~= 0.26.1",
-    "gymnasium ~=0.29.1",
-    "opencv-python ~=4.7.0.68",
+    "gymnasium ~= 0.29",
+    "opencv-python >=4.10",
     "moviepy ~=1.0.3",
     "rlax ~=0.1.5",
     "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
-    "ray[tune] ~=2.11.0",
+    "ray[tune] ~=2.40.0",
     "matplotlib ~=3.9.0",
 ]
 [project.optional-dependencies]

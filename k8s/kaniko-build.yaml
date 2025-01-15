@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: build-img-{APPLICATION_NAME}-
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+spec:
+  suspend: true
+  backoffLimit: 0
+  template:
+    metadata:
+      name: kaniko
+    spec:
+      priorityClassName: normal-batch
+      containers:
+        - name: kaniko
+          # Kaniko executor image.
+          image: gcr.io/kaniko-project/executor:latest
+          args:
+            # The path to the Dockerfile describing the build
+            - --dockerfile=Dockerfile
+            # The repository to get the Dockerfile and context from, with #refs/heads/branch or #commit-hash
+            # One should specify the branch name AND the commit hash. The branch name is needed so Kaniko accurately
+            # downloads the submodules from that branch.
+            - --context=git://github.com/AlignmentResearch/{APPLICATION_NAME}.git#refs/heads/{BRANCH_NAME}#{COMMIT_HASH}
+            - --git=recurse-submodules=true
+            # Save intermediate cache. Intermediate cache images get pushed to the cache-repo.
+            - --cache=true
+            - --cache-repo=ghcr.io/alignmentresearch/{APPLICATION_NAME}/cache
+            # Destinations to push the images. Can be multiple.
+            - --destination=ghcr.io/alignmentresearch/{APPLICATION_NAME}:{RELEASE_TAG}
+            - --destination=ghcr.io/alignmentresearch/{APPLICATION_NAME}:{BUILD_TAG}
+            - --verbosity=debug
+            - --push-retry=3
+            - "--build-arg=APPLICATION_NAME='{APPLICATION_NAME}'"
+            - "--build-arg=JAX_DATE='{JAX_DATE}'"
+          volumeMounts:
+            - name: docker
+              mountPath: /kaniko/.docker
+          env:
+            - name: GIT_ASKPASS
+              value: "false"
+            - name: GIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: github-credentials
+                  key: pat
+          resources:
+            requests:
+              cpu: "50m"
+            limits:
+              memory: "20G"
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: docker
+      volumes:
+        # A Docker secret, e.g. the usual imagePullSecret. Make sure the PAT in it has `packages:write` permissions on GitHub.
+        - name: docker
+          secret:
+            secretName: docker
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        # A secret containing a key 'pat' with a GitHub PAT that can clone the repos we need to clone.
+        - name: github-credentials
+          secret:
+            secretName: github-credentials
