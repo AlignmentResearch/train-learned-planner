@@ -34,8 +34,7 @@ requirements.txt.new: pyproject.toml ${DOCKERFILE}
 	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:base-${JAX_DATE}" \
     bash -c "pip install pip-tools \
 		&& cd /workspace \
-		&& pip-compile --verbose -o requirements.txt.new \
-			--extra=dev --extra=launch_jobs pyproject.toml"
+		&& pip-compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
@@ -64,6 +63,11 @@ release/%: push/%
 	docker tag "${APPLICATION_URL}:${BUILD_PREFIX}-$*" "${APPLICATION_URL}:${RELEASE_PREFIX}-$*"
 	docker push "${APPLICATION_URL}:${RELEASE_PREFIX}-$*"
 release: release/main
+
+.PHONY: release-remote
+release-remote/%:
+	git push
+	python -c "print(open('k8s/kaniko-build.yaml').read().format(APPLICATION_NAME='${APPLICATION_NAME}', JAX_DATE='${JAX_DATE}', BUILD_TAG='${BUILD_PREFIX}-$*', RELEASE_TAG='${RELEASE_PREFIX}-$*', COMMIT_FULL='${COMMIT_FULL}', BRANCH_NAME='${BRANCH_NAME}'))" | kubectl create -f -
 
 # Section 2: Make Devboxes and local devboxes (with Docker)
 DEVBOX_UID ?= 1001
