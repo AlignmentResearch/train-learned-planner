@@ -25,7 +25,7 @@ spec:
           sizeLimit: "{SHM_SIZE}"
       - name: training
         persistentVolumeClaim:
-          claimName: learned-planners
+          claimName: az-learned-planners
 
       containers:
       - name: devbox-container
