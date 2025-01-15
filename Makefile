@@ -29,10 +29,9 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 
 # NOTE: --extra=extra is for stable-baselines3 testing.
 #
-# We use RELEASE_PREFIX as the image so we don't have to re-build it constantly. Once we have bootstrapped
-# `requirements.txt`, we can push the image with `make release/main-pip-tools`
+# We use python 3.12.3 because it is what's in our base ghcr.io/nvidia/jax:base-2025-01-14
 requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "python:3.11.9" \
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "python:3.12.3" \
     bash -c "pip install pip-tools \
 		&& cd /workspace \
 		&& pip-compile --verbose -o requirements.txt.new \

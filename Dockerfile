@@ -1,4 +1,4 @@
-ARG JAX_DATE=2024-04-08
+ARG JAX_DATE=2025-01-14
 
 FROM ghcr.io/nvidia/jax:base-${JAX_DATE} as envpool-environment
 ENV DEBIAN_FRONTEND=noninteractive
