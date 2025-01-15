@@ -63,13 +63,16 @@ class EnvpoolEnvConfig(EnvConfig):
             EnvpoolVectorEnv,
             self.num_envs,
             partial(envpool.make_gymnasium, self.env_id, **special_kwargs, **env_kwargs),
+            remove_last_action=getattr(self, "nn_without_noop", False),
         )
         return vec_envs_fn
 
 
 class EnvpoolVectorEnv(gym.vector.VectorEnv):
-    def __init__(self, num_envs: int, envs_fn: Callable[[], Any]):
+    def __init__(self, num_envs: int, envs_fn: Callable[[], Any], remove_last_action: bool = False):
         envs = envs_fn()
+        if remove_last_action:
+            envs.action_space.n -= 1  # can't set envs.action_space directly as it has no setter
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
@@ -97,10 +100,12 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
+    reward_noop: float = 0.0  # Addtional Reward for doing nothing
     verbose: int = 0  # Verbosity level [0-2]
     min_episode_steps: int = 0  # The minimum length of an episode.
     load_sequentially: bool = False
     n_levels_to_load: int = -1  # -1 means "all levels". Used only when `load_sequentially` is True.
+    nn_without_noop: bool = False  # Use a neural network without the noop action
 
     # Not present in _SokobanEnvSpec
     cache_path: Path = Path("/opt/sokoban_cache")
@@ -149,6 +154,8 @@ class BaseSokobanEnvConfig(EnvConfig):
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
+    reward_noop: float = 0.0  # Addtional reward for doing nothing
+    nn_without_noop: bool = False  # Use a neural network without the noop action
 
     reset: bool = False
     asynchronous: bool = True
@@ -175,11 +182,12 @@ class BaseSokobanEnvConfig(EnvConfig):
             reward_box_on_target=self.reward_box,
             penalty_box_off_target=-self.reward_box,
             penalty_for_step=self.reward_step,
+            reward_noop=self.reward_noop,
         )
 
 
 class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv):
+    def __init__(self, env: gym.vector.VectorEnv, remove_last_action: bool = False):
         super().__init__(env)
         obs_space = env.single_observation_space
         if isinstance(obs_space, gym.spaces.Box):
@@ -192,6 +200,11 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
 
         self.num_envs = env.num_envs
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
+
+        if remove_last_action:
+            assert isinstance(env.single_action_space, gym.spaces.Discrete)
+            env.single_action_space = gym.spaces.Discrete(env.single_action_space.n - 1)
+            env.action_space = batch_space(env.single_action_space, n=self.num_envs)
         self.single_action_space = env.single_action_space
         self.action_space = env.action_space
 
@@ -204,8 +217,8 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         return np.moveaxis(obs, 3, 1), reward, terminated, truncated, info
 
     @classmethod
-    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv]) -> gym.vector.VectorEnv:
-        return cls(fn())
+    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv], nn_without_noop) -> gym.vector.VectorEnv:
+        return cls(fn(), nn_without_noop)
 
 
 @dataclasses.dataclass
@@ -232,6 +245,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
                 **kwargs,
                 **self.env_reward_kwargs(),
             ),
+            self.nn_without_noop,
         )
         return make_fn
 
@@ -269,6 +283,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 **self.env_kwargs(),
                 **self.env_reward_kwargs(),
             ),
+            self.nn_without_noop,
         )
         return make_fn
 

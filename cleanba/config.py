@@ -242,7 +242,7 @@ def sokoban_resnet59():
                     min_episode_steps=120,
                     num_envs=256,
                     cache_path=CACHE_PATH,
-                    split="planning",
+                    split="valid",
                     difficulty="medium",
                 ),
                 n_episode_multiple=4,

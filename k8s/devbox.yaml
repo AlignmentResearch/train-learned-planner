@@ -16,9 +16,6 @@ spec:
         runAsGroup: {GROUP_ID}
       priorityClassName: interactive
       volumes:
-      - name: dotfiles
-        configMap:
-          name: dotfiles
       - name: dshm
         emptyDir:
           medium: Memory
@@ -78,9 +75,6 @@ spec:
         - name: GIT_CONFIG_PARAMETERS
           value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
         volumeMounts:
-        - name: dotfiles
-          mountPath: /home/dev/.tmux.conf
-          subPath: tmux.conf
         - name: dshm
           mountPath: /dev/shm
         - name: training

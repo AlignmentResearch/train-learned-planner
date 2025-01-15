@@ -1,4 +1,5 @@
 import dataclasses
+import pickle
 import re
 import sys
 from functools import partial
@@ -73,6 +74,8 @@ class LoadAndEvalArgs:
     load_other_run: Path
     eval_envs: dict[str, EvalConfig] = dataclasses.field(default_factory=default_eval_envs)
     only_last_checkpoint: bool = False
+    checkpoints_to_load: List[str] = dataclasses.field(default_factory=list)
+    save_logs: bool = True
 
     # for Writer
     base_run_dir: Path = Path("/training/cleanba")
@@ -94,17 +97,26 @@ def recursive_find_checkpoint(root: Path) -> Iterable[Path]:
             yield from recursive_find_checkpoint(root / x)
 
 
-cp_expr = re.compile("^.*/cp_([0-9]+)$")
+cp_expr = re.compile("^.*/?cp_([0-9]+)$")
 
 
 def load_and_eval(args: LoadAndEvalArgs):
     checkpoints_to_load: List[Tuple[int, Path]] = []
-    for cp_candidate in recursive_find_checkpoint(args.load_other_run):
-        match = cp_expr.match(str(cp_candidate))
-        if match is None:
-            print("Skipping (not matching)", cp_candidate)
-        else:
-            checkpoints_to_load.append((int(match.group(1)), cp_candidate))
+    if args.checkpoints_to_load:
+        assert args.only_last_checkpoint is False, "Can't specify both checkpoints_to_load and only_last_checkpoint."
+        for cp in args.checkpoints_to_load:
+            match = cp_expr.match(str(cp))
+            if match is None:
+                raise ValueError(f"Invalid checkpoint path: {cp}")
+            else:
+                checkpoints_to_load.append((int(match.group(1)), args.load_other_run / cp))
+    else:
+        for cp_candidate in recursive_find_checkpoint(args.load_other_run):
+            match = cp_expr.match(str(cp_candidate))
+            if match is None:
+                print("Skipping (not matching)", cp_candidate)
+            else:
+                checkpoints_to_load.append((int(match.group(1)), cp_candidate))
     checkpoints_to_load.sort()
 
     assert len(set(cp_candidate.parent for _, cp_candidate in checkpoints_to_load)) == 1
@@ -118,9 +130,15 @@ def load_and_eval(args: LoadAndEvalArgs):
     for cp_step, cp_path in checkpoints_to_load:
         _, _, _, train_state, _ = load_train_state(cp_path)
         print("Evaluating", cp_path)
+
         for eval_name, evaluator in args.eval_envs.items():
             log_dict = evaluator.run(policy, get_action_fn, train_state.params, key=jax.random.PRNGKey(1234))
+            if args.save_logs:
+                with open(cp_path / f"{eval_name}_metrics_dict.pkl", "wb") as f:
+                    pickle.dump(log_dict, f)
             for k, v in log_dict.items():
+                if k.endswith("_all_episode_info"):
+                    continue
                 writer.add_scalar(f"{eval_name}/{k}", v, cp_step)
 
 
