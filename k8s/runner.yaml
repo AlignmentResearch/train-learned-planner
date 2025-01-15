@@ -23,14 +23,14 @@ spec:
       volumes:
       - name: training
         persistentVolumeClaim:
-          claimName: learned-planners
+          claimName: az-learned-planners
       - name: dshm
         emptyDir:
           medium: Memory
           sizeLimit: "{SHM_SIZE}"
       containers:
       - name: devbox-container
-        image: "ghcr.io/alignmentresearch/lp-cleanba:{CONTAINER_TAG}"
+        image: "ghcr.io/alignmentresearch/train-learned-planner:{CONTAINER_TAG}"
         imagePullPolicy: Always
         command:
           - bash

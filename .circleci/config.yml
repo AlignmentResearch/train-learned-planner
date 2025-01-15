@@ -4,7 +4,7 @@ parameters:
   docker_img_version:
     # Docker image version for running tests.
     type: string
-    default: "dcf0f9f-main"
+    default: "b43dac5-main"
 
 workflows:
   test-jobs:
@@ -50,7 +50,6 @@ jobs:
           name: Run tests
           command: |
             mkdir /workspace/test-results
-            pip install matplotlib
             pytest --junitxml=/workspace/test-results/worker-0.xml --verbose -m 'not slow'
           environment:
             OMP_NUM_THREADS: "2"
