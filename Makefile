@@ -32,9 +32,11 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 # We use RELEASE_PREFIX as the image so we don't have to re-build it constantly. Once we have bootstrapped
 # `requirements.txt`, we can push the image with `make release/main-pip-tools`
 requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "${APPLICATION_URL}:${RELEASE_PREFIX}-main-pip-tools" \
-	pip-compile --verbose -o requirements.txt.new \
-		--extra=dev --extra=launch_jobs pyproject.toml
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "python:3.11.9" \
+    bash -c "pip install pip-tools \
+		&& cd /workspace \
+		&& pip-compile --verbose -o requirements.txt.new \
+			--extra=dev --extra=launch_jobs pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
