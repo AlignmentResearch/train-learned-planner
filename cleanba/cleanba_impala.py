@@ -94,6 +94,7 @@ class WandbWriter:
                 (f.name for f in old_run_dir_sym.iterdir() if re.match(r"run-([a-zA-Z0-9]+)\.wandb", f.name))
             )
             run_id = run_id.split(".")[0].split("-")[1]
+            print(f"Resuming run {run_id} found in {old_run_dir_sym}")
 
         cfg_dict = farconf.to_dict(cfg)
         assert isinstance(cfg_dict, dict)
@@ -320,6 +321,7 @@ def rollout(
     learner_devices: list[jax.Device],
     device_thread_id: int,
     actor_device,
+    global_step: int = 0,
 ):
     actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
 
@@ -339,7 +341,6 @@ def rollout(
     this_thread_eval_keys = list(jax.random.split(eval_keys, len(this_thread_eval_cfg)))
 
     len_actor_device_ids = len(args.actor_device_ids)
-    global_step = 0
     start_time = time.time()
 
     log_stats = LoggingStats.new_empty()
@@ -514,6 +515,8 @@ def rollout(
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
                 log_dict = env_config.run(policy, get_action_fn, params, key=eval_key)
                 for k, v in log_dict.items():
+                    if k.endswith("_all_episode_info"):
+                        continue
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
 
 
@@ -593,6 +596,8 @@ def train(
         if writer is None:
             writer = WandbWriter(args)
 
+        global_step = 0
+
         # seeding
         random.seed(args.seed)
         np.random.seed(random_seed())
@@ -611,12 +616,10 @@ def train(
             valid_checkpoints = [(f, num) for f, num in valid_checkpoints if num is not None]
             
             if valid_checkpoints:
-                latest_checkpoint = max(valid_checkpoints, key=lambda x: x[1])[0]
+                latest_checkpoint, global_step = max(valid_checkpoints, key=lambda x: x[1])
                 load_path = potential_load_path / Path(latest_checkpoint)
                 assert load_path.exists()
                 print(f"Set {load_path=}")
-            else:
-                print(f"No valid checkpoints found in {potential_load_path}")       
 
         if load_path is None:
             agent_state = TrainState.create(
@@ -627,8 +630,9 @@ def train(
             update = 1
         else:
             _, _, old_args, agent_state, update = load_train_state(load_path)
+            args.learner_policy_version = old_args.learner_policy_version
             print(
-                f"Loaded TrainState at {update=} from {load_path=}. Here are the differences from `args` "
+                f"Loaded TrainState at {update=} and {args.learner_policy_version=} from {load_path=}. Here are the differences from `args` "
                 "to the loaded args:"
             )
             print(farconf.config_diff(farconf.to_dict(args), farconf.to_dict(old_args)))
@@ -670,6 +674,7 @@ def train(
                         runtime_info.learner_devices,
                         d_idx * args.num_actor_threads + thread_id,
                         runtime_info.local_devices[d_id],
+                        global_step,
                     ),
                 ).start()
 
