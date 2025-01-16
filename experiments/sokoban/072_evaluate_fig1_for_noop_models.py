@@ -45,6 +45,8 @@ for load_path, checkpoints in runs_to_evaluate:
 
     def update(config: LoadAndEvalArgs) -> LoadAndEvalArgs:
         config.load_other_run = load_path
+        for env in config.load_other_run.eval_envs.values():
+            env.nn_without_noop = False
         config.checkpoints_to_load = checkpoints
         return config
 
