@@ -85,6 +85,16 @@ class WandbWriter:
 
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
+
+        old_run_dir_sym = run_dir / "wandb" / job_name
+        run_id = None
+        if old_run_dir_sym.exists():
+            # check if run-{alphanumeric_id}.wandb exists in old_run_dir and fetch the alphanumeric part
+            run_id = next(
+                (f.name for f in old_run_dir_sym.iterdir() if re.match(r"run-([a-zA-Z0-9]+)\.wandb", f.name))
+            )
+            run_id = run_id.split(".")[0].split("-")[1]
+
         cfg_dict = farconf.to_dict(cfg)
         assert isinstance(cfg_dict, dict)
 
@@ -96,6 +106,8 @@ class WandbWriter:
             monitor_gym=False,  # Must manually log videos to wandb
             sync_tensorboard=False,  # Manually log tensorboard
             settings=wandb.Settings(code_dir=str(Path(__file__).parent.parent)),
+            resume="allow",
+            id=run_id,
         )
 
         assert wandb.run is not None
@@ -104,6 +116,7 @@ class WandbWriter:
         self._save_dir.mkdir()
 
         self.named_save_dir = Path(wandb.run.dir).parent.parent / job_name
+        assert old_run_dir_sym == self.named_save_dir
         if not self.named_save_dir.exists():
             self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
 
@@ -559,6 +572,13 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     ]
     return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
+def get_checkpoint_number(filename):
+    if not filename.startswith('cp_'):
+        return None
+    try:
+        return int(filename.split('_')[1])
+    except (IndexError, ValueError):
+        return None
 
 def train(
     args: Args,
@@ -586,11 +606,17 @@ def train(
         if args.load_path is None:
             potential_load_path = writer.named_save_dir / "local-files"
             cp_paths = os.listdir(potential_load_path)
-            cp_paths.sort()
-            if cp_paths:
-                load_path = potential_load_path / Path(cp_paths[-1])
+            # Filter and sort valid checkpoints only
+            valid_checkpoints = [(f, get_checkpoint_number(f)) for f in cp_paths]
+            valid_checkpoints = [(f, num) for f, num in valid_checkpoints if num is not None]
+            
+            if valid_checkpoints:
+                latest_checkpoint = max(valid_checkpoints, key=lambda x: x[1])[0]
+                load_path = potential_load_path / Path(latest_checkpoint)
                 assert load_path.exists()
                 print(f"Set {load_path=}")
+            else:
+                print(f"No valid checkpoints found in {potential_load_path}")       
 
         if load_path is None:
             agent_state = TrainState.create(
