@@ -90,9 +90,7 @@ class WandbWriter:
         run_id = None
         if old_run_dir_sym.exists():
             # check if run-{alphanumeric_id}.wandb exists in old_run_dir and fetch the alphanumeric part
-            run_id = next(
-                (f.name for f in old_run_dir_sym.iterdir() if re.match(r"run-([a-zA-Z0-9]+)\.wandb", f.name))
-            )
+            run_id = next((f.name for f in old_run_dir_sym.iterdir() if re.match(r"run-([a-zA-Z0-9]+)\.wandb", f.name)))
             run_id = run_id.split(".")[0].split("-")[1]
             print(f"Resuming run {run_id} found in {old_run_dir_sym}")
 
@@ -575,13 +573,15 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     ]
     return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
 
+
 def get_checkpoint_number(filename):
-    if not filename.startswith('cp_'):
+    if not filename.startswith("cp_"):
         return None
     try:
-        return int(filename.split('_')[1])
+        return int(filename.split("_")[1])
     except (IndexError, ValueError):
         return None
+
 
 def train(
     args: Args,
@@ -614,7 +614,7 @@ def train(
             # Filter and sort valid checkpoints only
             valid_checkpoints = [(f, get_checkpoint_number(f)) for f in cp_paths]
             valid_checkpoints = [(f, num) for f, num in valid_checkpoints if num is not None]
-            
+
             if valid_checkpoints:
                 latest_checkpoint, global_step = max(valid_checkpoints, key=lambda x: x[1])
                 load_path = potential_load_path / Path(latest_checkpoint)
