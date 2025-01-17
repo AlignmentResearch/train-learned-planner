@@ -55,6 +55,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                     config.loss = dataclasses.replace(config.loss, ent_coef=ent_coef)
                     assert isinstance(config.train_env, EnvpoolBoxobanConfig)
                     config.train_env.reward_noop = reward_noop
+                    config.train_env.nn_without_noop = False
 
                     return config
 

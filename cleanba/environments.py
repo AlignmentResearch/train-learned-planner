@@ -105,7 +105,7 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     min_episode_steps: int = 0  # The minimum length of an episode.
     load_sequentially: bool = False
     n_levels_to_load: int = -1  # -1 means "all levels". Used only when `load_sequentially` is True.
-    nn_without_noop: bool = False  # Use a neural network without the noop action
+    nn_without_noop: bool = True  # Use a neural network without the noop action
 
     # Not present in _SokobanEnvSpec
     cache_path: Path = Path("/opt/sokoban_cache")
@@ -155,7 +155,7 @@ class BaseSokobanEnvConfig(EnvConfig):
     reward_box: float = 1.0  # Reward for putting a box on target
     reward_step: float = -0.1  # Reward for completing a step
     reward_noop: float = 0.0  # Addtional reward for doing nothing
-    nn_without_noop: bool = False  # Use a neural network without the noop action
+    nn_without_noop: bool = True  # Use a neural network without the noop action
 
     reset: bool = False
     asynchronous: bool = True
