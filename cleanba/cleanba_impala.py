@@ -6,6 +6,7 @@ import os
 import queue
 import random
 import re
+import shutil
 import sys
 import threading
 import time
@@ -116,8 +117,13 @@ class WandbWriter:
 
         self.named_save_dir = Path(wandb.run.dir).parent.parent / job_name
         assert old_run_dir_sym == self.named_save_dir
-        if not self.named_save_dir.exists():
-            self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
+        if self.named_save_dir.exists():
+            # copy all checkpoints to the new run dir
+            for f in (self.named_save_dir / "local-files").iterdir():
+                shutil.move(f, self._save_dir / f.name)
+            self.named_save_dir.unlink()
+
+        self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
 
         self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
