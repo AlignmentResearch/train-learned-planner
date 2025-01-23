@@ -159,6 +159,7 @@ class BaseSokobanEnvConfig(EnvConfig):
 
     reset: bool = False
     asynchronous: bool = True
+    dim_room: tuple[int, int] = (10, 10)
 
     def env_kwargs(self) -> dict[str, Any]:
         return dict(
@@ -174,6 +175,7 @@ class BaseSokobanEnvConfig(EnvConfig):
             reset=self.reset,
             asynchronous=self.asynchronous,
             min_episode_steps=self.min_episode_steps,
+            dim_room=self.dim_room,
         )
 
     def env_reward_kwargs(self):
