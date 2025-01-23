@@ -41,8 +41,8 @@ arch_fns = [
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
     for arch_fn in arch_fns:
-        for reward_noop in [1e-2, 5e-3, 0.0]:
-            for ent_coef in [1e-2, 3e-2]:
+        for reward_noop in [5e-2, 7e-2, 9e-2]:
+            for ent_coef in [1e-2, 5e-2]:
 
                 def update_seeds(config: Args) -> Args:
                     config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -69,7 +69,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                 clis.append(cli)
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = 1
+RUNS_PER_MACHINE = 3
 for i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
         ["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
@@ -77,13 +77,13 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
     runs.append(
         FlamingoRun(
             this_run_clis,
-            CONTAINER_TAG="2369b92-main",
-            CPU=6,
-            MEMORY="30G",
+            CONTAINER_TAG="4f8513c-main",
+            CPU=4 * RUNS_PER_MACHINE,
+            MEMORY=f"{15 * RUNS_PER_MACHINE}G",
             GPU=1,
             PRIORITY="normal-batch",
             # PRIORITY="high-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".99"',
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".30"',
         )
     )
 

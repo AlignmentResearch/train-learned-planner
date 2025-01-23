@@ -35,7 +35,7 @@ class EvalConfig:
             all_rewards = []
             all_cycles = []
             num_cycles = 0
-            cycle_lens = 0
+            cycle_steps = 0
             num_noops = 0
             for minibatch_idx in range(self.n_episode_multiple):
                 # Re-create the environments, so we start at the beginning of the batch
@@ -109,20 +109,21 @@ class EvalConfig:
                         )
                         all_cycles.append(cycles)
                         num_cycles += len(cycles)
-                        cycle_lens += sum(cyc_len for _, cyc_len in cycles)
+                        cycle_steps += sum(cyc_len for _, cyc_len in cycles)
 
                     total_time = time.time() - start_time
                     print(f"To evaluate the {minibatch_idx}th batch, {round(total_time, ndigits=3)}s")
 
+            total_episodes = self.n_episode_multiple * self.env.num_envs
             metrics.update(
                 {
                     f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
                     f"{steps_to_think:02d}_episode_lengths": float(np.mean(all_episode_lengths)),
                     f"{steps_to_think:02d}_episode_successes": float(np.mean(all_episode_successes)),
-                    f"{steps_to_think:02d}_episode_num_cycles": num_cycles / (self.n_episode_multiple * self.env.num_envs),
-                    f"{steps_to_think:02d}_episode_cycle_lens": cycle_lens / (self.n_episode_multiple * self.env.num_envs),
-                    f"{steps_to_think:02d}_episode_num_noops_per_eps": num_noops
-                    / (self.n_episode_multiple * self.env.num_envs),
+                    f"{steps_to_think:02d}_episode_num_cycles": num_cycles / total_episodes,
+                    f"{steps_to_think:02d}_cycles_steps_per_eps_incl_noops": cycle_steps / total_episodes,
+                    f"{steps_to_think:02d}_cycles_steps_per_eps_excl_noops": (cycle_steps - num_noops) / total_episodes,
+                    f"{steps_to_think:02d}_episode_num_noops_per_eps": num_noops / total_episodes,
                     f"{steps_to_think:02d}_all_episode_info": dict(
                         episode_returns=all_episode_returns,
                         episode_lengths=all_episode_lengths,
@@ -143,7 +144,7 @@ def get_cycles(
     min_cycle_length: int = 1,
 ) -> list[tuple[int, int]]:
     """
-    Given a sequence of observations, find all cycles in the sequence.
+    Given a sequence of observations, find all cycles in the sequence (including noop actions).
     A cycle is a sequence of observations with the same starting and ending observations.
 
     Args:
