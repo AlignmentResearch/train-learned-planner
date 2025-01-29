@@ -14,7 +14,7 @@ import warnings
 from collections import deque
 from functools import partial
 from pathlib import Path
-from typing import Any, Iterator, List, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
 import chex
 import databind.core.converter
@@ -180,7 +180,7 @@ def initialize_multi_device(args: Args) -> Iterator[RuntimeInformation]:
     num_envs = args.local_num_envs * world_size * args.num_actor_threads * len(args.actor_device_ids)
     batch_size = local_batch_size * world_size
     minibatch_size = local_minibatch_size * world_size
-    num_updates = args.total_timesteps // (local_batch_size * world_size)
+    num_updates = args.total_timesteps // (local_batch_size * world_size)  # this shouldn't include args.train_epochs
     local_devices = jax.local_devices()
     global_devices = jax.devices()
     learner_devices = [local_devices[d_id] for d_id in args.learner_device_ids]
@@ -530,11 +530,12 @@ def linear_schedule(
     initial_learning_rate: float,
     minibatches_per_update: int,
     total_updates: int,
+    train_epochs: int,
     final_learning_rate: float = 0.0,
 ) -> chex.Numeric:
     # anneal learning rate linearly after one training iteration which contains
     # (args.num_minibatches) gradient updates
-    frac = (count // minibatches_per_update) / total_updates
+    frac = (count // minibatches_per_update) / (total_updates * train_epochs)
     return initial_learning_rate + frac * (final_learning_rate - initial_learning_rate)
 
 
@@ -555,21 +556,25 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
         final_learning_rate=args.final_learning_rate,
         minibatches_per_update=args.num_minibatches,
         total_updates=total_updates,
+        train_epochs=args.train_epochs,
     )
+
+    def _linear_or_constant_schedule(count: chex.Numeric) -> chex.Numeric:
+        return _linear_schedule(count) if args.anneal_lr else args.learning_rate
 
     def get_tranform_chain(scheduler):
         return [
             optax.clip_by_global_norm(args.max_grad_norm),
             (
                 optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=scheduler if args.anneal_lr else args.learning_rate,
+                    learning_rate=scheduler,
                     eps=args.rmsprop_eps,
                     decay=args.rmsprop_decay,
                 )
                 if args.optimizer == "rmsprop"
                 else (
                     optax.inject_hyperparams(optax.adam)(
-                        learning_rate=scheduler if args.anneal_lr else args.learning_rate,
+                        learning_rate=scheduler,
                         b1=args.adam_b1,
                         b2=args.rmsprop_decay,
                         eps=args.rmsprop_eps,
@@ -579,7 +584,7 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
             ),
         ]
 
-    transform_chain += get_tranform_chain(_linear_schedule)
+    transform_chain += get_tranform_chain(_linear_or_constant_schedule)
 
     frozen_labels = jax.tree_map(lambda x: "trainable", params)
     if args.finetune_with_noop_head:
@@ -589,15 +594,28 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
             lambda x: "trainable", params["params"]["actor_params"]["Output"]
         )
 
-        frozen_finetune_steps = args.frozen_finetune_steps_ratio * args.total_timesteps
-
-        def frozen_schedule(step):
+        def frozen_schedule(
+            count: chex.Numeric,
+            frozen_finetune_steps_ratio: float,
+            minibatches_per_update: int,
+            total_updates: int,
+            train_epochs: int,
+            default_schedule: Callable[[chex.Numeric], chex.Numeric],
+        ) -> chex.Numeric:
             # Return 0 during frozen period, then transition to normal learning rate
-            return jnp.where(
-                step < frozen_finetune_steps, 0.0, _linear_schedule(step) if args.anneal_lr else args.learning_rate
-            )
+            frac = (count // minibatches_per_update) / (total_updates * train_epochs)
+            return jnp.where(frac < frozen_finetune_steps_ratio, 0.0, default_schedule(count))
 
-        frozen_transform_chain = get_tranform_chain(frozen_schedule)
+        frozen_transform_chain = get_tranform_chain(
+            partial(
+                frozen_schedule,
+                frozen_finetune_steps_ratio=args.frozen_finetune_steps_ratio,
+                minibatches_per_update=args.num_minibatches,
+                total_updates=total_updates,
+                train_epochs=args.train_epochs,
+                default_schedule=_linear_or_constant_schedule,
+            )
+        )
 
         transforms = {
             "frozen": optax.chain(*frozen_transform_chain),
@@ -739,6 +757,7 @@ def train(
         actor_policy_version = 0
 
         global MUST_STOP_PROGRAM
+        MUST_STOP_PROGRAM = False  # setting here as well to False to ensure multiple test cases don't override it
         while not MUST_STOP_PROGRAM:
             print("train learner_policy_version", args.learner_policy_version)
             args.learner_policy_version += 1
@@ -885,7 +904,10 @@ def load_train_state(
     with open(dir / "model", "rb") as f:
         train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
-    train_state = unreplicate(train_state)
+    try:
+        train_state = unreplicate(train_state)
+    except TypeError:
+        pass  # must be already unreplicated
     if isinstance(args.net, ConvLSTMConfig):
         for i in range(args.net.n_recurrent):
             train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
