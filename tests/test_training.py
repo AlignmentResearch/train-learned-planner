@@ -11,7 +11,7 @@ import pytest
 from flax.training.train_state import TrainState
 
 from cleanba.cleanba_impala import WandbWriter, _concat_and_shard_rollout_internal, load_train_state, train
-from cleanba.config import Args
+from cleanba.config import Args, sokoban_drc33_59
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMCellState
 from cleanba.environments import SokobanConfig
 from cleanba.evaluate import EvalConfig
@@ -192,3 +192,61 @@ def test_concat_and_shard_rollout_internal():
             out.carry_t,
         )
     )
+
+
+@pytest.mark.parametrize(
+    "frozen_at_all_steps",
+    [True, False],
+)
+def test_finetune_noop(tmpdir: Path, frozen_at_all_steps: bool):
+    env_cfg = SokobanConfig(
+        max_episode_steps=2,
+        num_envs=1,
+        seed=1,
+        min_episode_steps=2,
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(10, 10),
+        asynchronous=False,
+    )
+
+    args = sokoban_drc33_59()
+    args.train_env = env_cfg
+    args.total_timesteps = 10
+    args.frozen_finetune_steps_ratio = 1.0 / (1 if frozen_at_all_steps else 2)
+    args.local_num_envs = 1
+    args.num_actor_threads = 1
+    args.num_steps = 2
+    args.finetune_with_noop_head = True
+    args.train_epochs = 2
+    args.gradient_accumulation_steps = 1
+    args.num_minibatches = 1
+    args.concurrency = False
+    args.learning_rate = 1e5
+
+    args.load_path = Path("/training/cleanba/061-pfinal2/drc33/bkynosqi/cp_2002944000/")
+
+    _, _, _, orig_agent_state, _ = load_train_state(args.load_path, finetune_with_noop_head=True)
+
+    writer = CheckingWriter(args, tmpdir, ["eval0/00_episode_successes"])
+
+    final_state = train(args, writer=writer)
+
+    fs_flat = jax.tree_util.tree_leaves_with_path(final_state.params)
+    os_flat = jax.tree_util.tree_leaves_with_path(orig_agent_state.params)
+
+    violations = []
+    for (fs_path, fs), (os_path, os) in zip(fs_flat, os_flat):
+        assert fs_path == os_path
+        concat_path = "/".join(map(lambda x: str(x.key), fs_path))
+
+        if frozen_at_all_steps and not concat_path.startswith("params/actor_params/Output"):
+            # assert np.allclose(fs, os), f"Path: {concat_path}"
+            if not np.allclose(fs, os):
+                violations.append(f"Path: {concat_path}")
+        else:
+            # assert not np.allclose(fs, os), f"Path: {concat_path}"
+            if np.allclose(fs, os):
+                violations.append(f"Path: {concat_path}")
+
+    assert not violations, "\n".join(violations)

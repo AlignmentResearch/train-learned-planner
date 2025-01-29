@@ -89,7 +89,7 @@ class WandbWriter:
 
         old_run_dir_sym = run_dir / "wandb" / job_name
         run_id = None
-        if old_run_dir_sym.exists():
+        if old_run_dir_sym.exists() and not cfg.finetune_with_noop_head:
             # check if run-{alphanumeric_id}.wandb exists in old_run_dir and fetch the alphanumeric part
             run_id = next((f.name for f in old_run_dir_sym.iterdir() if re.match(r"run-([a-zA-Z0-9]+)\.wandb", f.name)))
             run_id = run_id.split(".")[0].split("-")[1]
@@ -557,27 +557,58 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
         total_updates=total_updates,
     )
 
-    transform_chain += [
-        optax.clip_by_global_norm(args.max_grad_norm),
-        (
-            optax.inject_hyperparams(rmsprop_pytorch_style)(
-                learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
-                eps=args.rmsprop_eps,
-                decay=args.rmsprop_decay,
-            )
-            if args.optimizer == "rmsprop"
-            else (
-                optax.inject_hyperparams(optax.adam)(
-                    learning_rate=_linear_schedule if args.anneal_lr else args.learning_rate,
-                    b1=args.adam_b1,
-                    b2=args.rmsprop_decay,
+    def get_tranform_chain(scheduler):
+        return [
+            optax.clip_by_global_norm(args.max_grad_norm),
+            (
+                optax.inject_hyperparams(rmsprop_pytorch_style)(
+                    learning_rate=scheduler if args.anneal_lr else args.learning_rate,
                     eps=args.rmsprop_eps,
-                    eps_root=0.0,
+                    decay=args.rmsprop_decay,
                 )
+                if args.optimizer == "rmsprop"
+                else (
+                    optax.inject_hyperparams(optax.adam)(
+                        learning_rate=scheduler if args.anneal_lr else args.learning_rate,
+                        b1=args.adam_b1,
+                        b2=args.rmsprop_decay,
+                        eps=args.rmsprop_eps,
+                        eps_root=0.0,
+                    )
+                )
+            ),
+        ]
+
+    transform_chain += get_tranform_chain(_linear_schedule)
+
+    frozen_labels = jax.tree_map(lambda x: "trainable", params)
+    if args.finetune_with_noop_head:
+        # Label actor head parameters as 'trainable'
+        frozen_labels = jax.tree_map(lambda x: "frozen", params)
+        frozen_labels["params"]["actor_params"]["Output"] = jax.tree_map(
+            lambda x: "trainable", params["params"]["actor_params"]["Output"]
+        )
+
+        frozen_finetune_steps = args.frozen_finetune_steps_ratio * args.total_timesteps
+
+        def frozen_schedule(step):
+            # Return 0 during frozen period, then transition to normal learning rate
+            return jnp.where(
+                step < frozen_finetune_steps, 0.0, _linear_schedule(step) if args.anneal_lr else args.learning_rate
             )
-        ),
-    ]
-    return optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
+
+        frozen_transform_chain = get_tranform_chain(frozen_schedule)
+
+        transforms = {
+            "frozen": optax.chain(*frozen_transform_chain),
+            "trainable": optax.chain(*transform_chain),
+        }
+        optimizer = optax.MultiSteps(
+            optax.multi_transform(transforms, frozen_labels), every_k_schedule=args.gradient_accumulation_steps
+        )
+    else:
+        optimizer = optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
+    return optimizer
 
 
 def get_checkpoint_number(filename):
@@ -596,7 +627,12 @@ def train(
 ):
     warnings.filterwarnings("ignore", "", UserWarning, module="gymnasium.vector")
 
+    if args.finetune_with_noop_head:
+        args.train_env.nn_without_noop = False
+        for eval_env_cfg in args.eval_envs.values():
+            eval_env_cfg.env.nn_without_noop = False
     train_env_cfg = dataclasses.replace(args.train_env, num_envs=args.local_num_envs)
+
     with initialize_multi_device(args) as runtime_info, contextlib.closing(train_env_cfg.make()) as envs:
         pprint(runtime_info)
         if writer is None:
@@ -635,8 +671,21 @@ def train(
             )
             update = 1
         else:
-            _, _, old_args, agent_state, update = load_train_state(load_path)
-            args.learner_policy_version = old_args.learner_policy_version
+            _, _, old_args, agent_state, update = load_train_state(
+                load_path,
+                env_cfg=train_env_cfg,
+                finetune_with_noop_head=args.finetune_with_noop_head,
+            )
+            # args.learner_policy_version = getattr(args if args.finetune_with_noop_head else old_args, "learner_policy_version")
+            if args.finetune_with_noop_head:
+                agent_state = TrainState.create(
+                    apply_fn=None,
+                    params=agent_state.params,
+                    tx=make_optimizer(args, agent_state.params, total_updates=runtime_info.num_updates),
+                )
+                update = 1
+            else:
+                args.learner_policy_version = old_args.learner_policy_version
             print(
                 f"Loaded TrainState at {update=} and {args.learner_policy_version=} from {load_path=}. Here are the differences from `args` "
                 "to the loaded args:"
@@ -691,6 +740,7 @@ def train(
 
         global MUST_STOP_PROGRAM
         while not MUST_STOP_PROGRAM:
+            print("train learner_policy_version", args.learner_policy_version)
             args.learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
             sharded_storages = []
@@ -774,7 +824,8 @@ def train(
 
             if args.learner_policy_version >= runtime_info.num_updates:
                 # The program is finished!
-                return
+                return agent_state
+    return agent_state
 
 
 def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step: int):
@@ -788,6 +839,7 @@ def save_train_state(dir: Path, args: Args, train_state: TrainState, update_step
 def load_train_state(
     dir: Path,
     env_cfg=None,  # environment config from the learned_planner package are also supported
+    finetune_with_noop_head: bool = False,
 ) -> tuple[Policy, PolicyCarryT, Args, TrainState, int]:
     with open(dir / "cfg.json", "r") as f:
         args_dict = json.load(f)
@@ -815,6 +867,10 @@ def load_train_state(
     if env_cfg is None:
         env_cfg = args.train_env
     env_cfg = convert_to_cleanba_config(env_cfg)  # converts environment config from the learned_planner package
+
+    if finetune_with_noop_head:
+        env_cfg = dataclasses.replace(env_cfg, nn_without_noop=False)
+
     env = env_cfg.make()
     policy, carry, params = args.net.init_params(env, jax.random.PRNGKey(1234))
 
@@ -837,6 +893,17 @@ def load_train_state(
                 axis=2,
                 keepdims=True,
             )
+
+    if finetune_with_noop_head:
+        loaded_head = train_state.params["params"]["actor_params"]["Output"]
+        transfer_head = jax.tree_util.tree_map(np.array, target_state.params["params"]["actor_params"]["Output"])
+        num_actions = loaded_head["kernel"].shape[1]
+
+        transfer_head["kernel"][:, :num_actions] = loaded_head["kernel"]
+        transfer_head["bias"][:num_actions] = loaded_head["bias"]
+
+        train_state.params["params"]["actor_params"]["Output"] = transfer_head
+
     return policy, carry, args, train_state, update_step
 
 
