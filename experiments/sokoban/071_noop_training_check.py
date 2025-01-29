@@ -39,10 +39,10 @@ arch_fns = [
 ]
 
 
-for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
+for i, env_seed, learn_seed in [(i, random_seed(), random_seed()) for i in range(2)]:
     for arch_fn in arch_fns:
-        for reward_noop in [5e-2, 7e-2, 9e-2]:
-            for ent_coef in [1e-2, 5e-2]:
+        for reward_noop in [0.0, 0.01, 0.05, 0.09]:
+            for ent_coef in [1e-2]:
 
                 def update_seeds(config: Args) -> Args:
                     config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -57,7 +57,15 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                     config.train_env.reward_noop = reward_noop
                     config.train_env.nn_without_noop = False
 
+                    config.total_timesteps = 2_002_944_000
+
+                    for env in config.eval_envs.values():
+                        env.steps_to_think = [0]
+
                     return config
+
+                if i > 0 and reward_noop > 1.0:
+                    continue
 
                 cli, _ = update_fns_to_cli(sokoban_resnet59, arch_fn, update_seeds)
 
@@ -69,7 +77,7 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
                 clis.append(cli)
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = 3
+RUNS_PER_MACHINE = 1
 for i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
         ["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
@@ -83,7 +91,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             GPU=1,
             PRIORITY="normal-batch",
             # PRIORITY="high-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".30"',
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".90"',
         )
     )
 
@@ -95,5 +103,5 @@ if __name__ == "__main__":
         runs,
         group=GROUP,
         job_template_path=Path(__file__).parent.parent.parent / "k8s/runner.yaml",
-        project="cleanba",
+        project="lp-cleanba",
     )
