@@ -638,6 +638,44 @@ def get_checkpoint_number(filename):
         return None
 
 
+def get_learning_rate(opt_state: optax.OptState) -> float | None:
+    """Extract current learning rate from optimizer state"""
+    if getattr(opt_state, "hyperparams", None) is not None:
+        return opt_state.hyperparams["learning_rate"]
+
+    if isinstance(opt_state, optax.EmptyState):
+        return None
+
+    if isinstance(opt_state, optax.MultiStepsState):
+        return get_learning_rate(opt_state.inner_opt_state)
+
+    if isinstance(opt_state, optax.MultiTransformState):
+        return get_learning_rate(opt_state.inner_states)
+
+    if isinstance(opt_state, optax.MaskedState):
+        return get_learning_rate(opt_state.inner_state)
+
+    if isinstance(opt_state, list) or isinstance(opt_state, tuple):
+        # For gradient accumulation, get the inner optimizer state
+        for opt_state_ in opt_state:
+            lr = get_learning_rate(opt_state_)
+            if lr is not None:
+                return lr
+        return None
+
+    if isinstance(opt_state, dict):
+        # For multi-transform optimizers
+        if "trainable" in opt_state:
+            # Finetune case: use trainable learning rate
+            return get_learning_rate(opt_state["trainable"])
+        else:
+            # Yang optimizer case - average all learning rates
+            learning_rates = [lr for v in opt_state.values() if (lr := get_learning_rate(v)) is not None]
+            return float(np.mean(learning_rates))
+
+    raise NotImplementedError(f"Unknown optimizer state type {type(opt_state)}")
+
+
 def train(
     args: Args,
     *,
@@ -832,6 +870,10 @@ def train(
                     writer.add_scalar(name, value[0].item(), global_step)
 
                 writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
+
+                lr = get_learning_rate(unreplicate(agent_state.opt_state))
+                assert lr is not None
+                writer.add_scalar("losses/learning_rate", lr, global_step)
 
             if args.save_model and args.learner_policy_version in args.eval_at_steps:
                 print("Learner thread entering save barrier (should be last)")
