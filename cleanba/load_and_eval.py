@@ -123,12 +123,13 @@ def load_and_eval(args: LoadAndEvalArgs):
     if args.only_last_checkpoint:
         checkpoints_to_load = checkpoints_to_load[-1:]
     print("Going to load from checkpoints: ", checkpoints_to_load)
-    policy, _, cp_cfg, train_state, _ = load_train_state(checkpoints_to_load[0][1])
+    env_cfg = next(iter(args.eval_envs.values())).env
+    policy, _, cp_cfg, train_state, _ = load_train_state(checkpoints_to_load[0][1], env_cfg=env_cfg)
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     writer = WandbWriter(cp_cfg, wandb_cfg_extra_data={"load_other_run": str(args.load_other_run)})
     for cp_step, cp_path in checkpoints_to_load:
-        _, _, _, train_state, _ = load_train_state(cp_path)
+        _, _, _, train_state, _ = load_train_state(cp_path, env_cfg=env_cfg)
         print("Evaluating", cp_path)
 
         for eval_name, evaluator in args.eval_envs.items():

@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cleanba.environments import EnvConfig
+from cleanba.environments import EnvConfig, EnvpoolBoxobanConfig
 from cleanba.network import Policy
 
 
@@ -25,18 +25,24 @@ class EvalConfig:
         max_steps = min(self.safeguard_max_episode_steps, self.env.max_episode_steps)
         episode_starts_no = jnp.zeros(self.env.num_envs, dtype=jnp.bool_)
 
+        reward_box_on_target, reward_box_off_target = None, None
+        if isinstance(self.env, EnvpoolBoxobanConfig):
+            reward_box_on_target = self.env.reward_step + self.env.reward_box
+            reward_box_off_target = self.env.reward_step - self.env.reward_box
+
         metrics = {}
         for steps_to_think in self.steps_to_think:
             # Create the environments every time with the same seed so the levels are the exact same
             all_episode_returns = []
             all_episode_lengths = []
             all_episode_successes = []
+            all_episode_num_boxes = []
             all_acts = []
             all_rewards = []
             all_cycles = []
-            num_cycles = 0
-            cycle_steps = 0
-            num_noops = 0
+            num_cycles, num_cycles_in_solved = 0, 0
+            cycle_steps, cycle_steps_in_solved = 0, 0
+            num_noops, num_noops_in_solved = 0, 0
             for minibatch_idx in range(self.n_episode_multiple):
                 # Re-create the environments, so we start at the beginning of the batch
                 with contextlib.closing(self.env.make()) as envs:
@@ -61,6 +67,7 @@ class EvalConfig:
                     episode_lengths = np.zeros(envs.num_envs, dtype=np.int64)
                     episode_acts = np.zeros((max_steps, envs.num_envs), dtype=np.int32)
                     episode_rewards = np.zeros((max_steps, envs.num_envs), dtype=np.float32)
+                    episode_num_boxes = np.zeros(envs.num_envs, dtype=np.int64)
 
                     last_box_time_step = -1 * np.ones(envs.num_envs, dtype=np.int64)
                     noops_array = np.zeros((envs.num_envs, max_steps), dtype=bool)
@@ -80,6 +87,10 @@ class EvalConfig:
                         episode_lengths[~eps_done] += 1
                         episode_success[~eps_done] |= terminated[~eps_done]  # If episode terminates it's a success
 
+                        if reward_box_on_target is not None and reward_box_off_target is not None:
+                            episode_num_boxes[~eps_done] += np.isclose(rewards[~eps_done], reward_box_on_target)
+                            episode_num_boxes[~eps_done] -= np.isclose(rewards[~eps_done], reward_box_off_target)
+
                         episode_acts[i, ~eps_done] = cpu_action[~eps_done]
                         episode_rewards[i, ~eps_done] = rewards[~eps_done]
                         noops_array[:, i] = cpu_action == 4
@@ -94,6 +105,7 @@ class EvalConfig:
                     all_episode_returns.append(episode_returns)
                     all_episode_lengths.append(episode_lengths)
                     all_episode_successes.append(episode_success)
+                    all_episode_num_boxes.append(episode_num_boxes)
 
                     all_acts += [episode_acts[: episode_lengths[i], i] for i in range(envs.num_envs)]
                     all_rewards += [episode_rewards[: episode_lengths[i], i] for i in range(envs.num_envs)]
@@ -111,10 +123,17 @@ class EvalConfig:
                         num_cycles += len(cycles)
                         cycle_steps += sum(cyc_len for _, cyc_len in cycles)
 
+                        if episode_success[env_idx]:
+                            num_noops_in_solved += np.sum(noops_array[env_idx, : last_box_time_step[env_idx]])
+                            num_cycles_in_solved += len(cycles)
+                            cycle_steps_in_solved += sum(cyc_len for _, cyc_len in cycles)
+
                     total_time = time.time() - start_time
                     print(f"To evaluate the {minibatch_idx}th batch, {round(total_time, ndigits=3)}s")
 
             total_episodes = self.n_episode_multiple * self.env.num_envs
+            total_solved = np.sum(all_episode_successes)
+            all_episode_num_boxes = np.concatenate(all_episode_num_boxes)
             metrics.update(
                 {
                     f"{steps_to_think:02d}_episode_returns": float(np.mean(all_episode_returns)),
@@ -124,6 +143,17 @@ class EvalConfig:
                     f"{steps_to_think:02d}_cycles_steps_per_eps_incl_noops": cycle_steps / total_episodes,
                     f"{steps_to_think:02d}_cycles_steps_per_eps_excl_noops": (cycle_steps - num_noops) / total_episodes,
                     f"{steps_to_think:02d}_episode_num_noops_per_eps": num_noops / total_episodes,
+                    f"{steps_to_think:02d}_episode_num_cycles_in_solved": num_cycles_in_solved / total_solved,
+                    f"{steps_to_think:02d}_cycles_steps_per_eps_incl_noops_in_solved": cycle_steps_in_solved / total_solved,
+                    f"{steps_to_think:02d}_cycles_steps_per_eps_excl_noops_in_solved": (
+                        cycle_steps_in_solved - num_noops_in_solved
+                    )
+                    / total_solved,
+                    f"{steps_to_think:02d}_episode_num_noops_per_eps_in_solved": num_noops_in_solved / total_solved,
+                    f"{steps_to_think:02d}_episode_zero_boxes": np.sum(all_episode_num_boxes == 0) / total_episodes,
+                    f"{steps_to_think:02d}_episode_one_box": np.sum(all_episode_num_boxes == 1) / total_episodes,
+                    f"{steps_to_think:02d}_episode_two_boxes": np.sum(all_episode_num_boxes == 2) / total_episodes,
+                    f"{steps_to_think:02d}_episode_three_boxes": np.sum(all_episode_num_boxes == 3) / total_episodes,
                     f"{steps_to_think:02d}_all_episode_info": dict(
                         episode_returns=all_episode_returns,
                         episode_lengths=all_episode_lengths,
