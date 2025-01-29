@@ -586,11 +586,11 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
 
     transform_chain += get_tranform_chain(_linear_or_constant_schedule)
 
-    frozen_labels = jax.tree_map(lambda x: "trainable", params)
+    frozen_labels = jax.tree_util.tree_map(lambda x: "trainable", params)
     if args.finetune_with_noop_head:
         # Label actor head parameters as 'trainable'
-        frozen_labels = jax.tree_map(lambda x: "frozen", params)
-        frozen_labels["params"]["actor_params"]["Output"] = jax.tree_map(
+        frozen_labels = jax.tree_util.tree_map(lambda x: "frozen", params)
+        frozen_labels["params"]["actor_params"]["Output"] = jax.tree_util.tree_map(
             lambda x: "trainable", params["params"]["actor_params"]["Output"]
         )
 
