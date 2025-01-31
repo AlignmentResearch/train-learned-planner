@@ -45,8 +45,8 @@ for load_path, checkpoints in runs_to_evaluate:
 
     def update(config: LoadAndEvalArgs) -> LoadAndEvalArgs:
         config.load_other_run = load_path
-        for env in config.load_other_run.eval_envs.values():
-            env.nn_without_noop = False
+        for env in config.eval_envs.values():
+            env.env.nn_without_noop = False
         config.checkpoints_to_load = checkpoints
         return config
 
@@ -83,5 +83,5 @@ if __name__ == "__main__":
         runs,
         group=GROUP,
         job_template_path=Path(__file__).parent.parent.parent / "k8s/runner.yaml",
-        project="cleanba",
+        project="lp-cleanba",
     )
