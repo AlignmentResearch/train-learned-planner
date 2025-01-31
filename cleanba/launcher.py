@@ -51,6 +51,7 @@ class FlamingoRun:
     PRIORITY: str = "normal-batch"
     XLA_PYTHON_CLIENT_MEM_FRACTION: str = ".99"
     parallel: bool = True
+    job_names: list[str] = dataclasses.field(default_factory=list)
 
     def format_args(self) -> dict[str, str | int]:
         return {f.name: getattr(self, f.name) for f in dataclasses.fields(self) if f.name != "cfg"}
@@ -100,12 +101,15 @@ def create_jobs(
 
         job_name = "lp"
         wandb_job_name: Optional[str] = None
-        for run_cli in run.commands:
-            name1, name2 = random_names()
-            job_number = start_number + i
-
-            wandb_job_name = f"{name1}-{name2}-{job_number}"
-            job_name += f"-{name1[:2]}{name2[:2]}{job_number}"
+        for cmd_i, run_cli in enumerate(run.commands):
+            if run.job_names:
+                wandb_job_name = run.job_names[cmd_i]
+                job_name += "-" + "".join(map(lambda x: x[:2], wandb_job_name.split("-")))
+            else:
+                name1, name2 = random_names()
+                job_number = start_number + i
+                wandb_job_name = f"{name1}-{name2}-{job_number}"
+                job_name += f"-{name1[:2]}{name2[:2]}{job_number}"
 
             split_command.extend(
                 [
@@ -117,7 +121,6 @@ def create_jobs(
         if run.parallel and len(run.commands) > 1:
             split_command.append("wait")
         assert wandb_job_name is not None
-
         job = job_template.format(
             WANDB_RUN_GROUP=group,
             WANDB_JOB_NAME=wandb_job_name,
@@ -146,7 +149,15 @@ def launch_jobs(
     repo = Repo(".")
     repo.remote("origin").push(repo.active_branch.name)  # Push to an upstream branch with the same name
     start_number = 1 + len(wandb.Api().runs(f"{entity}/{project}"))
-    jobs, launch_id = create_jobs(start_number, runs, group=group, job_template_path=job_template_path, wandb_mode=wandb_mode)
+    jobs, launch_id = create_jobs(
+        start_number,
+        runs,
+        group=group,
+        job_template_path=job_template_path,
+        wandb_mode=wandb_mode,
+        project=project,
+        entity=entity,
+    )
     yamls_for_all_jobs = "\n\n---\n\n".join(jobs)
 
     if not any(s in sys.argv for s in ["--dryrun", "--dry-run", "-d"]):

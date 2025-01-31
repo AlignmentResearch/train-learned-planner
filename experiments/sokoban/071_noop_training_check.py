@@ -39,9 +39,9 @@ arch_fns = [
 ]
 
 
-for i, env_seed, learn_seed in [(i, random_seed(), random_seed()) for i in range(2)]:
+for i, env_seed, learn_seed in [(i, random_seed(), random_seed()) for i in range(3)]:
     for arch_fn in arch_fns:
-        for reward_noop in [0.0, 0.01, 0.05, 0.09]:
+        for reward_noop in [0.0, 0.01, 0.03, 0.05]:
             for ent_coef in [1e-2]:
 
                 def update_seeds(config: Args) -> Args:
@@ -57,7 +57,7 @@ for i, env_seed, learn_seed in [(i, random_seed(), random_seed()) for i in range
                     config.train_env.reward_noop = reward_noop
                     config.train_env.nn_without_noop = False
 
-                    config.total_timesteps = 2_002_944_000
+                    config.total_timesteps = 801_177_600
 
                     for env in config.eval_envs.values():
                         env.steps_to_think = [0]
