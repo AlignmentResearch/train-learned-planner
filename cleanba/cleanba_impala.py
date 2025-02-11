@@ -837,7 +837,6 @@ def train(
 
                 writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
 
-                print(agent_state.opt_state.hyperparams)
                 lr = unreplicate(agent_state.opt_state.hyperparams["learning_rate"])
                 assert lr is not None
                 writer.add_scalar("losses/learning_rate", lr, global_step)
