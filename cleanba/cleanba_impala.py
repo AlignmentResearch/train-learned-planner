@@ -587,11 +587,11 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
 
         transform_chain += get_transform_chain(learning_rate)
 
-        frozen_labels = jax.tree_util.tree_map(lambda x: "trainable", params)
+        labels_per_parameter = jax.tree_util.tree_map(lambda x: "trainable", params)
         if args.finetune_with_noop_head:
             # Label actor head parameters as 'trainable'
-            frozen_labels = jax.tree_util.tree_map(lambda x: "frozen", params)
-            frozen_labels["params"]["actor_params"]["Output"] = jax.tree_util.tree_map(
+            labels_per_parameter = jax.tree_util.tree_map(lambda x: "frozen", params)
+            labels_per_parameter["params"]["actor_params"]["Output"] = jax.tree_util.tree_map(
                 lambda x: "trainable", params["params"]["actor_params"]["Output"]
             )
 
@@ -623,7 +623,7 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
                 "trainable": optax.chain(*transform_chain),
             }
             optimizer = optax.MultiSteps(
-                optax.multi_transform(transforms, frozen_labels), every_k_schedule=args.gradient_accumulation_steps
+                optax.multi_transform(transforms, labels_per_parameter), every_k_schedule=args.gradient_accumulation_steps
             )
         else:
             optimizer = optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
