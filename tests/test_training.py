@@ -1,3 +1,4 @@
+import collections
 import contextlib
 import threading
 from pathlib import Path
@@ -36,6 +37,7 @@ class CheckingWriter(WandbWriter):
     def __init__(self, cfg: Args, save_dir: Path, eval_keys):
         self.last_global_step = -1
         self.metrics = {}
+        self.metrics_history = collections.defaultdict(list)
         self._save_dir = save_dir / "local-files"
         self._save_dir.mkdir()
         self.named_save_dir = save_dir
@@ -57,7 +59,8 @@ class CheckingWriter(WandbWriter):
             self.metrics.clear()
 
         self.last_global_step = global_step
-        self.metrics[name] = value
+        self.metrics[name] = float(value)
+        self.metrics_history[name].append(float(value))
 
         if name in self.eval_events:
             if self.eval_global_step != global_step:
@@ -135,7 +138,7 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         net=net,
         eval_at_steps=frozenset(range(1, eval_frequency * 20, eval_frequency)),
         save_model=True,
-        log_frequency=1234,
+        log_frequency=1,
         local_num_envs=1,
         num_actor_threads=2,  # Test multithreaded
         num_steps=2,
@@ -151,6 +154,11 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         args, tmpdir, ["eval0/00_episode_successes", "eval0/01_episode_successes", "eval1/02_episode_successes"]
     )
     train(args, writer=writer)
+
+    assert np.array_equal(
+        writer.metrics_history["losses/learning_rate"],
+        [0.0006000000284984708, 0.0004500000213738531, 0.0003000000142492354, 0.0001500000071246177],
+    )
 
 
 def test_concat_and_shard_rollout_internal():

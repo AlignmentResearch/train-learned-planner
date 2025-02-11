@@ -14,7 +14,7 @@ import warnings
 from collections import deque
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Iterator, List, Optional
+from typing import Any, Callable, Hashable, Iterator, List, Mapping, Optional
 
 import chex
 import databind.core.converter
@@ -540,16 +540,6 @@ def linear_schedule(
 
 
 def make_optimizer(args: Args, params: AgentParams, total_updates: int):
-    if args.optimizer_yang:
-        learning_rates, agent_param_labels = label_and_learning_rate_for_params(params, base_fan_in=args.base_fan_in)
-        transform_chain = [
-            optax.multi_transform(
-                transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
-            ),
-        ]
-    else:
-        transform_chain = []
-
     _linear_schedule = partial(
         linear_schedule,
         initial_learning_rate=args.learning_rate,
@@ -562,71 +552,85 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     def _linear_or_constant_schedule(count: chex.Numeric) -> chex.Numeric:
         return _linear_schedule(count) if args.anneal_lr else args.learning_rate
 
-    def get_tranform_chain(scheduler):
-        return [
-            optax.clip_by_global_norm(args.max_grad_norm),
-            (
-                optax.inject_hyperparams(rmsprop_pytorch_style)(
-                    learning_rate=scheduler,
-                    eps=args.rmsprop_eps,
-                    decay=args.rmsprop_decay,
-                )
-                if args.optimizer == "rmsprop"
-                else (
-                    optax.inject_hyperparams(optax.adam)(
-                        learning_rate=scheduler,
-                        b1=args.adam_b1,
-                        b2=args.rmsprop_decay,
+    def optimizer_with_learning_rate(learning_rate: chex.Numeric) -> optax.GradientTransformation:
+        if args.optimizer_yang:
+            learning_rates, agent_param_labels = label_and_learning_rate_for_params(params, base_fan_in=args.base_fan_in)
+            transform_chain = [
+                optax.multi_transform(
+                    transforms={k: optax.scale(lr) for k, lr in learning_rates.items()}, param_labels=agent_param_labels
+                ),
+            ]
+        else:
+            transform_chain = []
+
+        def get_transform_chain(learning_rate: chex.Numeric | Callable[[chex.Numeric], chex.Numeric]):
+            return [
+                optax.clip_by_global_norm(args.max_grad_norm),
+                (
+                    optax.inject_hyperparams(rmsprop_pytorch_style)(
+                        learning_rate=learning_rate,
                         eps=args.rmsprop_eps,
-                        eps_root=0.0,
+                        decay=args.rmsprop_decay,
                     )
-                )
-            ),
-        ]
+                    if args.optimizer == "rmsprop"
+                    else (
+                        optax.inject_hyperparams(optax.adam)(
+                            learning_rate=learning_rate,
+                            b1=args.adam_b1,
+                            b2=args.rmsprop_decay,
+                            eps=args.rmsprop_eps,
+                            eps_root=0.0,
+                        )
+                    )
+                ),
+            ]
 
-    transform_chain += get_tranform_chain(_linear_or_constant_schedule)
+        transform_chain += get_transform_chain(learning_rate)
 
-    frozen_labels = jax.tree_util.tree_map(lambda x: "trainable", params)
-    if args.finetune_with_noop_head:
-        # Label actor head parameters as 'trainable'
-        frozen_labels = jax.tree_util.tree_map(lambda x: "frozen", params)
-        frozen_labels["params"]["actor_params"]["Output"] = jax.tree_util.tree_map(
-            lambda x: "trainable", params["params"]["actor_params"]["Output"]
-        )
-
-        def frozen_schedule(
-            count: chex.Numeric,
-            frozen_finetune_steps_ratio: float,
-            minibatches_per_update: int,
-            total_updates: int,
-            train_epochs: int,
-            default_schedule: Callable[[chex.Numeric], chex.Numeric],
-        ) -> chex.Numeric:
-            # Return 0 during frozen period, then transition to normal learning rate
-            frac = (count // minibatches_per_update) / (total_updates * train_epochs)
-            return jnp.where(frac < frozen_finetune_steps_ratio, 0.0, default_schedule(count))
-
-        frozen_transform_chain = get_tranform_chain(
-            partial(
-                frozen_schedule,
-                frozen_finetune_steps_ratio=args.frozen_finetune_steps_ratio,
-                minibatches_per_update=args.num_minibatches,
-                total_updates=total_updates,
-                train_epochs=args.train_epochs,
-                default_schedule=_linear_or_constant_schedule,
+        frozen_labels = jax.tree_util.tree_map(lambda x: "trainable", params)
+        if args.finetune_with_noop_head:
+            # Label actor head parameters as 'trainable'
+            frozen_labels = jax.tree_util.tree_map(lambda x: "frozen", params)
+            frozen_labels["params"]["actor_params"]["Output"] = jax.tree_util.tree_map(
+                lambda x: "trainable", params["params"]["actor_params"]["Output"]
             )
-        )
 
-        transforms = {
-            "frozen": optax.chain(*frozen_transform_chain),
-            "trainable": optax.chain(*transform_chain),
-        }
-        optimizer = optax.MultiSteps(
-            optax.multi_transform(transforms, frozen_labels), every_k_schedule=args.gradient_accumulation_steps
-        )
-    else:
-        optimizer = optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
-    return optimizer
+            def frozen_schedule(
+                count: chex.Numeric,
+                frozen_finetune_steps_ratio: float,
+                minibatches_per_update: int,
+                total_updates: int,
+                train_epochs: int,
+                otherwise_learning_rate: chex.Numeric,
+            ) -> chex.Numeric:
+                # Return 0 during frozen period, then transition to normal learning rate
+                frac = (count // minibatches_per_update) / (total_updates * train_epochs)
+                return jnp.where(frac < frozen_finetune_steps_ratio, 0.0, otherwise_learning_rate)
+
+            frozen_transform_chain = get_transform_chain(
+                partial(
+                    frozen_schedule,
+                    frozen_finetune_steps_ratio=args.frozen_finetune_steps_ratio,
+                    minibatches_per_update=args.num_minibatches,
+                    total_updates=total_updates,
+                    train_epochs=args.train_epochs,
+                    otherwise_learning_rate=learning_rate,
+                )
+            )
+
+            transforms: Mapping[Hashable, optax.GradientTransformation] = {
+                "frozen": optax.chain(*frozen_transform_chain),
+                "trainable": optax.chain(*transform_chain),
+            }
+            optimizer = optax.MultiSteps(
+                optax.multi_transform(transforms, frozen_labels), every_k_schedule=args.gradient_accumulation_steps
+            )
+        else:
+            optimizer = optax.MultiSteps(optax.chain(*transform_chain), every_k_schedule=args.gradient_accumulation_steps)
+        return optimizer  # type: ignore
+
+    # Inject learning rate schedule at the top level so we can just get it from .hyperparams and log it.
+    return optax.inject_hyperparams(optimizer_with_learning_rate)(_linear_or_constant_schedule)
 
 
 def get_checkpoint_number(filename):
@@ -636,44 +640,6 @@ def get_checkpoint_number(filename):
         return int(filename.split("_")[1])
     except (IndexError, ValueError):
         return None
-
-
-def get_learning_rate(opt_state: optax.OptState) -> float | None:
-    """Extract current learning rate from optimizer state"""
-    if getattr(opt_state, "hyperparams", None) is not None:
-        return opt_state.hyperparams["learning_rate"]
-
-    if isinstance(opt_state, optax.EmptyState):
-        return None
-
-    if isinstance(opt_state, optax.MultiStepsState):
-        return get_learning_rate(opt_state.inner_opt_state)
-
-    if isinstance(opt_state, optax.MultiTransformState):
-        return get_learning_rate(opt_state.inner_states)
-
-    if isinstance(opt_state, optax.MaskedState):
-        return get_learning_rate(opt_state.inner_state)
-
-    if isinstance(opt_state, list) or isinstance(opt_state, tuple):
-        # For gradient accumulation, get the inner optimizer state
-        for opt_state_ in opt_state:
-            lr = get_learning_rate(opt_state_)
-            if lr is not None:
-                return lr
-        return None
-
-    if isinstance(opt_state, dict):
-        # For multi-transform optimizers
-        if "trainable" in opt_state:
-            # Finetune case: use trainable learning rate
-            return get_learning_rate(opt_state["trainable"])
-        else:
-            # Yang optimizer case - average all learning rates
-            learning_rates = [lr for v in opt_state.values() if (lr := get_learning_rate(v)) is not None]
-            return float(np.mean(learning_rates))
-
-    raise NotImplementedError(f"Unknown optimizer state type {type(opt_state)}")
 
 
 def train(
@@ -871,7 +837,7 @@ def train(
 
                 writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
 
-                lr = get_learning_rate(unreplicate(agent_state.opt_state))
+                lr = unreplicate(agent_state.opt_state.hyperparams["learning_rate"])
                 assert lr is not None
                 writer.add_scalar("losses/learning_rate", lr, global_step)
 
