@@ -133,6 +133,8 @@ class EvalConfig:
 
             total_episodes = self.n_episode_multiple * self.env.num_envs
             total_solved = np.sum(all_episode_successes)
+            if total_solved == 0:
+                total_solved = 1  # avoid division by zero
             all_episode_num_boxes = np.concatenate(all_episode_num_boxes)
             metrics.update(
                 {

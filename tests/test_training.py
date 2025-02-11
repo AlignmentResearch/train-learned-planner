@@ -1,3 +1,4 @@
+import collections
 import contextlib
 import threading
 from pathlib import Path
@@ -10,7 +11,14 @@ import numpy as np
 import pytest
 from flax.training.train_state import TrainState
 
-from cleanba.cleanba_impala import WandbWriter, _concat_and_shard_rollout_internal, load_train_state, train
+from cleanba.cleanba_impala import (
+    WandbWriter,
+    _concat_and_shard_rollout_internal,
+    load_train_state,
+    make_optimizer,
+    save_train_state,
+    train,
+)
 from cleanba.config import Args
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMCellState
 from cleanba.environments import SokobanConfig
@@ -29,6 +37,7 @@ class CheckingWriter(WandbWriter):
     def __init__(self, cfg: Args, save_dir: Path, eval_keys):
         self.last_global_step = -1
         self.metrics = {}
+        self.metrics_history = collections.defaultdict(list)
         self._save_dir = save_dir / "local-files"
         self._save_dir.mkdir()
         self.named_save_dir = save_dir
@@ -50,7 +59,8 @@ class CheckingWriter(WandbWriter):
             self.metrics.clear()
 
         self.last_global_step = global_step
-        self.metrics[name] = value
+        self.metrics[name] = float(value)
+        self.metrics_history[name].append(float(value))
 
         if name in self.eval_events:
             if self.eval_global_step != global_step:
@@ -128,7 +138,7 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         net=net,
         eval_at_steps=frozenset(range(1, eval_frequency * 20, eval_frequency)),
         save_model=True,
-        log_frequency=1234,
+        log_frequency=1,
         local_num_envs=1,
         num_actor_threads=2,  # Test multithreaded
         num_steps=2,
@@ -144,6 +154,11 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         args, tmpdir, ["eval0/00_episode_successes", "eval0/01_episode_successes", "eval1/02_episode_successes"]
     )
     train(args, writer=writer)
+
+    assert np.array_equal(
+        writer.metrics_history["losses/learning_rate"],
+        [0.0006000000284984708, 0.0004500000213738531, 0.0003000000142492354, 0.0001500000071246177],
+    )
 
 
 def test_concat_and_shard_rollout_internal():
@@ -192,3 +207,82 @@ def test_concat_and_shard_rollout_internal():
             out.carry_t,
         )
     )
+
+
+@pytest.mark.parametrize(
+    "frozen_at_all_steps",
+    [True, False],
+)
+def test_finetune_noop(tmpdir: Path, frozen_at_all_steps: bool):
+    env_cfg = SokobanConfig(
+        max_episode_steps=4,
+        num_envs=1,
+        seed=1,
+        min_episode_steps=4,  # keep a few steps for gradient to pass through max-pool or conv_hh
+        tinyworld_obs=True,
+        num_boxes=1,
+        dim_room=(10, 10),
+        asynchronous=False,
+        nn_without_noop=True,
+    )
+    env = env_cfg.make()
+    net = ConvLSTMConfig(
+        embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
+        recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
+        repeats_per_step=1,
+    )
+    args = Args(
+        train_env=env_cfg,
+        net=net,
+        total_timesteps=10,
+        local_num_envs=1,
+        num_actor_threads=1,
+        num_steps=4,
+        train_epochs=3,
+        gradient_accumulation_steps=1,
+        num_minibatches=1,
+        concurrency=False,
+        learning_rate=1e-3,
+        finetune_with_noop_head=False,
+        final_learning_rate=0.0,
+    )
+    policy, _, agent_params = net.init_params(env, jax.random.PRNGKey(42))
+    orig_num_actions = agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1]
+    assert orig_num_actions == 4, f"Expected 4 actions, got {orig_num_actions}"
+    orig_agent_state = TrainState.create(
+        apply_fn=None,
+        params=agent_params,
+        tx=make_optimizer(args, agent_params, total_updates=10),
+    )
+    orig_agent_state = jax.device_put_replicated(orig_agent_state, jax.devices("cpu"))
+    policy_path = tmpdir / "policy"
+    policy_path.mkdir()
+    save_train_state(policy_path, args, orig_agent_state, 0)
+
+    args.finetune_with_noop_head = True
+    args.frozen_finetune_steps_ratio = 1.0 if frozen_at_all_steps else 0.2
+    args.load_path = policy_path
+
+    writer = CheckingWriter(args, tmpdir, ["eval0/00_episode_successes"])
+
+    final_state = train(args, writer=writer)
+
+    fs_flat = jax.tree_util.tree_leaves_with_path(final_state.params)
+    os_flat = jax.tree_util.tree_leaves_with_path(orig_agent_state.params)
+
+    violations = []
+    for (fs_path, fs), (os_path, os) in zip(fs_flat, os_flat):
+        assert fs_path == os_path
+        concat_path = "/".join(map(lambda x: str(x.key), fs_path))
+
+        if concat_path.startswith("params/actor_params/Output"):
+            fs = fs[..., :orig_num_actions]
+
+        if frozen_at_all_steps and not concat_path.startswith("params/actor_params/Output"):
+            if not np.allclose(fs, os):
+                violations.append(f"Path: {concat_path}")
+        else:
+            if np.allclose(fs, os):
+                violations.append(f"Path: {concat_path}")
+
+    assert not violations, "\n".join(violations)

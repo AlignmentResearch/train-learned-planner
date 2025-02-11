@@ -78,6 +78,9 @@ class Args:
 
     load_path: Optional[Path] = None  # Where to load the initial training state from
 
+    finetune_with_noop_head: bool = False  # Whether to finetune the model with a noop head
+    frozen_finetune_steps_ratio: float = 0.5  # fraction of steps to finetune ONLY the head of model with new noop action
+
 
 def sokoban_resnet() -> Args:
     CACHE_PATH = Path("/opt/sokoban_cache")
