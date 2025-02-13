@@ -539,7 +539,12 @@ def linear_schedule(
     return initial_learning_rate + frac * (final_learning_rate - initial_learning_rate)
 
 
-def make_optimizer(args: Args, params: AgentParams, total_updates: int):
+def make_optimizer(
+    args: Args,
+    params: AgentParams,
+    total_updates: int,
+    dont_inject_lr: bool = False,  # for loading older models
+) -> optax.GradientTransformation:
     _linear_schedule = partial(
         linear_schedule,
         initial_learning_rate=args.learning_rate,
@@ -630,6 +635,8 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
         return optimizer  # type: ignore
 
     # Inject learning rate schedule at the top level so we can just get it from .hyperparams and log it.
+    if dont_inject_lr:
+        return optimizer_with_learning_rate(args.learning_rate)
     return optax.inject_hyperparams(optimizer_with_learning_rate)(_linear_or_constant_schedule)
 
 
@@ -908,9 +915,17 @@ def load_train_state(
         params=params,
         tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size),
     )
-
-    with open(dir / "model", "rb") as f:
-        train_state = flax.serialization.from_bytes(target_state, f.read())
+    try:
+        with open(dir / "model", "rb") as f:
+            train_state = flax.serialization.from_bytes(target_state, f.read())
+    except ValueError:
+        target_state = TrainState.create(
+            apply_fn=None,
+            params=params,
+            tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size, dont_inject_lr=True),
+        )
+        with open(dir / "model", "rb") as f:
+            train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
     try:
         train_state = unreplicate(train_state)
