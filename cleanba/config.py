@@ -3,13 +3,13 @@ from dataclasses import field
 from pathlib import Path
 from typing import List, Optional
 
-from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
-from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMConfig
+from cleanba.environments import AtariEnv, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
 )
-from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, PolicySpec, SokobanResNetConfig
+from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, MLPConfig, PolicySpec, RMSNorm, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -310,3 +310,126 @@ def sokoban_drc33_59() -> Args:
         head_scale=1.0,
     )
     return out
+
+
+def craftax_drc() -> Args:
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=1, seed=1234),
+        eval_envs={},
+        log_frequency=1,
+        net=ConvLSTMConfig(
+            embed=[ConvConfig(128, (3, 3), (1, 1), "SAME", True), ConvConfig(64, (3, 3), (1, 1), "SAME", True)],
+            recurrent=ConvLSTMCellConfig(
+                ConvConfig(64, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal", fence_pad="same"
+            ),
+            n_recurrent=3,
+            mlp_hiddens=(256, 128),
+            repeats_per_step=3,
+            skip_final=True,
+            residual=True,
+            norm=RMSNorm(),
+        ),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.95,
+            gamma=0.99,
+            ent_coef=0.01,
+            vf_coef=0.25,
+            normalize_advantage=True,
+            weight_l2_coef=1e-6,
+            logit_l2_coef=1e-6,
+        ),
+        actor_update_cutoff=100000000000000000000,
+        sync_frequency=100000000000000000000,
+        num_minibatches=4,
+        rmsprop_eps=1e-6,
+        local_num_envs=128,
+        total_timesteps=1000000,
+        base_run_dir=Path("."),
+        learning_rate=3e-4,
+        final_learning_rate=0,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=2.5e-2,
+        num_actor_threads=1,
+        num_steps=32,
+        train_epochs=1,
+    )
+
+
+def craftax_lstm(n_recurrent: int = 3, num_repeats: int = 1) -> Args:
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=1, seed=1234, spatial_obs=False),
+        eval_envs={},
+        log_frequency=1,
+        net=LSTMConfig(
+            embed_hiddens=(256,),
+            recurrent_hidden=256,
+            n_recurrent=3,
+            repeats_per_step=1,
+            norm=IdentityNorm(),
+            mlp_hiddens=(256, 128),
+        ),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.90,
+            gamma=0.99,
+            ent_coef=0.01,
+            vf_coef=0.5,
+            normalize_advantage=True,
+            weight_l2_coef=1e-6,
+            logit_l2_coef=1e-6,
+            clip_rho_threshold=1,
+            clip_pg_rho_threshold=1,
+        ),
+        actor_update_cutoff=0,
+        sync_frequency=200,
+        num_minibatches=8,
+        rmsprop_eps=1e-6,
+        local_num_envs=512,
+        total_timesteps=1000000,
+        base_run_dir=Path("."),
+        learning_rate=2e-4,
+        final_learning_rate=0,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=1e-2,
+        num_actor_threads=1,
+        num_steps=64,
+        train_epochs=1,
+    )
+
+
+def craftax_mlp() -> Args:
+    num_envs = 256
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, spatial_obs=False),
+        eval_envs={},
+        log_frequency=1,
+        net=MLPConfig(hiddens=(512, 256, 256, 256), use_layer_norm=True, yang_init=False, activation="relu"),
+        loss=ImpalaLossConfig(
+            vtrace_lambda=0.95,
+            gamma=0.99,
+            ent_coef=0.01,
+            vf_coef=0.25,
+            normalize_advantage=True,
+            weight_l2_coef=1e-6,
+            logit_l2_coef=1e-6,
+        ),
+        actor_update_cutoff=0,
+        sync_frequency=200,
+        num_minibatches=8,
+        rmsprop_eps=1e-6,
+        local_num_envs=num_envs,
+        total_timesteps=3000000,
+        base_run_dir=Path("."),
+        learning_rate=2e-4,
+        final_learning_rate=0,
+        optimizer="adam",
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=0.5,
+        num_actor_threads=1,
+        num_steps=32,
+        train_epochs=1,
+    )

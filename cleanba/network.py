@@ -1,6 +1,6 @@
 import abc
 import dataclasses
-from typing import Any, Literal, SupportsFloat
+from typing import Any, Literal, SupportsFloat, Tuple
 
 import flax.linen as nn
 import gymnasium as gym
@@ -106,18 +106,15 @@ class Policy(nn.Module):
         self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
 
     def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
-        # Convert from NCHW to NHWC
-        assert len(x.shape) == 4, "x must be a NCHW image"
-        assert (
-            x.shape[2] == x.shape[3]
-        ), f"x is not a rectangular NCHW image, but is instead {x.shape=}. This is probably wrong."
-
-        x = jnp.transpose(x, (0, 2, 3, 1))
+        # Convert from NCHW to NHWC if needed
+        if len(x.shape) == 4:
+            x = jnp.transpose(x, (0, 2, 3, 1))
 
         if self.cfg.normalize_input:
+            print(f"Normalizing input image {x.shape=}")
             x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
             x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
-        else:
+        elif jnp.dtype(x) == jnp.uint8:
             x = x / 255.0
 
         return x
@@ -131,8 +128,10 @@ class Policy(nn.Module):
         *,
         temperature: float = 1.0,
     ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array]:
-        assert len(obs.shape) == 4
+        # assert len(obs.shape) == 4
         assert len(episode_starts.shape) == 1
+        print(f"{obs.shape=}")
+        print(f"{episode_starts.shape=}")
         assert episode_starts.shape[:1] == obs.shape[:1]
 
         obs = self._maybe_normalize_input_image(obs)
@@ -574,4 +573,34 @@ class GuezResNet(nn.Module):
             else:
                 x = nn.Dense(hidden)(x)
             x = nn.relu(x)
+        return x
+
+
+@dataclasses.dataclass(frozen=True)
+class MLPConfig(PolicySpec):
+    hiddens: Tuple[int, ...] = (256, 256)
+    use_layer_norm: bool = False
+    activation: str = "relu"
+
+    yang_init: bool = dataclasses.field(default=False)
+    norm: NormConfig = dataclasses.field(default_factory=IdentityNorm)
+    normalize_input: bool = False
+    head_scale: float = 1.0
+
+    def make(self) -> "MLP":
+        return MLP(self)
+
+
+class MLP(nn.Module):
+    cfg: MLPConfig
+
+    @nn.compact
+    def __call__(self, x):
+        activation_fn = {"relu": nn.relu, "tanh": nn.tanh}[self.cfg.activation]
+        x = jnp.reshape(x, (x.shape[0], -1))
+        for hidden in self.cfg.hiddens:
+            if self.cfg.use_layer_norm:
+                x = nn.LayerNorm()(x)
+            x = nn.Dense(hidden)(x)
+            x = activation_fn(x)
         return x

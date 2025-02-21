@@ -132,7 +132,7 @@ class WandbWriter:
 
     @contextlib.contextmanager
     def save_dir(self, global_step: int) -> Iterator[Path]:
-        name = f"cp_{{step:0{self.step_digits}d}}".format(step=global_step)
+        name = f"cp_{global_step:0{self.step_digits}d}"
         out = self._save_dir / name
         out.mkdir()
         yield out
@@ -354,6 +354,8 @@ def rollout(
     returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
     returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
     returned_episode_success = np.zeros((args.local_num_envs,), dtype=np.bool_)
+    achievement_counts = {}
+    episode_count = 0
 
     actor_policy_version = 0
     storage = []
@@ -395,6 +397,7 @@ def rollout(
                     if (update - 1) % args.actor_update_frequency == 0:
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
+            done_count = 0
             with time_and_append(log_stats.rollout_time):
                 for _ in range(1, num_steps_with_bootstrap + 1):
                     global_step += (
@@ -403,6 +406,8 @@ def rollout(
 
                     with time_and_append(log_stats.inference_time):
                         carry_tplus1, a_t, logits_t, key = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
+                        assert a_t.shape == (args.local_num_envs,)
+                        assert logits_t.shape == (args.local_num_envs, 43)
 
                     with time_and_append(log_stats.device2host_time):
                         cpu_action = np.array(a_t)
@@ -413,6 +418,12 @@ def rollout(
                     with time_and_append(log_stats.env_recv_time):
                         obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
                         done_t = term_t | trunc_t
+                        assert obs_tplus1.shape == (args.local_num_envs, 134, 9, 11) or obs_tplus1.shape == (
+                            args.local_num_envs,
+                            8217 + 51,
+                        )
+                        assert r_t.shape == (args.local_num_envs,)
+                        assert done_t.shape == (args.local_num_envs,)
 
                     with time_and_append(log_stats.create_rollout_time):
                         storage.append(
@@ -446,6 +457,15 @@ def rollout(
 
                         log_stats.episode_success.extend(map(float, term_t[done_t]))
                         returned_episode_success[done_t] = term_t[done_t]
+
+                        done_count += np.sum(done_t).item()
+                        done_indices = np.where(done_t)[0]
+
+                        for ach, arr in info_t.items():
+                            if "achievements" in ach.lower():
+                                for idx in done_indices:
+                                    achievement_counts[ach] = achievement_counts.get(ach, 0) + arr[idx]
+                        episode_count += len(done_indices)
 
             with time_and_append(log_stats.storage_time):
                 sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, learner_devices)
@@ -512,6 +532,34 @@ def rollout(
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
             writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
+
+            reward_min = float(np.min(episode_returns))
+            reward_max = float(np.max(episode_returns))
+            reward_mean = float(np.mean(episode_returns))
+            reward_std = float(np.std(episode_returns))
+            writer.add_scalar("metrics/reward_min", reward_min, global_step)
+            writer.add_scalar("metrics/reward_max", reward_max, global_step)
+            writer.add_scalar("metrics/reward_mean", reward_mean, global_step)
+            writer.add_scalar("metrics/reward_std", reward_std, global_step)
+            writer.add_scalar("metrics/done_count", done_count, global_step)
+
+            logits_np = np.array(logits_t)
+            probs = jax.nn.softmax(logits_np, axis=-1)
+            entropy = -np.sum(probs * np.log(probs + 1e-8), axis=-1)
+            mean_entropy = float(np.mean(entropy))
+            writer.add_scalar("metrics/policy_entropy", mean_entropy, global_step)
+
+            if episode_count > 0:
+                for ach, count in achievement_counts.items():
+                    fraction = count / episode_count
+                    writer.add_scalar(f"achievements/{device_thread_id}/{ach}", fraction, global_step)
+
+                episode_count = 0
+                achievement_counts = {}
+
+        # Reset the achievement counters for the next interval
+        achievement_counts = {}
+        episode_count = 0
 
         if update in args.eval_at_steps:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):

@@ -7,11 +7,135 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
-import gym_sokoban  # noqa: F401
 import gymnasium as gym
+import jax
+import jax.numpy as jnp
 import numpy as np
+from craftax.craftax_env import make_craftax_env_from_name
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
+
+
+class CraftaxEnvWrapper:
+    """
+    wrapper for craftax that should mirror the interface of the boxoban env
+    """
+
+    def __init__(self, env_name: str, seed: int = 0, params=None, num_envs: int = 1, spatial_obs: bool = True):
+        self.env = make_craftax_env_from_name(env_name, auto_reset=False)
+        self.env_params = params if params is not None else self.env.default_params
+        self.seed = seed
+        self.num_envs = num_envs
+        self.rng = jax.random.PRNGKey(seed)
+        self.state = None
+        self.obs = None
+        self._pending_actions = None
+        self.spatial_obs = spatial_obs
+        self.obs_shape = (134, 9, 11) if spatial_obs else (8268,)
+
+        self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=self.obs_shape, dtype=np.float32)
+        print(f"single_observation_space shape: {self.single_observation_space.shape}")
+        self.observation_space = gym.vector.utils.spaces.batch_space(self.single_observation_space, n=self.num_envs)
+        print("Number of actions in craftax env:", self.env.action_space().n)
+        # Assume a discrete action space.
+        self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
+        self.action_space = self.single_action_space
+
+        self.reset_wait()
+
+    def _process_obs(self, obs_flat):
+        """
+        hacky soln to the observation space mismatch for symbolic craftax env
+        """
+        expected_size = 8268
+        assert (
+            obs_flat.shape[0] == expected_size
+        ), f"Observation size mismatch: got {obs_flat.shape[0]}, expected {expected_size}"
+
+        mapobs = obs_flat[:8217].reshape(9, 11, 83)
+        invobs = obs_flat[8217:].reshape(51)
+        invobs_spatial = invobs.reshape(1, 1, 51).repeat(9, axis=0).repeat(11, axis=1)
+        obs_nhwc = jnp.concatenate([mapobs, invobs_spatial], axis=-1)  # (9, 11, 134)
+        obs_nchw = jnp.transpose(obs_nhwc, (2, 0, 1))  # (134, 9, 11)
+
+        return obs_nchw
+
+    def reset_async(self, seed: int = None, options: dict = None):
+        """
+        fake reset to match boxoban env interface
+        """
+        pass
+
+    def reset_wait(self, seed: int = None, options: dict = None):
+        """
+        reset env
+        """
+        self.rng, reset_rng = jax.random.split(self.rng)
+        rngs = jax.random.split(reset_rng, self.num_envs)
+        obs_flat, state = jax.vmap(lambda r: self.env.reset(r, self.env_params))(rngs)
+        obs_processed = jax.vmap(self._process_obs)(obs_flat) if self.spatial_obs else obs_flat
+        self.obs = obs_processed
+        print(f"obs-p shape: {self.obs.shape}")
+        self.state = state
+        return self.obs, self.state
+
+    def step_async(self, actions: np.ndarray):
+        """
+        store actions to be executed later to match boxoban env interface
+        """
+        self._pending_actions = jnp.array(actions)
+
+    def step_wait(self, **kwargs):
+        """
+        execute actions and reset env if done
+        """
+        if self._pending_actions is None:
+            raise RuntimeError("No pending actions, missing a call to step_async")
+
+        self.rng, step_rng = jax.random.split(self.rng)
+        rngs = jax.random.split(step_rng, self.num_envs)
+
+        obs_flat, state, rewards, dones, info = jax.vmap(lambda r, s, a: self.env.step(r, s, a, self.env_params))(
+            rngs, self.state, self._pending_actions
+        )
+
+        terminated = dones
+        truncated = jnp.zeros_like(
+            dones, dtype=bool
+        )  # to match code, assume no truncation (basically true as agent does not survive long enough)
+
+        rngs_reset = jax.random.split(self.rng, self.num_envs)
+
+        def _conditional_reset(reset_rng, old_obs, old_state, done_flag):
+            def do_reset(_):
+                obs_flat_new, state_new = self.env.reset(reset_rng, self.env_params)
+                return obs_flat_new, state_new
+
+            def no_reset(_):
+                return old_obs, old_state
+
+            return jax.lax.cond(done_flag, do_reset, no_reset, operand=None)
+
+        reset_obs_flat, reset_state = jax.vmap(_conditional_reset)(rngs_reset, obs_flat, state, terminated)
+
+        obs_flat = reset_obs_flat
+        state = reset_state
+
+        obs_processed = jax.vmap(self._process_obs)(obs_flat) if self.spatial_obs else obs_flat
+        self.obs = obs_processed
+        self.state = state
+        self._pending_actions = None
+        return self.obs, rewards, terminated, truncated, info
+
+    def reset(self):
+        return self.reset_wait()
+
+    def step(self, actions: np.ndarray):
+        self.step_async(actions)
+        return self.step_wait()
+
+    def close(self):
+        pass
 
 
 def random_seed() -> int:
@@ -91,6 +215,23 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
         assert seed is None
         assert not options
         return self.envs.recv(reset=True, return_info=self.envs.config["gym_reset_return_info"])
+
+
+@dataclasses.dataclass
+class CraftaxEnvConfig(EnvConfig):
+    """Configuration class for integrating Craftax with IMPALA."""
+
+    max_episode_steps: int
+    num_envs: int = 1
+    seed: int = dataclasses.field(default_factory=random_seed)
+    spatial_obs: bool = True
+
+    @property
+    def make(self) -> Callable[[], CraftaxEnvWrapper]:  # type: ignore
+        # This property returns a function that creates the Craftax environment wrapper.
+        return lambda: CraftaxEnvWrapper(
+            "Craftax-Symbolic-v1", seed=self.seed, num_envs=self.num_envs, spatial_obs=self.spatial_obs
+        )
 
 
 @dataclasses.dataclass
