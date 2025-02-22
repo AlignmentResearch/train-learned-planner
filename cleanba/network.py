@@ -579,7 +579,6 @@ class GuezResNet(nn.Module):
 @dataclasses.dataclass(frozen=True)
 class MLPConfig(PolicySpec):
     hiddens: Tuple[int, ...] = (256, 256)
-    use_layer_norm: bool = False
     activation: str = "relu"
 
     yang_init: bool = dataclasses.field(default=False)
@@ -599,8 +598,7 @@ class MLP(nn.Module):
         activation_fn = {"relu": nn.relu, "tanh": nn.tanh}[self.cfg.activation]
         x = jnp.reshape(x, (x.shape[0], -1))
         for hidden in self.cfg.hiddens:
-            if self.cfg.use_layer_norm:
-                x = nn.LayerNorm()(x)
+            x = self.cfg.norm(x)
             x = nn.Dense(hidden)(x)
             x = activation_fn(x)
         return x

@@ -61,6 +61,7 @@ dependencies = [
     "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
     "ray[tune] ~=2.40.0",
     "matplotlib ~=3.9.0",
+    "craftax",
 ]
 [project.optional-dependencies]
 dev = [
