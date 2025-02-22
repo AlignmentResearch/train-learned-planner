@@ -9,12 +9,22 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 
 import gymnasium as gym
 import jax
+import jax.experimental.compilation_cache
 import jax.numpy as jnp
 import numpy as np
 from craftax.craftax.craftax_state import EnvParams
 from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
+
+# JAX_COMPILE_CACHE = Path("~/.cache/jax-compile").expanduser()
+# JAX_COMPILE_CACHE.mkdir(exist_ok=True, parents=True)
+
+
+# jax.config.update("jax_compilation_cache_dir", str(JAX_COMPILE_CACHE))
+# jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+# jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
+# jax.config.update("jax_persistent_cache_enable_xla_caches", "all")
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):
@@ -27,7 +37,6 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     rng_keys: jnp.ndarray
     state: Any
     obs: jnp.ndarray
-    _pending_actions: Optional[jnp.ndarray | np.ndarray]
     env_params: EnvParams
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
@@ -37,7 +46,6 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.closed = False
         self.num_envs = self.cfg.num_envs
 
-        self._pending_actions = None
         obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
 
         self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
@@ -48,7 +56,8 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.action_space = gym.vector.utils.spaces.batch_space(self.single_action_space, n=self.cfg.num_envs)
 
         # set rng_keys, state, obs
-        self.reset_wait(self.cfg.seed)
+        self.reset_async(self.cfg.seed)
+        self.reset_wait()
 
     def _process_obs(self, obs_flat):
         if self.cfg.obs_flat:
@@ -66,40 +75,32 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
 
         return obs_nchw
 
-    def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> None:
-        pass
-
+    @partial(jax.jit, static_argnames=("self",))
+    @partial(jax.vmap, in_axes=(None, 0))
     def _reset_wait_pure(self, key: jnp.ndarray) -> Tuple[jnp.ndarray, Any, jnp.ndarray]:
         key, reset_key = jax.random.split(key)
         obs_flat, state = self.env.reset_env(reset_key, self.env_params)
         obs_processed = self._process_obs(obs_flat)
         return obs_processed, state, key
 
-    def reset_wait(
-        self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None
-    ) -> Tuple[jnp.ndarray, dict]:
-        """
-        reset env
-        """
+    def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> None:
         if isinstance(seed, int):
             self.rng_keys = jax.random.split(jax.random.PRNGKey(seed), self.num_envs)
         elif isinstance(seed, list):
             assert len(seed) == self.num_envs
-            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey), backend=self.cfg.jit_backend)(np.array(seed))
-        self.obs, self.state, self.rng_keys = jax.jit(jax.vmap(self._reset_wait_pure), backend=self.cfg.jit_backend)(
-            self.rng_keys
-        )
+            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey))(np.array(seed))
+        self.obs, self.state, self.rng_keys = self._reset_wait_pure(self.rng_keys)
+
+    def reset_wait(
+        self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None
+    ) -> Tuple[jnp.ndarray, dict]:
         return self.obs, {}
 
-    def step_async(self, actions: np.ndarray) -> None:
-        """
-        store actions to be executed later to match boxoban env interface
-        """
-        self._pending_actions = actions
-
+    @partial(jax.jit, static_argnames=("self",))
+    @partial(jax.vmap, in_axes=(None, 0, 0, 0))
     def _step_pure(self, key, state, action):
         key, step_key = jax.random.split(key)
-        obs_flat, state, rewards, dones, info = self.env.step(step_key, state, action, self.env_params)
+        obs_flat, state, rewards, dones, info = self.env.step(step_key, state, action)
         terminated = dones
         # assume no truncation (basically true as agent does not survive long enough)
         truncated = jnp.zeros_like(dones, dtype=bool)
@@ -107,18 +108,13 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         obs = self._process_obs(obs_flat)
         return key, obs, state, rewards, terminated, truncated, info
 
-    def step_wait(self, **kwargs) -> Tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict]:
-        """
-        execute actions and reset env if done
-        """
-        if self._pending_actions is None:
-            raise RuntimeError("No pending actions, missing a call to step_async")
+    def step_async(self, actions: np.ndarray | jnp.ndarray) -> None:
+        self.rng_keys, self.obs, self.state, self._rewards, self._terminated, self._truncated, self._info = self._step_pure(
+            self.rng_keys, self.state, actions
+        )
 
-        self.rng_keys, self.obs, self.state, rewards, terminated, truncated, info = jax.jit(
-            jax.vmap(self._step_pure), backend=self.cfg.jit_backend
-        )(self.rng_keys, self.state, self._pending_actions)
-        self._pending_actions = None
-        return self.obs, rewards, terminated, truncated, info
+    def step_wait(self, **kwargs) -> Tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict]:
+        return self.obs, self._rewards, self._terminated, self._truncated, self._info
 
     def close(self, **kwargs):
         self.closed = True

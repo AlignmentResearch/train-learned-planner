@@ -7,7 +7,7 @@ import pytest
 
 from cleanba.config import sokoban_drc33_59
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.environments import BoxobanConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
+from cleanba.environments import BoxobanConfig, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
 
 
 def sokoban_has_reset(tile_size: int, old_obs: np.ndarray, new_obs: np.ndarray) -> np.ndarray:
@@ -137,6 +137,19 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
             # The environment should terminate | truncate in the same steps as it changes. In practice we're not solving
             # environments so it should always truncate.
             assert np.array_equal(truncated, sokoban_has_reset(tile_size, prev_obs, next_obs))
+
+
+def test_craftax_environment_basics():
+    cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False)
+    envs = cfg.make()
+    envs.reset_async()
+    next_obs, info = envs.reset_wait()
+
+    assert (action_shape := envs.action_space.shape) is not None
+    for i in range(50):
+        actions = np.zeros(action_shape, dtype=np.int64)
+        envs.step_async(actions)
+        envs.step_wait()
 
 
 @pytest.mark.parametrize("gamma", [1.0, 0.9])

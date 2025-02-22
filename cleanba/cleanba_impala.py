@@ -32,7 +32,7 @@ from typing_extensions import Self
 
 from cleanba.config import Args
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import convert_to_cleanba_config, random_seed
+from cleanba.environments import CraftaxVectorEnv, convert_to_cleanba_config, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -410,8 +410,11 @@ def rollout(
                         assert a_t.shape == (args.local_num_envs,)
                         assert logits_t.shape == (args.local_num_envs, 43)
 
-                    with time_and_append(log_stats.device2host_time):
-                        cpu_action = np.array(a_t)
+                    if isinstance(envs, CraftaxVectorEnv):
+                        cpu_action = a_t  # Do not move to CPU forcibly if the environment is also Jax
+                    else:
+                        with time_and_append(log_stats.device2host_time):
+                            cpu_action = np.array(a_t)
 
                     with time_and_append(log_stats.env_send_time):
                         envs.step_async(cpu_action)
@@ -419,10 +422,6 @@ def rollout(
                     with time_and_append(log_stats.env_recv_time):
                         obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
                         done_t = term_t | trunc_t
-                        assert obs_tplus1.shape == (args.local_num_envs, 134, 9, 11) or obs_tplus1.shape == (
-                            args.local_num_envs,
-                            8217 + 51,
-                        )
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
 
