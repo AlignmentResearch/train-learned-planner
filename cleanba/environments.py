@@ -11,9 +11,9 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
-from craftax.craftax_env import make_craftax_env_from_name
+from craftax.craftax.craftax_state import EnvParams, StaticEnvParams
+from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 from gymnasium.vector.utils.spaces import batch_space
-from gymnax.environments.environment import EnvParams
 from numpy.typing import NDArray
 
 
@@ -22,41 +22,32 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     Craftax environment with a generic VectorEnv interface.
     """
 
-    def __init__(
-        self,
-        env_name: str,
-        seed: int = 0,
-        params: Optional[EnvParams] = None,
-        num_envs: int = 1,
-        obs_flat: bool = False,
-        backend: str = "cpu",
-    ):
-        self.env = make_craftax_env_from_name(env_name, auto_reset=False)
-        self.env_params = params if params is not None else self.env.default_params
-        self.seed = seed
-        self.num_envs = num_envs
-        self.rng_keys = jax.random.split(jax.random.PRNGKey(seed), self.num_envs)
-        self.state = None
-        self.obs = None
-        self._pending_actions = None
-        self.obs_flat = obs_flat
-        self.obs_shape = (8268,) if self.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
-        self.jit_backend = backend
+    cfg: "CraftaxEnvConfig"
+    env: CraftaxSymbolicEnv
+    rng_keys: jnp.ndarray
+    state: Any
+    obs: jnp.ndarray
+    _pending_actions: Optional[jnp.ndarray | np.ndarray]
 
-        self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=self.obs_shape, dtype=np.float32)
+    def __init__(self, cfg: "CraftaxEnvConfig"):
+        self.cfg = cfg
+        self.env = CraftaxSymbolicEnv(static_env_params=self.cfg.static_env_params)
+
+        self._pending_actions = None
+        obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
+
+        self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
         print(f"single_observation_space shape: {self.single_observation_space.shape}")
         self.observation_space = gym.vector.utils.spaces.batch_space(self.single_observation_space, n=self.num_envs)
         print("Number of actions in craftax env:", self.env.action_space().n)
         self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
         self.action_space = gym.vector.utils.spaces.batch_space(self.single_action_space, n=self.num_envs)
 
-        self.reset_wait()
+        # set rng_keys, state, obs
+        self.reset_wait(self.cfg.seed)
 
     def _process_obs(self, obs_flat):
-        """
-        hacky soln to the observation space mismatch for symbolic craftax env
-        """
-        if self.obs_flat:
+        if self.cfg.obs_flat:
             return obs_flat
         expected_size = 8268
         assert (
@@ -76,7 +67,7 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
 
     def _reset_wait_pure(self, key: jnp.ndarray) -> Tuple[jnp.ndarray, Any, jnp.ndarray]:
         key, reset_key = jax.random.split(key)
-        obs_flat, state = self.env.reset_env(reset_key, self.env_params)
+        obs_flat, state = self.env.reset_env(reset_key, self.cfg.env_params)
         obs_processed = self._process_obs(obs_flat)
         return obs_processed, state, key
 
@@ -88,8 +79,10 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
             self.rng_keys = jax.random.split(jax.random.PRNGKey(seed), self.num_envs)
         elif isinstance(seed, list):
             assert len(seed) == self.num_envs
-            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey), backend=self.jit_backend)(np.array(seed))
-        self.obs, self.state, self.rng_keys = jax.jit(jax.vmap(self._reset_wait_pure), backend=self.jit_backend)(self.rng_keys)
+            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey), backend=self.cfg.jit_backend)(np.array(seed))
+        self.obs, self.state, self.rng_keys = jax.jit(jax.vmap(self._reset_wait_pure), backend=self.cfg.jit_backend)(
+            self.rng_keys
+        )
 
     def step_async(self, actions: np.ndarray) -> None:
         """
@@ -115,7 +108,7 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
             raise RuntimeError("No pending actions, missing a call to step_async")
 
         self.rng, self.obs, self.state, rewards, terminated, truncated, info = jax.jit(
-            jax.vmap(self._step_pure), backend=self.jit_backend
+            jax.vmap(self._step_pure), backend=self.cfg.jit_backend
         )(self.rng, self.state, self._pending_actions)
         self._pending_actions = None
         return self.obs, rewards, terminated, truncated, info
@@ -207,11 +200,15 @@ class CraftaxEnvConfig(EnvConfig):
     max_episode_steps: int
     num_envs: int = 1
     seed: int = dataclasses.field(default_factory=random_seed)
+    obs_flat: bool = False
+    jit_backend: str = "cpu"
+    env_params: EnvParams = EnvParams()
+    static_env_params: StaticEnvParams = StaticEnvParams()
 
     @property
     def make(self) -> Callable[[], CraftaxVectorEnv]:  # type: ignore
         # This property returns a function that creates the Craftax environment wrapper.
-        return lambda: CraftaxVectorEnv("Craftax-Symbolic-v1", seed=self.seed, num_envs=self.num_envs)
+        return lambda: CraftaxVectorEnv(self)
 
 
 @dataclasses.dataclass
