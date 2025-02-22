@@ -23,7 +23,13 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     """
 
     def __init__(
-        self, env_name: str, seed: int = 0, params: Optional[EnvParams] = None, num_envs: int = 1, backend: str = "cpu"
+        self,
+        env_name: str,
+        seed: int = 0,
+        params: Optional[EnvParams] = None,
+        num_envs: int = 1,
+        obs_flat: bool = False,
+        backend: str = "cpu",
     ):
         self.env = make_craftax_env_from_name(env_name, auto_reset=False)
         self.env_params = params if params is not None else self.env.default_params
@@ -33,7 +39,8 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.state = None
         self.obs = None
         self._pending_actions = None
-        self.obs_shape = (134, 9, 11)  # My guess is this should be reversed
+        self.obs_flat = obs_flat
+        self.obs_shape = (8268,) if self.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
         self.jit_backend = backend
 
         self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=self.obs_shape, dtype=np.float32)
@@ -49,6 +56,8 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         """
         hacky soln to the observation space mismatch for symbolic craftax env
         """
+        if self.obs_flat:
+            return obs_flat
         expected_size = 8268
         assert (
             obs_flat.shape[0] == expected_size
