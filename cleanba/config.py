@@ -359,7 +359,7 @@ def craftax_drc() -> Args:
 
 def craftax_lstm(n_recurrent: int = 3, num_repeats: int = 1) -> Args:
     return Args(
-        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=1, seed=1234, spatial_obs=False),
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=1, seed=1234, obs_flat=True),
         eval_envs={},
         log_frequency=1,
         net=LSTMConfig(
@@ -403,10 +403,10 @@ def craftax_lstm(n_recurrent: int = 3, num_repeats: int = 1) -> Args:
 def craftax_mlp() -> Args:
     num_envs = 256
     return Args(
-        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, spatial_obs=False),
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, obs_flat=True),
         eval_envs={},
         log_frequency=1,
-        net=MLPConfig(hiddens=(512, 256, 256, 256), use_layer_norm=True, yang_init=False, activation="relu"),
+        net=MLPConfig(hiddens=(512, 256, 256, 256), norm=RMSNorm(), yang_init=False, activation="relu"),
         loss=ImpalaLossConfig(
             vtrace_lambda=0.95,
             gamma=0.99,

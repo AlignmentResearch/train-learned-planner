@@ -158,7 +158,6 @@ class Policy(nn.Module):
         obs: jax.Array,
         episode_starts: jax.Array,
     ) -> tuple[PolicyCarryT, jax.Array, jax.Array, dict[str, jax.Array]]:
-        assert len(obs.shape) == 5
         assert len(episode_starts.shape) == 2
         assert episode_starts.shape[:2] == obs.shape[:2]
 

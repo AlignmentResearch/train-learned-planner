@@ -11,7 +11,7 @@ import gymnasium as gym
 import jax
 import jax.numpy as jnp
 import numpy as np
-from craftax.craftax.craftax_state import EnvParams, StaticEnvParams
+from craftax.craftax.craftax_state import EnvParams
 from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
@@ -28,20 +28,24 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     state: Any
     obs: jnp.ndarray
     _pending_actions: Optional[jnp.ndarray | np.ndarray]
+    env_params: EnvParams
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
         self.cfg = cfg
-        self.env = CraftaxSymbolicEnv(static_env_params=self.cfg.static_env_params)
+        self.env = CraftaxSymbolicEnv()
+        self.env_params = self.env.default_params
+        self.closed = False
+        self.num_envs = self.cfg.num_envs
 
         self._pending_actions = None
         obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
 
         self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
         print(f"single_observation_space shape: {self.single_observation_space.shape}")
-        self.observation_space = gym.vector.utils.spaces.batch_space(self.single_observation_space, n=self.num_envs)
+        self.observation_space = gym.vector.utils.spaces.batch_space(self.single_observation_space, n=self.cfg.num_envs)
         print("Number of actions in craftax env:", self.env.action_space().n)
         self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        self.action_space = gym.vector.utils.spaces.batch_space(self.single_action_space, n=self.num_envs)
+        self.action_space = gym.vector.utils.spaces.batch_space(self.single_action_space, n=self.cfg.num_envs)
 
         # set rng_keys, state, obs
         self.reset_wait(self.cfg.seed)
@@ -67,11 +71,13 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
 
     def _reset_wait_pure(self, key: jnp.ndarray) -> Tuple[jnp.ndarray, Any, jnp.ndarray]:
         key, reset_key = jax.random.split(key)
-        obs_flat, state = self.env.reset_env(reset_key, self.cfg.env_params)
+        obs_flat, state = self.env.reset_env(reset_key, self.env_params)
         obs_processed = self._process_obs(obs_flat)
         return obs_processed, state, key
 
-    def reset_wait(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> None:
+    def reset_wait(
+        self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None
+    ) -> Tuple[jnp.ndarray, dict]:
         """
         reset env
         """
@@ -83,6 +89,7 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.obs, self.state, self.rng_keys = jax.jit(jax.vmap(self._reset_wait_pure), backend=self.cfg.jit_backend)(
             self.rng_keys
         )
+        return self.obs, {}
 
     def step_async(self, actions: np.ndarray) -> None:
         """
@@ -107,11 +114,14 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         if self._pending_actions is None:
             raise RuntimeError("No pending actions, missing a call to step_async")
 
-        self.rng, self.obs, self.state, rewards, terminated, truncated, info = jax.jit(
+        self.rng_keys, self.obs, self.state, rewards, terminated, truncated, info = jax.jit(
             jax.vmap(self._step_pure), backend=self.cfg.jit_backend
-        )(self.rng, self.state, self._pending_actions)
+        )(self.rng_keys, self.state, self._pending_actions)
         self._pending_actions = None
         return self.obs, rewards, terminated, truncated, info
+
+    def close(self, **kwargs):
+        self.closed = True
 
 
 def random_seed() -> int:
@@ -202,8 +212,6 @@ class CraftaxEnvConfig(EnvConfig):
     seed: int = dataclasses.field(default_factory=random_seed)
     obs_flat: bool = False
     jit_backend: str = "cpu"
-    env_params: EnvParams = EnvParams()
-    static_env_params: StaticEnvParams = StaticEnvParams()
 
     @property
     def make(self) -> Callable[[], CraftaxVectorEnv]:  # type: ignore

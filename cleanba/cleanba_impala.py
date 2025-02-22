@@ -66,23 +66,24 @@ class WandbWriter:
     named_save_dir: Path
 
     def __init__(self, cfg: "Args", wandb_cfg_extra_data: dict[str, Any] = {}):
-        wandb_kwargs: dict[str, Any]
+        wandb_kwargs: dict[str, Any] = dict(
+            name=os.environ.get("WANDB_JOB_NAME", generate_name(style="hyphen")),
+            mode=os.environ.get("WANDB_MODE", "online"),
+            group=os.environ.get("WANDB_RUN_GROUP", "default"),
+        )
         try:
-            wandb_kwargs = dict(
-                entity=os.environ["WANDB_ENTITY"],
-                name=os.environ.get("WANDB_JOB_NAME", generate_name(style="hyphen")),
-                project=os.environ["WANDB_PROJECT"],
-                group=os.environ["WANDB_RUN_GROUP"],
-                mode=os.environ.get("WANDB_MODE", "online"),  # Default to online here
+            wandb_kwargs.update(
+                dict(
+                    entity=os.environ["WANDB_ENTITY"],
+                    project=os.environ["WANDB_PROJECT"],
+                )
             )
-            job_name = wandb_kwargs["name"]
         except KeyError:
             # If any of the essential WANDB environment variables are missing,
             # simply don't upload this run.
             # It's fine to do this without giving any indication because Wandb already prints that the run is offline.
-
-            wandb_kwargs = dict(mode=os.environ.get("WANDB_MODE", "offline"), group="default")
-            job_name = "develop"
+            wandb_kwargs["mode"] = os.environ.get("WANDB_MODE", "offline")
+        job_name = wandb_kwargs["name"]
 
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -123,7 +124,7 @@ class WandbWriter:
                 shutil.move(f, self._save_dir / f.name)
             self.named_save_dir.unlink()
 
-        self.named_save_dir.symlink_to(save_dir_no_local_files, target_is_directory=True)
+        self.named_save_dir.symlink_to(save_dir_no_local_files.absolute(), target_is_directory=True)
 
         self.step_digits = math.ceil(math.log10(cfg.total_timesteps))
 
