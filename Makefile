@@ -32,9 +32,9 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 # NOTE: --extra=extra is for stable-baselines3 testing.
 requirements.txt.new: pyproject.toml
 	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:jax-${JAX_DATE}" \
-    bash -c "pip install pip-tools \
+    bash -c "pip install uv \
 		&& cd /workspace \
-		&& pip-compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
+		&& uv pip compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new

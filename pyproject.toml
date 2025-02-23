@@ -13,12 +13,13 @@ exclude = [
     "cleanba/legacy_scripts",
 ]
 
-[tool.ruff.isort]
-known-third-party = ["wandb"]
 
 [tool.ruff.lint]
 # Enable the isort rules.
 extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["wandb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # ignore third_party dir for now
@@ -78,3 +79,6 @@ launch-jobs = [
 
 [tool.setuptools]
 packages = ["cleanba"]
+
+[tool.uv.workspace]
+members = ["a/hello-world"]

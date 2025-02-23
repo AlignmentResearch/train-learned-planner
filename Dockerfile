@@ -50,8 +50,8 @@ RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 make bazel-releas
 FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} AS main-pre-pip
 
 ARG APPLICATION_NAME
-ARG USERID=1001
-ARG GROUPID=1001
+ARG UID=1001
+ARG GID=1001
 ARG USERNAME=dev
 
 ENV GIT_URL="https://github.com/AlignmentResearch/${APPLICATION_NAME}"
@@ -89,8 +89,8 @@ ENV VIRTUAL_ENV="/opt/venv"
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 RUN python3 -m venv "${VIRTUAL_ENV}" --system-site-packages \
-    && addgroup --gid ${GROUPID} ${USERNAME} \
-    && adduser --uid ${USERID} --gid ${GROUPID} --disabled-password --gecos '' ${USERNAME} \
+    && addgroup --gid ${GID} ${USERNAME} \
+    && adduser --uid ${UID} --gid ${GID} --disabled-password --gecos '' ${USERNAME} \
     && usermod -aG sudo ${USERNAME} \
     && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
     && mkdir -p "/workspace" \
@@ -105,28 +105,31 @@ FROM main-pre-pip AS main-pip-tools
 RUN pip install "pip-tools ~=7.4.1"
 
 FROM main-pre-pip AS main
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} pip install uv
 COPY --chown=${USERNAME}:${USERNAME} requirements.txt ./
 # Install all dependencies, which should be explicit in `requirements.txt`
-RUN pip install --no-deps -r requirements.txt \
-    && rm -rf "${HOME}/.cache" \
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
+    uv pip sync requirements.txt \
     # Run Pyright so its Node.js package gets installed
     && pyright .
 
 # Install Envpool
 ENV ENVPOOL_WHEEL="envpool-0.9.0-cp312-cp312-linux_x86_64.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "${ENVPOOL_WHEEL}"
-RUN pip install --no-deps "${ENVPOOL_WHEEL}" && rm "${ENVPOOL_WHEEL}"
+RUN uv pip install "${ENVPOOL_WHEEL}" && rm "${ENVPOOL_WHEEL}"
 
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
-RUN pip install --no-deps -e . -e ./third_party/gym-sokoban/
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
+    uv pip install --no-deps -e . -e ./third_party/gym-sokoban/
 
 # Set git remote URL to https for all sub-repos
 RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" \
     && (cd third_party/envpool && git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" )
 
 # Abort if repo is dirty
-RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
+RUN rm NVIDIA_Deep_Learning_Container_License.pdf \
+    && echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && echo "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && echo "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && if ! { [ -z "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
@@ -136,4 +139,4 @@ RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$'
 
 
 FROM main AS atari
-RUN pip uninstall -y envpool && pip install envpool && rm -rf "${HOME}/.cache"
+RUN uv pip uninstall -y envpool && uv pip install envpool && rm -rf "${HOME}/.cache"
