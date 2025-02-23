@@ -401,35 +401,37 @@ def craftax_lstm(n_recurrent: int = 3, num_repeats: int = 1) -> Args:
 
 
 def craftax_mlp() -> Args:
-    num_envs = 256
+    num_envs = 512
     return Args(
         train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, obs_flat=True),
         eval_envs={},
         log_frequency=1,
         net=MLPConfig(hiddens=(512, 256, 256, 256), norm=RMSNorm(), yang_init=False, activation="relu"),
         loss=ImpalaLossConfig(
-            vtrace_lambda=0.95,
+            vtrace_lambda=0.8,
             gamma=0.99,
             ent_coef=0.01,
             vf_coef=0.25,
             normalize_advantage=True,
-            weight_l2_coef=1e-6,
-            logit_l2_coef=1e-6,
+            weight_l2_coef=0,
+            logit_l2_coef=0,
         ),
         actor_update_cutoff=0,
         sync_frequency=200,
         num_minibatches=8,
-        rmsprop_eps=1e-6,
+        rmsprop_eps=1e-8,
         local_num_envs=num_envs,
         total_timesteps=3000000,
         base_run_dir=Path("."),
         learning_rate=2e-4,
-        final_learning_rate=0,
+        final_learning_rate=1e-5,
         optimizer="adam",
+        adam_b1=0.9,
+        rmsprop_decay=0.999,
         base_fan_in=1,
         anneal_lr=True,
-        max_grad_norm=0.5,
+        max_grad_norm=1.0,
         num_actor_threads=1,
-        num_steps=32,
-        train_epochs=1,
+        num_steps=128,
+        train_epochs=4,
     )
