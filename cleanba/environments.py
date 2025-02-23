@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from craftax.craftax.craftax_state import EnvParams
 from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
-from gymnasium.vector.utils.spaces import batch_space
+from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
 
 # JAX_COMPILE_CACHE = Path("~/.cache/jax-compile").expanduser()
@@ -50,10 +50,10 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
 
         self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
         print(f"single_observation_space shape: {self.single_observation_space.shape}")
-        self.observation_space = gym.vector.utils.spaces.batch_space(self.single_observation_space, n=self.cfg.num_envs)
+        self.observation_space = batch_space(self.single_observation_space, n=self.cfg.num_envs)
         print("Number of actions in craftax env:", self.env.action_space().n)
         self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        self.action_space = gym.vector.utils.spaces.batch_space(self.single_action_space, n=self.cfg.num_envs)
+        self.action_space = batch_space(self.single_action_space, n=self.cfg.num_envs)
 
         # set rng_keys, state, obs
         self.reset_async(self.cfg.seed)
@@ -310,7 +310,7 @@ class BaseSokobanEnvConfig(EnvConfig):
         )
 
 
-class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
+class VectorNHWCtoNCHWWrapper(gym.vector.VectorWrapper):
     def __init__(self, env: gym.vector.VectorEnv, remove_last_action: bool = False):
         super().__init__(env)
         obs_space = env.single_observation_space
