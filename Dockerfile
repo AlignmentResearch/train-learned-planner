@@ -10,11 +10,14 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 USER ubuntu
-ENV PATH=/usr/lib/go-1.21/bin:/home/ubuntu/go/bin:$PATH
-RUN go install github.com/bazelbuild/bazelisk@v1.19.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
-RUN go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
+ENV HOME=/home/ubuntu
+ENV PATH=/usr/lib/go-1.21/bin:${HOME}/go/bin:$PATH
+ENV UID=1000
+ENV GID=1000
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/bazelisk@v1.19.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
 # Install Go linting tools
-RUN go install github.com/google/addlicense@v1.1.1
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/google/addlicense@v1.1.1
 
 ENV USE_BAZEL_VERSION=8.1.0
 RUN bazel version
@@ -22,6 +25,12 @@ RUN bazel version
 WORKDIR /app
 # Copy the whole repository
 COPY --chown=ubuntu:ubuntu third_party/envpool .
+
+# Install python-based linting dependencies
+COPY --chown=ubuntu:ubuntu \
+    third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
+    third_party/pip_requirements/requirements-devtools.txt
+RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 pip install -r third_party/pip_requirements/requirements-devtools.txt
 
 # Deal with the fact that envpool is a submodule and has no .git directory
 RUN rm .git
@@ -36,7 +45,7 @@ RUN echo "$(git status --porcelain --ignored=traditional)" \
     ; }; then exit 1; fi
 
 FROM envpool-environment AS envpool
-RUN make bazel-release
+RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 make bazel-release && cp bazel-bin/*.whl .
 
 FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} AS main-pre-pip
 
@@ -103,10 +112,10 @@ RUN pip install --no-deps -r requirements.txt \
     # Run Pyright so its Node.js package gets installed
     && pyright .
 
-# Install Envpool (the tag is fake, it's actually cp312-cp312-linux_x86_64)
-ENV ENVPOOL_WHEEL="dist/envpool-0.9.0-py3-none-any.whl"
-COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "./${ENVPOOL_WHEEL}"
-RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
+# Install Envpool
+ENV ENVPOOL_WHEEL="envpool-0.9.0-cp312-cp312-linux_x86_64.whl"
+COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "${ENVPOOL_WHEEL}"
+RUN pip install --no-deps "${ENVPOOL_WHEEL}" && rm "${ENVPOOL_WHEEL}"
 
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
