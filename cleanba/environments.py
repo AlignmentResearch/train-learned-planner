@@ -17,15 +17,6 @@ from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
 
-# JAX_COMPILE_CACHE = Path("~/.cache/jax-compile").expanduser()
-# JAX_COMPILE_CACHE.mkdir(exist_ok=True, parents=True)
-
-
-# jax.config.update("jax_compilation_cache_dir", str(JAX_COMPILE_CACHE))
-# jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-# jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
-# jax.config.update("jax_persistent_cache_enable_xla_caches", "all")
-
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):
     """

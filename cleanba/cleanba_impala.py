@@ -88,6 +88,14 @@ class WandbWriter:
         run_dir = cfg.base_run_dir / wandb_kwargs["group"]
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        jax_compile_cache = cfg.base_run_dir / "kernel-cache"
+        jax_compile_cache.mkdir(exist_ok=True, parents=True)
+
+        jax.config.update("jax_compilation_cache_dir", str(jax_compile_cache))
+        jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+        jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
+        jax.config.update("jax_persistent_cache_enable_xla_caches", "all")
+
         old_run_dir_sym = run_dir / "wandb" / job_name
         run_id = None
         if old_run_dir_sym.exists() and not cfg.finetune_with_noop_head:
