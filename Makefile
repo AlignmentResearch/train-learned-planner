@@ -8,7 +8,7 @@ export DOCKERFILE
 
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
-JAX_DATE=2024-04-08
+JAX_DATE=2025-02-22
 
 default: release/main
 
@@ -31,7 +31,7 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 
 # NOTE: --extra=extra is for stable-baselines3 testing.
 requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:base-${JAX_DATE}" \
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:jax-${JAX_DATE}" \
     bash -c "pip install pip-tools \
 		&& cd /workspace \
 		&& pip-compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
