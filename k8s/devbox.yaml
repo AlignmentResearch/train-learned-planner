@@ -22,7 +22,7 @@ spec:
           sizeLimit: "{SHM_SIZE}"
       - name: training
         persistentVolumeClaim:
-          claimName: az-learned-planners
+          claimName: vast-learned-planners
 
       containers:
       - name: devbox-container
@@ -48,7 +48,7 @@ spec:
             cpu: {CPU}
           limits:
             memory: "{MEMORY}"
-            nvidia.com/gpu: {GPU}
+            nvidia.com/mig-2g.20gb: {GPU}
         env:
         - name: OMP_NUM_THREADS
           value: "{CPU}"
