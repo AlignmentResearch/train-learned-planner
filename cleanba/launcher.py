@@ -83,8 +83,8 @@ def create_jobs(
     start_number: int,
     runs: Sequence[FlamingoRun],
     group: str,
-    project: str = "lp-cleanba",
-    entity: str = "farai",
+    project: str = "impala",
+    entity: str = "matsrlgoals",
     wandb_mode: str = "online",
     job_template_path: Optional[Path] = None,
 ) -> tuple[Sequence[str], str]:

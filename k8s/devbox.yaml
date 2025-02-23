@@ -55,9 +55,9 @@ spec:
         - name: WANDB_MODE
           value: offline
         - name: WANDB_PROJECT
-          value: lp-cleanba
+          value: impala
         - name: WANDB_ENTITY
-          value: farai
+          value: matsrlgoals
         - name: WANDB_RUN_GROUP
           value: devbox
         - name: GIT_ASKPASS
