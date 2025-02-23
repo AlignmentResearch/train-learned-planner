@@ -1,36 +1,32 @@
 ARG JAX_DATE
 
-FROM ghcr.io/nvidia/jax:base-${JAX_DATE} as envpool-environment
+FROM ghcr.io/nvidia/jax:base-${JAX_DATE} AS envpool-environment
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y golang-1.18 git \
+    && apt-get install -y golang-1.21 git \
     # Linters
       clang-format clang-tidy \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH=/usr/lib/go-1.18/bin:/root/go/bin:$PATH
+USER ubuntu
+ENV PATH=/usr/lib/go-1.21/bin:/home/ubuntu/go/bin:$PATH
 RUN go install github.com/bazelbuild/bazelisk@v1.19.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
 RUN go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
 # Install Go linting tools
 RUN go install github.com/google/addlicense@v1.1.1
 
-ENV USE_BAZEL_VERSION=6.4.0
+ENV USE_BAZEL_VERSION=8.1.0
 RUN bazel version
 
 WORKDIR /app
-# Install python-based linting dependencies
-COPY third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
-    third_party/pip_requirements/requirements-devtools.txt
-RUN pip install -r third_party/pip_requirements/requirements-devtools.txt
-
 # Copy the whole repository
-COPY third_party/envpool .
+COPY --chown=ubuntu:ubuntu third_party/envpool .
 
 # Deal with the fact that envpool is a submodule and has no .git directory
 RUN rm .git
 # Copy the .git repository for this submodule
-COPY .git/modules/envpool ./.git
+COPY --chown=ubuntu:ubuntu .git/modules/envpool ./.git
 # Remove config line stating that the worktree for this repo is elsewhere
 RUN sed -e 's/^.*worktree =.*$//' .git/config > .git/config.new && mv .git/config.new .git/config
 
@@ -39,10 +35,10 @@ RUN echo "$(git status --porcelain --ignored=traditional)" \
     && if ! { [ -z "$(git status --porcelain --ignored=traditional)" ] \
     ; }; then exit 1; fi
 
-FROM envpool-environment as envpool
+FROM envpool-environment AS envpool
 RUN make bazel-release
 
-FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} as main-pre-pip
+FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} AS main-pre-pip
 
 ARG APPLICATION_NAME
 ARG USERID=1001
@@ -96,10 +92,10 @@ WORKDIR "/workspace"
 # Get a pip modern enough that can resolve farconf
 RUN pip install "pip ==24.0" && rm -rf "${HOME}/.cache"
 
-FROM main-pre-pip as main-pip-tools
+FROM main-pre-pip AS main-pip-tools
 RUN pip install "pip-tools ~=7.4.1"
 
-FROM main-pre-pip as main
+FROM main-pre-pip AS main
 COPY --chown=${USERNAME}:${USERNAME} requirements.txt ./
 # Install all dependencies, which should be explicit in `requirements.txt`
 RUN pip install --no-deps -r requirements.txt \
@@ -107,8 +103,8 @@ RUN pip install --no-deps -r requirements.txt \
     # Run Pyright so its Node.js package gets installed
     && pyright .
 
-# Install Envpool
-ENV ENVPOOL_WHEEL="dist/envpool-0.8.4-cp310-cp310-linux_x86_64.whl"
+# Install Envpool (the tag is fake, it's actually cp312-cp312-linux_x86_64)
+ENV ENVPOOL_WHEEL="dist/envpool-0.9.0-py3-none-any.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "./${ENVPOOL_WHEEL}"
 RUN pip install "./${ENVPOOL_WHEEL}" && rm -rf "./dist"
 
@@ -130,5 +126,5 @@ RUN echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$'
     ; }; then exit 1; fi
 
 
-FROM main as atari
+FROM main AS atari
 RUN pip uninstall -y envpool && pip install envpool && rm -rf "${HOME}/.cache"

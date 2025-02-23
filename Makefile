@@ -30,7 +30,7 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 	touch ".build/with-reqs/${BUILD_PREFIX}/$*"
 
 # NOTE: --extra=extra is for stable-baselines3 testing.
-requirements.txt.new: pyproject.toml ${DOCKERFILE}
+requirements.txt.new: pyproject.toml
 	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:jax-${JAX_DATE}" \
     bash -c "pip install pip-tools \
 		&& cd /workspace \
