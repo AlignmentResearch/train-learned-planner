@@ -539,7 +539,12 @@ def linear_schedule(
     return initial_learning_rate + frac * (final_learning_rate - initial_learning_rate)
 
 
-def make_optimizer(args: Args, params: AgentParams, total_updates: int):
+def make_optimizer(
+    args: Args,
+    params: AgentParams,
+    total_updates: int,
+    dont_inject_lr: bool = False,  # for backwards-compatability with loading older models, e.g., the DRC33 from the paper
+) -> optax.GradientTransformation:
     _linear_schedule = partial(
         linear_schedule,
         initial_learning_rate=args.learning_rate,
@@ -552,7 +557,9 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
     def _linear_or_constant_schedule(count: chex.Numeric) -> chex.Numeric:
         return _linear_schedule(count) if args.anneal_lr else args.learning_rate
 
-    def optimizer_with_learning_rate(learning_rate: chex.Numeric) -> optax.GradientTransformation:
+    def optimizer_with_learning_rate(
+        learning_rate: chex.Numeric | Callable[[chex.Numeric], chex.Numeric],
+    ) -> optax.GradientTransformation:
         if args.optimizer_yang:
             learning_rates, agent_param_labels = label_and_learning_rate_for_params(params, base_fan_in=args.base_fan_in)
             transform_chain = [
@@ -601,11 +608,12 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
                 minibatches_per_update: int,
                 total_updates: int,
                 train_epochs: int,
-                otherwise_learning_rate: chex.Numeric,
+                otherwise_learning_rate: chex.Numeric | Callable[[chex.Numeric], chex.Numeric],
             ) -> chex.Numeric:
                 # Return 0 during frozen period, then transition to normal learning rate
                 frac = (count // minibatches_per_update) / (total_updates * train_epochs)
-                return jnp.where(frac < frozen_finetune_steps_ratio, 0.0, otherwise_learning_rate)
+                other_lr = otherwise_learning_rate(count) if callable(otherwise_learning_rate) else otherwise_learning_rate
+                return jnp.where(frac < frozen_finetune_steps_ratio, 0.0, other_lr)
 
             frozen_transform_chain = get_transform_chain(
                 partial(
@@ -630,6 +638,8 @@ def make_optimizer(args: Args, params: AgentParams, total_updates: int):
         return optimizer  # type: ignore
 
     # Inject learning rate schedule at the top level so we can just get it from .hyperparams and log it.
+    if dont_inject_lr:
+        return optimizer_with_learning_rate(_linear_or_constant_schedule)
     return optax.inject_hyperparams(optimizer_with_learning_rate)(_linear_or_constant_schedule)
 
 
@@ -908,9 +918,17 @@ def load_train_state(
         params=params,
         tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size),
     )
-
-    with open(dir / "model", "rb") as f:
-        train_state = flax.serialization.from_bytes(target_state, f.read())
+    try:
+        with open(dir / "model", "rb") as f:
+            train_state = flax.serialization.from_bytes(target_state, f.read())
+    except ValueError:
+        target_state = TrainState.create(
+            apply_fn=None,
+            params=params,
+            tx=make_optimizer(args, params, total_updates=args.total_timesteps // local_batch_size, dont_inject_lr=True),
+        )
+        with open(dir / "model", "rb") as f:
+            train_state = flax.serialization.from_bytes(target_state, f.read())
     assert isinstance(train_state, TrainState)
     try:
         train_state = unreplicate(train_state)
