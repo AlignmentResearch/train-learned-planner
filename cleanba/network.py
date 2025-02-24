@@ -583,7 +583,6 @@ class MLPConfig(PolicySpec):
     yang_init: bool = dataclasses.field(default=False)
     norm: NormConfig = dataclasses.field(default_factory=IdentityNorm)
     normalize_input: bool = False
-    head_scale: float = 1.0
 
     def make(self) -> "MLP":
         return MLP(self)
