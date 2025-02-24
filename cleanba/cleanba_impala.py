@@ -306,6 +306,7 @@ def _concat_and_shard_rollout_internal(
         carry_t=jax.tree.map(lambda x: jnp.expand_dims(_split_over_batches(x), axis=1), storage[0].carry_t),
         a_t=jnp.stack([_split_over_batches(r.a_t) for r in storage], axis=1),
         logits_t=jnp.stack([_split_over_batches(r.logits_t) for r in storage], axis=1),
+        value_t=jnp.stack([_split_over_batches(r.value_t) for r in storage], axis=1),
         r_t=jnp.stack([_split_over_batches(r.r_t) for r in storage], axis=1),
         episode_starts_t=jnp.stack(
             [*(_split_over_batches(r.episode_starts_t) for r in storage), _split_over_batches(last_episode_starts)], axis=1
@@ -415,7 +416,9 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time):
-                        carry_tplus1, a_t, logits_t, key = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
+                        carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
+                            params, carry_t, obs_t, episode_starts_t, key
+                        )
                         assert a_t.shape == (args.local_num_envs,)
                         assert logits_t.shape == (args.local_num_envs, 43)
 
@@ -441,6 +444,7 @@ def rollout(
                                 carry_t=carry_t,
                                 a_t=a_t,
                                 logits_t=logits_t,
+                                value_t=value_t,
                                 r_t=r_t,
                                 episode_starts_t=episode_starts_t,
                                 truncated_t=trunc_t,

@@ -127,7 +127,7 @@ class Policy(nn.Module):
         key: jax.Array,
         *,
         temperature: float = 1.0,
-    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array, jax.Array]:
         # assert len(obs.shape) == 4
         assert len(episode_starts.shape) == 1
         print(f"{obs.shape=}")
@@ -140,7 +140,9 @@ class Policy(nn.Module):
         else:
             carry, hidden = self.network_params.step(carry, obs, episode_starts)
         logits, _ = self.actor_params(hidden)
+        value, _ = self.critic_params(hidden)
         assert isinstance(logits, jax.Array)
+        assert isinstance(value, jax.Array)
 
         if temperature == 0.0:
             action = jnp.argmax(logits, axis=1)
@@ -150,7 +152,7 @@ class Policy(nn.Module):
             key, subkey = jax.random.split(key)
             u = jax.random.uniform(subkey, shape=logits.shape)
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return carry, action, logits, key
+        return carry, action, logits, value, key
 
     def get_logits_and_value(
         self,

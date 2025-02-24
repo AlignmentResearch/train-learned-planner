@@ -5,17 +5,19 @@ import random
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Literal, Optional, Tuple, Union
 
 import gymnasium as gym
 import jax
 import jax.experimental.compilation_cache
 import jax.numpy as jnp
 import numpy as np
-from craftax.craftax.craftax_state import EnvParams
-from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
+
+if TYPE_CHECKING:
+    from craftax.craftax.craftax_state import EnvParams
+    from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):
@@ -24,13 +26,15 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     """
 
     cfg: "CraftaxEnvConfig"
-    env: CraftaxSymbolicEnv
+    env: "CraftaxSymbolicEnv"
     rng_keys: jnp.ndarray
     state: Any
     obs: jnp.ndarray
-    env_params: EnvParams
+    env_params: "EnvParams"
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
+        from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+
         self.cfg = cfg
         self.env = CraftaxSymbolicEnv()
         self.env_params = self.env.default_params
