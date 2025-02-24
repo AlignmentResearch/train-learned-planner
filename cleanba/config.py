@@ -6,9 +6,7 @@ from typing import List, Optional
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMConfig
 from cleanba.environments import AtariEnv, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
-from cleanba.impala_loss import (
-    ImpalaLossConfig,
-)
+from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig
 from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, MLPConfig, PolicySpec, RMSNorm, SokobanResNetConfig
 
 
@@ -45,7 +43,7 @@ class Args:
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
-    loss: ImpalaLossConfig = ImpalaLossConfig()
+    loss: ActorCriticLossConfig = ImpalaLossConfig()
 
     net: PolicySpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 
