@@ -309,10 +309,10 @@ class Critic(nn.Module):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(1.0)
+            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x) * self.kernel_scale
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
         bias = jnp.squeeze(self.variables["params"]["Output"]["bias"])
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
@@ -598,6 +598,6 @@ class MLP(nn.Module):
         x = jnp.reshape(x, (x.shape[0], -1))
         for hidden in self.cfg.hiddens:
             x = self.cfg.norm(x)
-            x = nn.Dense(hidden)(x)
+            x = nn.Dense(hidden, use_bias=True, kernel_init=nn.initializers.orthogonal(2**0.5))(x)
             x = activation_fn(x)
         return x

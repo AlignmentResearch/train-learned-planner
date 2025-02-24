@@ -406,7 +406,7 @@ def craftax_mlp() -> Args:
         train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, obs_flat=True),
         eval_envs={},
         log_frequency=1,
-        net=MLPConfig(hiddens=(512, 256, 256, 256), norm=RMSNorm(), yang_init=False, activation="relu"),
+        net=MLPConfig(hiddens=(512, 512, 512), norm=IdentityNorm(), yang_init=False, activation="tanh", head_scale=0.01),
         loss=ImpalaLossConfig(
             vtrace_lambda=0.8,
             gamma=0.99,
@@ -432,6 +432,6 @@ def craftax_mlp() -> Args:
         anneal_lr=True,
         max_grad_norm=1.0,
         num_actor_threads=1,
-        num_steps=128,
-        train_epochs=4,
+        num_steps=64,
+        train_epochs=1,
     )
