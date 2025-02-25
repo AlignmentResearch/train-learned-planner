@@ -44,16 +44,16 @@ from cleanba.network import AgentParams, Policy, PolicyCarryT, label_and_learnin
 from cleanba.optimizer import rmsprop_pytorch_style
 
 # Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
-os.environ["XLA_FLAGS"] = (
-    os.environ.get("XLA_FLAGS", "") + " --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
-)
+# os.environ["XLA_FLAGS"] = (
+#     os.environ.get("XLA_FLAGS", "") + " --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
+# )
 # Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
-os.environ["TF_XLA_FLAGS"] = (
-    os.environ.get("TF_XLA_FLAGS", "") + " --xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
-)
+# os.environ["TF_XLA_FLAGS"] = (
+#     os.environ.get("TF_XLA_FLAGS", "") + " --xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
+# )
 
 # Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
-os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+# os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 
 
 def unreplicate(tree):
@@ -270,9 +270,10 @@ class LoggingStats:
 
 
 @contextlib.contextmanager
-def time_and_append(stats: list[float]):
+def time_and_append(stats: list[float], name: str, step_num: int):
     start_time = time.time()
-    yield
+    with jax.named_scope(name):
+        yield
     stats.append(time.time() - start_time)
 
 
@@ -365,7 +366,7 @@ def rollout(
     this_thread_eval_keys = list(jax.random.split(eval_keys, len(this_thread_eval_cfg)))
 
     len_actor_device_ids = len(args.actor_device_ids)
-    start_time = time.time()
+    start_time = None
 
     log_stats = LoggingStats.new_empty()
     # Counters for episode length and episode return
@@ -397,8 +398,8 @@ def rollout(
 
         param_frequency = args.actor_update_frequency if update <= args.actor_update_cutoff else 1
 
-        with time_and_append(log_stats.update_time):
-            with time_and_append(log_stats.params_queue_get_time):
+        with time_and_append(log_stats.update_time, "update", global_step):
+            with time_and_append(log_stats.params_queue_get_time, "params_queue_get", global_step):
                 num_steps_with_bootstrap = args.num_steps
 
                 if args.concurrency:
@@ -419,34 +420,35 @@ def rollout(
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
             done_count = 0
-            with time_and_append(log_stats.rollout_time):
+            with time_and_append(log_stats.rollout_time, "rollout", global_step):
                 for _ in range(1, num_steps_with_bootstrap + 1):
                     global_step += (
                         args.local_num_envs * args.num_actor_threads * len_actor_device_ids * runtime_info.world_size
                     )
 
-                    with time_and_append(log_stats.inference_time):
-                        carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
-                            params, carry_t, obs_t, episode_starts_t, key
+                    with time_and_append(log_stats.inference_time, "inference", global_step):
+                        carry_tplus1, a_t, logits_t, value_t, key = jax.block_until_ready(
+                            get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
                         )  # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
                         assert a_t.shape == (args.local_num_envs,)
 
                     if isinstance(envs, CraftaxVectorEnv):
-                        cpu_action = a_t  # Do not move to CPU forcibly if the environment is also Jax
+                        cpu_action = np.array(a_t)  # Do not move to CPU forcibly if the environment is also Jax
                     else:
-                        with time_and_append(log_stats.device2host_time):
+                        with time_and_append(log_stats.device2host_time, "device2host", global_step):
                             cpu_action = np.array(a_t)
 
-                    with time_and_append(log_stats.env_send_time):
+                    with time_and_append(log_stats.env_send_time, "env_send", global_step):
                         envs.step_async(cpu_action)
 
-                    with time_and_append(log_stats.env_recv_time):
+                    with time_and_append(log_stats.env_recv_time, "env_recv", global_step):
                         obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
                         done_t = term_t | trunc_t
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
+                        jax.block_until_ready((obs_tplus1, r_t, term_t, trunc_t, info_t, done_t))
 
-                    with time_and_append(log_stats.create_rollout_time):
+                    with time_and_append(log_stats.create_rollout_time, "create_rollout", global_step):
                         storage.append(
                             Rollout(
                                 obs_t=obs_t,
@@ -488,8 +490,9 @@ def rollout(
                                 for idx in done_indices:
                                     achievement_counts[ach] = achievement_counts.get(ach, 0) + arr[idx]
                         episode_count += len(done_indices)
+                        jax.block_until_ready((carry_t, obs_t, episode_starts_t))
 
-            with time_and_append(log_stats.storage_time):
+            with time_and_append(log_stats.storage_time, "storage", global_step):
                 _, _, _, value_t, _ = get_action_fn(
                     params, carry_t, obs_t, episode_starts_t, key
                 )  # TODO: eliminate this extra call
@@ -503,7 +506,8 @@ def rollout(
                     np.mean(log_stats.params_queue_get_time),
                     device_thread_id,
                 )
-            with time_and_append(log_stats.rollout_queue_put_time):
+                jax.block_until_ready(payload)
+            with time_and_append(log_stats.rollout_queue_put_time, "rollout_queue_put", global_step):
                 rollout_queue.put(payload, timeout=args.queue_timeout)
 
         # Log on all rollout threads
@@ -525,7 +529,12 @@ def rollout(
             outer_loop_time = np.sum(log_stats.update_time)
 
             stats_dict: dict[str, float] = log_stats.avg_and_flush()
-            steps_per_second = global_step / (time.time() - start_time)
+
+            if start_time is None:
+                steps_per_second = 0
+                start_time = time.time()
+            else:
+                steps_per_second = global_step / (time.time() - start_time)
             print(
                 f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
@@ -535,6 +544,8 @@ def rollout(
                     writer.add_scalar(f"stats/{device_thread_id}/{k}", v, global_step)
                 else:
                     writer.add_scalar(f"charts/{device_thread_id}/{k}", v, global_step)
+            writer.add_scalar("episode_return", stats_dict["avg_episode_returns"], global_step)
+            writer.add_scalar("episode_length", stats_dict["avg_episode_lengths"], global_step)
 
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
             writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
@@ -845,6 +856,7 @@ def train(
                     agent_state,
                     sharded_storages,
                 )
+                jax.block_until_ready((agent_state, metrics_dict))
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
                 for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -997,5 +1009,4 @@ def load_train_state(
 if __name__ == "__main__":
     args = farconf.parse_cli(sys.argv[1:], Args)
     pprint(args)
-
     train(args)

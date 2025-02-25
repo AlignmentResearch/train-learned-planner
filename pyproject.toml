@@ -64,8 +64,7 @@ dependencies = [
     "ray[tune]",
     "matplotlib",
     "craftax",
-    "jax==0.5.0",
-    "gym-sokoban",
+    "jax==0.5.1",
 ]
 [project.optional-dependencies]
 dev = [
@@ -85,6 +84,3 @@ packages = ["cleanba"]
 
 [tool.uv.workspace]
 members = ["a/hello-world"]
-
-[tool.uv.sources]
-gym-sokoban = { path = "third_party/gym-sokoban" }

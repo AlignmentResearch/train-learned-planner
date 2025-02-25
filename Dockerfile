@@ -109,7 +109,7 @@ RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} pip install u
 COPY --chown=${USERNAME}:${USERNAME} requirements.txt ./
 # Install all dependencies, which should be explicit in `requirements.txt`
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
-    uv pip sync requirements.txt \
+    uv pip install --no-deps -r requirements.txt \
     # Run Pyright so its Node.js package gets installed
     && pyright .
 
