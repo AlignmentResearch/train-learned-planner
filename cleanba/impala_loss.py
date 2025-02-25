@@ -253,7 +253,7 @@ class PPOLossConfig(ActorCriticLossConfig):
 
         # Compute advantage and clipped value loss
         gae = jax.vmap(rlax.truncated_generalized_advantage_estimation, in_axes=(1, 1, None, 1, None), out_axes=1)(
-            r_t, discount_t, self.gae_lambda, minibatch_value_tm1, True
+            r_t, discount_t, self.gae_lambda, minibatch.value_t, True
         )
         value_targets = gae + minibatch_value_tm1
 

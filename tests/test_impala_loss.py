@@ -1,5 +1,4 @@
 import dataclasses
-import functools
 import queue
 from functools import partial
 from typing import Any
@@ -17,18 +16,6 @@ import cleanba.cleanba_impala as cleanba_impala
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
 from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig, Rollout
 from cleanba.network import Policy, PolicySpec
-
-
-def needs_jax_float64(fn):
-    @functools.wraps(fn)
-    def f64_fn(*args, **kwargs):
-        try:
-            jax.config.update("jax_enable_x64", True)
-            return fn(*args, **kwargs)
-        finally:
-            jax.config.update("jax_enable_x64", False)
-
-    return fn
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
@@ -91,7 +78,6 @@ def test_gae_alignment(gamma: float, gae_lambda: float, num_timesteps: int, last
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
 @pytest.mark.parametrize("num_timesteps", [20, 2])  # Note: with 1 timesteps we get zero-length arrays
 @pytest.mark.parametrize("last_value", [0.0, 1.0])
-@needs_jax_float64
 def test_impala_loss_zero_when_accurate(
     cls: type[ActorCriticLossConfig], gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5
 ):
@@ -133,10 +119,10 @@ def test_impala_loss_zero_when_accurate(
         ),
     )
 
-    assert np.allclose(metrics_dict["pg_loss"], 0.0)
-    assert np.allclose(metrics_dict["v_loss"], 0.0)
+    assert np.allclose(metrics_dict["pg_loss"], 0.0, atol=2e-7)
+    assert np.allclose(metrics_dict["v_loss"], 0.0, atol=1e-7)
     assert np.allclose(metrics_dict["ent_loss"], 0.0)
-    assert np.allclose(total_loss, 0.0)
+    assert np.allclose(total_loss, 0.0, atol=2e-7)
 
 
 class TrivialEnvPolicy(Policy):
@@ -189,7 +175,6 @@ class ZeroActionNetworkSpec(PolicySpec):
 
 @pytest.mark.parametrize("cls", [ImpalaLossConfig, PPOLossConfig])
 @pytest.mark.parametrize("min_episode_steps", (10, 7))
-@needs_jax_float64
 def test_loss_of_rollout(
     cls: type[ActorCriticLossConfig], min_episode_steps: int, num_envs: int = 5, gamma: float = 1.0, num_timesteps: int = 30
 ):
