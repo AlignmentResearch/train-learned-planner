@@ -81,6 +81,3 @@ launch-jobs = [
 
 [tool.setuptools]
 packages = ["cleanba"]
-
-[tool.uv.workspace]
-members = ["a/hello-world"]

@@ -414,7 +414,6 @@ def rollout(
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
                         # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
-                        jax.block_until_ready(params)
                 else:
                     if (update - 1) % args.actor_update_frequency == 0:
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
@@ -427,13 +426,14 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time, "inference", global_step):
-                        carry_tplus1, a_t, logits_t, value_t, key = jax.block_until_ready(
-                            get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
-                        )  # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
+                        # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
+                        carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
+                            params, carry_t, obs_t, episode_starts_t, key
+                        )
                         assert a_t.shape == (args.local_num_envs,)
 
                     if isinstance(envs, CraftaxVectorEnv):
-                        cpu_action = np.array(a_t)  # Do not move to CPU forcibly if the environment is also Jax
+                        cpu_action = a_t  # Do not move to CPU forcibly if the environment is also Jax
                     else:
                         with time_and_append(log_stats.device2host_time, "device2host", global_step):
                             cpu_action = np.array(a_t)
@@ -446,7 +446,6 @@ def rollout(
                         done_t = term_t | trunc_t
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
-                        jax.block_until_ready((obs_tplus1, r_t, term_t, trunc_t, info_t, done_t))
 
                     with time_and_append(log_stats.create_rollout_time, "create_rollout", global_step):
                         storage.append(
@@ -490,7 +489,6 @@ def rollout(
                                 for idx in done_indices:
                                     achievement_counts[ach] = achievement_counts.get(ach, 0) + arr[idx]
                         episode_count += len(done_indices)
-                        jax.block_until_ready((carry_t, obs_t, episode_starts_t))
 
             with time_and_append(log_stats.storage_time, "storage", global_step):
                 _, _, _, value_t, _ = get_action_fn(
@@ -506,7 +504,6 @@ def rollout(
                     np.mean(log_stats.params_queue_get_time),
                     device_thread_id,
                 )
-                jax.block_until_ready(payload)
             with time_and_append(log_stats.rollout_queue_put_time, "rollout_queue_put", global_step):
                 rollout_queue.put(payload, timeout=args.queue_timeout)
 
@@ -856,7 +853,6 @@ def train(
                     agent_state,
                     sharded_storages,
                 )
-                jax.block_until_ready((agent_state, metrics_dict))
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
                 for d_idx, d_id in enumerate(args.actor_device_ids):
