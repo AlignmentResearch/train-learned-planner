@@ -7,6 +7,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, List, Literal, Optional, Tuple, Union
 
+import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import jax
 import jax.experimental.compilation_cache
@@ -33,22 +34,17 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     env_params: "EnvParams"
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
+        obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
+        single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
+        single_action_space = gym.spaces.Discrete(self.env.action_space().n)
+        super().__init__(cfg.num_envs, single_observation_space, single_action_space)
+
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
         self.cfg = cfg
         self.env = CraftaxSymbolicEnv()
         self.env_params = self.env.default_params
         self.closed = False
-        self.num_envs = self.cfg.num_envs
-
-        obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
-
-        self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
-        print(f"single_observation_space shape: {self.single_observation_space.shape}")
-        self.observation_space = batch_space(self.single_observation_space, n=self.cfg.num_envs)
-        print("Number of actions in craftax env:", self.env.action_space().n)
-        self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        self.action_space = batch_space(self.single_action_space, n=self.cfg.num_envs)
 
         # set rng_keys, state, obs
         self.reset_async(self.cfg.seed)
@@ -305,7 +301,7 @@ class BaseSokobanEnvConfig(EnvConfig):
         )
 
 
-class VectorNHWCtoNCHWWrapper(gym.vector.VectorWrapper):
+class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
     def __init__(self, env: gym.vector.VectorEnv, remove_last_action: bool = False):
         super().__init__(env)
         obs_space = env.single_observation_space

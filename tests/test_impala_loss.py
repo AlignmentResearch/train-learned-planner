@@ -14,7 +14,7 @@ import rlax
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, Rollout, impala_loss
+from cleanba.impala_loss import ImpalaLossConfig, Rollout
 from cleanba.network import Policy, PolicySpec
 
 
@@ -69,8 +69,9 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
 
     obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
+    value_t = jnp.zeros((num_timesteps + 1, batch_size))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
-    (total_loss, metrics_dict) = impala_loss(
+    (total_loss, metrics_dict) = ImpalaLossConfig(gamma=gamma).loss(
         params={},
         get_logits_and_value=lambda params, carry, obs, episode_starts: (
             carry,
@@ -78,7 +79,6 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
             obs,
             {},
         ),
-        args=ImpalaLossConfig(gamma=gamma),
         minibatch=Rollout(
             obs_t=jnp.array(obs_t),
             carry_t=(),
@@ -86,6 +86,7 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
             truncated_t=np.zeros_like(done_tm1),
             a_t=a_t,
             logits_t=logits_t,
+            value_t=value_t,
             r_t=rewards,
         ),
     )
@@ -105,7 +106,7 @@ class TrivialEnvPolicy(Policy):
         key: jax.Array,
         *,
         temperature: float = 1.0,
-    ) -> tuple[tuple[()], jax.Array, jax.Array, jax.Array]:
+    ) -> tuple[tuple[()], jax.Array, jax.Array, jax.Array, jax.Array]:
         actions = jnp.zeros(obs.shape[0], dtype=jnp.int32)
         logits = jnp.stack(
             [
@@ -114,7 +115,7 @@ class TrivialEnvPolicy(Policy):
             ],
             axis=1,
         )
-        return (), actions, logits, key
+        return (), actions, logits, logits, key
 
     def get_logits_and_value(
         self,
@@ -122,7 +123,7 @@ class TrivialEnvPolicy(Policy):
         obs: jax.Array,
         episode_starts: jax.Array,
     ) -> tuple[tuple[()], jax.Array, jax.Array, dict[str, jax.Array]]:
-        carry, actions, logits, key = jax.vmap(self.get_action, in_axes=(None, 0, None, None))(
+        carry, actions, logits, _, key = jax.vmap(self.get_action, in_axes=(None, 0, None, None))(
             carry,
             obs,
             None,  # type: ignore
@@ -235,14 +236,14 @@ def test_loss_of_rollout(min_episode_steps: int, num_envs: int = 5, gamma: float
             carry_t=transition.carry_t,
             a_t=transition.a_t,
             logits_t=transition.logits_t,
+            value_t=transition.value_t,
             r_t=transition.r_t.at[transition.truncated_t].set(9999.9),
             episode_starts_t=transition.episode_starts_t,
             truncated_t=transition.truncated_t,
         )
-        (total_loss, metrics_dict) = impala_loss(
+        (total_loss, metrics_dict) = ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0).loss(
             params=params,
             get_logits_and_value=get_logits_and_value_fn,
-            args=ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0),
             minibatch=transition,
         )
         logit_negentropy = -jnp.mean(distrax.Categorical(transition.logits_t).entropy() * (~transition.truncated_t))

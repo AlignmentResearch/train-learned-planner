@@ -2,7 +2,7 @@
 import tempfile
 from functools import partial
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Optional
 
 import gymnasium as gym
 import matplotlib.pyplot as plt
@@ -25,10 +25,14 @@ from cleanba.network import GuezResNetConfig
 
 # %%
 class DataFrameWriter(WandbWriter):
+    metrics: pd.DataFrame
+
     def __init__(self, cfg: Args, save_dir: Path):
         self.metrics = pd.DataFrame()
         self.states = {}
         self._save_dir = save_dir
+        self.named_save_dir = save_dir
+        (save_dir / "local-files").mkdir(exist_ok=True)
 
     def add_scalar(self, name: str, value: int | float, global_step: int):
         try:
@@ -197,7 +201,7 @@ def train_cartpole_no_vel(policy="resnet", env="cartpole", seed=None):
         num_actor_threads=1,
         num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
-        queue_timeout=60,
+        queue_timeout=20,
         train_epochs=1,
         num_steps=32,
         learning_rate=0.001,
@@ -264,7 +268,7 @@ def test_cartpole_convlstm():
 
 
 if __name__ == "__main__":
-    writer = train_cartpole_no_vel("lstm", "cartpole_no_vel")
+    writer, _ = train_cartpole_no_vel("lstm", "cartpole_no_vel")
     # writer = train_cartpole_no_vel("resnet", "cartpole")
 
 # %% Plot learning curves
@@ -293,6 +297,9 @@ def perc_plot(ax, x, y, percentiles=[0.5, 0.75, 0.9, 0.95, 0.99, 1.00], outliers
             color="C1",
         )
 
+
+if TYPE_CHECKING:
+    writer, _ = train_cartpole_no_vel("lstm", "cartpole_no_vel")
 
 if __name__ == "__main__":
     # Create a figure and axes

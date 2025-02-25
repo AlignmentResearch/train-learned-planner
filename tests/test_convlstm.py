@@ -195,14 +195,16 @@ def test_policy_scan_correct(net: ConvLSTMConfig):
     inputs_nchw = jax.random.uniform(k1, (time_steps, num_envs, 3, *dim_room), maxval=255)
     episode_starts = jax.random.uniform(k2, (time_steps, num_envs)) < 0.4
 
-    scan_carry, scan_logits, _, _ = b_policy.get_logits_and_value(carry, inputs_nchw, episode_starts)
+    scan_carry, scan_logits, scan_values, _ = b_policy.get_logits_and_value(carry, inputs_nchw, episode_starts)
 
     logits: list[Any] = [None] * time_steps
+    values: list[Any] = [None] * time_steps
     for t in range(time_steps):
-        carry, _, logits[t], key = b_policy.get_action(carry, inputs_nchw[t], episode_starts[t], key)
+        carry, _, logits[t], values[t], key = b_policy.get_action(carry, inputs_nchw[t], episode_starts[t], key)
 
     assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-5), carry, scan_carry))
     assert jnp.allclose(scan_logits, jnp.stack(logits), atol=1e-5)
+    assert jnp.allclose(scan_values, jnp.stack(values).squeeze(-1), atol=1e-5)
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)
@@ -215,12 +217,13 @@ def test_convlstm_forward(net: ConvLSTMConfig):
     obs = envs.observation_space.sample()
 
     assert obs is not None
-    out_carry, actions, logits, _key = jax.jit(partial(policy.apply, method=policy.get_action))(
+    out_carry, actions, logits, values, _key = jax.jit(partial(policy.apply, method=policy.get_action))(
         params, carry, obs, jnp.zeros(envs.num_envs, dtype=jnp.bool_), k2
     )
     assert jax.tree.all(jax.tree.map(lambda x, y: x.shape == y.shape, carry, out_carry)), "Carries don't have the same shape"
     assert actions.shape == (envs.num_envs,)
     assert logits.shape == (envs.num_envs, n_actions_from_envs(envs))
+    assert values.shape == (envs.num_envs,)
     assert _key.shape == k2.shape
 
     timesteps = 4

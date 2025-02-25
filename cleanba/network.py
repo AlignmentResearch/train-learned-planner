@@ -152,7 +152,7 @@ class Policy(nn.Module):
             key, subkey = jax.random.split(key)
             u = jax.random.uniform(subkey, shape=logits.shape)
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return carry, action, logits, value, key
+        return carry, action, logits, value.squeeze(-1), key
 
     def get_logits_and_value(
         self,
