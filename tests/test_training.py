@@ -144,7 +144,7 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         num_steps=2,
         num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
-        queue_timeout=4,
+        queue_timeout=10,
     )
 
     args.total_timesteps = args.num_steps * args.num_actor_threads * args.local_num_envs * eval_frequency
@@ -178,6 +178,7 @@ def test_concat_and_shard_rollout_internal():
     time = 4
 
     obs_t, _ = envs.reset()
+    value_t = jnp.zeros((obs_t.shape[0]))
     episode_starts_t = np.ones((envs.num_envs,), dtype=np.bool_)
     carry_t = [LSTMCellState(obs_t, obs_t)]
 
@@ -186,17 +187,18 @@ def test_concat_and_shard_rollout_internal():
         a_t = envs.action_space.sample()
         logits_t = jnp.zeros((*a_t.shape, 2), dtype=jnp.float32)
         obs_tplus1, r_t, term_t, trunc_t, _ = envs.step(a_t)
-        storage.append(Rollout(obs_t, carry_t, a_t, logits_t, r_t, episode_starts_t, trunc_t))
+        storage.append(Rollout(obs_t, carry_t, a_t, logits_t, value_t, r_t, episode_starts_t, trunc_t))
 
         obs_t = obs_tplus1
         episode_starts_t = term_t | trunc_t
 
-    out = _concat_and_shard_rollout_internal(storage, obs_t, episode_starts_t, len_learner_devices)
+    out = _concat_and_shard_rollout_internal(storage, obs_t, episode_starts_t, value_t, len_learner_devices)
     assert isinstance(out, Rollout)
 
     assert out.obs_t[0].shape == (time + 1, batch // len_learner_devices, *storage[0].obs_t.shape[1:])
     assert out.a_t[0].shape == (time, batch // len_learner_devices)
     assert out.logits_t[0].shape == (time, batch // len_learner_devices, storage[0].logits_t.shape[1])
+    assert out.value_t[0].shape == (time + 1, batch // len_learner_devices)
     assert out.r_t[0].shape == (time, batch // len_learner_devices)
     assert out.episode_starts_t[0].shape == (time + 1, batch // len_learner_devices)
     assert out.truncated_t[0].shape == (time, batch // len_learner_devices)

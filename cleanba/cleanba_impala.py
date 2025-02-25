@@ -278,7 +278,11 @@ def time_and_append(stats: list[float]):
 
 @partial(jax.jit, static_argnames=["len_learner_devices"])
 def _concat_and_shard_rollout_internal(
-    storage: List[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, len_learner_devices: int
+    storage: List[Rollout],
+    last_obs: jax.Array,
+    last_episode_starts: np.ndarray,
+    last_value: jax.Array,
+    len_learner_devices: int,
 ) -> Rollout:
     """
     Stack the Rollout steps over time, splitting them for every learner device.
@@ -306,7 +310,7 @@ def _concat_and_shard_rollout_internal(
         carry_t=jax.tree.map(lambda x: jnp.expand_dims(_split_over_batches(x), axis=1), storage[0].carry_t),
         a_t=jnp.stack([_split_over_batches(r.a_t) for r in storage], axis=1),
         logits_t=jnp.stack([_split_over_batches(r.logits_t) for r in storage], axis=1),
-        value_t=jnp.stack([_split_over_batches(r.value_t) for r in storage], axis=1),
+        value_t=jnp.stack([*(_split_over_batches(r.value_t) for r in storage), _split_over_batches(last_value)], axis=1),
         r_t=jnp.stack([_split_over_batches(r.r_t) for r in storage], axis=1),
         episode_starts_t=jnp.stack(
             [*(_split_over_batches(r.episode_starts_t) for r in storage), _split_over_batches(last_episode_starts)], axis=1
@@ -317,9 +321,15 @@ def _concat_and_shard_rollout_internal(
 
 
 def concat_and_shard_rollout(
-    storage: list[Rollout], last_obs: jax.Array, last_episode_starts: np.ndarray, learner_devices: list[jax.Device]
+    storage: list[Rollout],
+    last_obs: jax.Array,
+    last_episode_starts: np.ndarray,
+    last_value: jax.Array,
+    learner_devices: list[jax.Device],
 ) -> Rollout:
-    partitioned_storage = _concat_and_shard_rollout_internal(storage, last_obs, last_episode_starts, len(learner_devices))
+    partitioned_storage = _concat_and_shard_rollout_internal(
+        storage, last_obs, last_episode_starts, last_value, len(learner_devices)
+    )
     sharded_storage = jax.tree.map(lambda x: jax.device_put_sharded(list(x), devices=learner_devices), partitioned_storage)
     return sharded_storage
 
@@ -480,7 +490,8 @@ def rollout(
                         episode_count += len(done_indices)
 
             with time_and_append(log_stats.storage_time):
-                sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, learner_devices)
+                _, _, _, value_t, _ = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
+                sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, value_t, learner_devices)
                 storage.clear()
                 payload = (
                     global_step,
