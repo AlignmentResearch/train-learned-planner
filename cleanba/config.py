@@ -6,7 +6,7 @@ from typing import List, Optional
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMConfig
 from cleanba.environments import AtariEnv, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, random_seed
 from cleanba.evaluate import EvalConfig
-from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig
+from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig
 from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, MLPConfig, PolicySpec, RMSNorm, SokobanResNetConfig
 
 
@@ -405,14 +405,12 @@ def craftax_mlp() -> Args:
         eval_envs={},
         log_frequency=1,
         net=MLPConfig(hiddens=(512, 512, 512), norm=IdentityNorm(), yang_init=False, activation="tanh", head_scale=0.01),
-        loss=ImpalaLossConfig(
-            vtrace_lambda=0.8,
+        loss=PPOLossConfig(
+            gae_lambda=0.8,
             gamma=0.99,
             ent_coef=0.01,
             vf_coef=0.25,
             normalize_advantage=True,
-            weight_l2_coef=0,
-            logit_l2_coef=0,
         ),
         actor_update_cutoff=0,
         sync_frequency=200,
