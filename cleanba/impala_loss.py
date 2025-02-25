@@ -45,6 +45,12 @@ class ActorCriticLossConfig(abc.ABC):
     ) -> tuple[jax.Array, dict[str, jax.Array]]:
         ...
 
+    def maybe_normalize_advantage(self, adv_t: jax.Array) -> jax.Array:
+        def _norm_advantage():
+            return (adv_t - jnp.mean(adv_t)) / (jnp.std(adv_t, ddof=1) + 1e-8)
+
+        return jax.lax.cond(self.normalize_advantage, _norm_advantage, lambda: adv_t)
+
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig(ActorCriticLossConfig):
@@ -180,12 +186,8 @@ class ImpalaLossConfig(ActorCriticLossConfig):
 
         # Policy-gradient loss: stop_grad(advantage) * log_p(actions), with importance ratios. The importance ratios here
         # are implicit in `pg_advs`.
-        norm_advantage = (vtrace_returns.pg_advantage - jnp.mean(vtrace_returns.pg_advantage)) / (
-            jnp.std(vtrace_returns.pg_advantage, ddof=1) + 1e-8
-        )
-        pg_advs = jax.lax.stop_gradient(  # Just in case
-            adv_multiplier * jax.lax.select(self.normalize_advantage, norm_advantage, vtrace_returns.pg_advantage)
-        )
+        norm_advantage = self.maybe_normalize_advantage(vtrace_returns.pg_advantage)
+        pg_advs = jax.lax.stop_gradient(adv_multiplier * norm_advantage)
         pg_loss = jnp.mean(jax.vmap(rlax.policy_gradient_loss, in_axes=1)(nn_logits_t, minibatch.a_t, pg_advs, mask_t))
 
         # Value loss: MSE/Huber loss of VTrace-estimated errors
@@ -242,40 +244,34 @@ class PPOLossConfig(ActorCriticLossConfig):
         nn_logits_t = nn_logits_from_obs[:-1]
         # We keep the name error (t vs tm1) from the `rlax` library for consistence.
         nn_value_tm1 = nn_value_from_obs[:-1]
+        minibatch_value_tm1 = jax.lax.stop_gradient(minibatch.value_t[:-1])
 
         # Ignore truncated steps using the same technique as before
         mask_t = jnp.float32(~minibatch.truncated_t)
         # This r_t cancels out exactly at truncated steps in the GAE calculation
-        r_t = jnp.where(minibatch.truncated_t, jax.lax.stop_gradient(nn_value_tm1), minibatch.r_t)
-        del nn_value_tm1
+        r_t = jnp.where(minibatch.truncated_t, jax.lax.stop_gradient(nn_value_from_obs[:-1]), minibatch.r_t)
 
-        advantage_t = jax.vmap(rlax.truncated_generalized_advantage_estimation, in_axes=(0, 0, None, 0, None))(
-            r_t=r_t, discount_t=discount_t, lambda_=self.gae_lambda, values=nn_value_from_obs, stop_target_gradients=True
+        # Compute advantage and clipped value loss
+        gae = jax.vmap(rlax.truncated_generalized_advantage_estimation, in_axes=(1, 1, None, 1, None), out_axes=1)(
+            r_t, discount_t, self.gae_lambda, nn_value_from_obs, True
         )
-        value_targets = advantage_t + minibatch.value_t
+        value_targets = gae + minibatch_value_tm1
 
-        value_pred_clipped = minibatch.value_t + jnp.clip(
-            nn_value_from_obs - minibatch.value_t, -self.vf_clip_eps, self.vf_clip_eps
-        )
-        value_errors = nn_value_from_obs - minibatch.value_t
+        value_errors = nn_value_tm1 - minibatch_value_tm1
         value_losses = jnp.square(value_errors)
-        value_losses_clipped = jnp.square(value_pred_clipped - minibatch.value_t)
-        v_loss = jnp.maximum(value_losses, value_losses_clipped).mean()
+        value_losses_clipped = jnp.square(jnp.clip(value_errors, -self.vf_clip_eps, self.vf_clip_eps))
+        v_loss = jnp.mean(jnp.maximum(value_losses, value_losses_clipped) * mask_t)
 
         rhos_t = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
-        norm_advantage_t = (advantage_t - jnp.mean(advantage_t)) / (jnp.std(advantage_t, ddof=1) + 1e-8)
-        advantage_t = jax.lax.stop_gradient(jax.lax.select(self.normalize_advantage, norm_advantage_t, advantage_t))
-        loss_actor1 = rhos_t * advantage_t
-        loss_actor2 = (
-            jnp.clip(
-                rhos_t,
-                1.0 - self.clip_eps,
-                1.0 + self.clip_eps,
-            )
-            * advantage_t
-        )
-        pg_loss = -jnp.mean(jnp.minimum(loss_actor1, loss_actor2) * mask_t)
+        adv_t = self.maybe_normalize_advantage(gae)
+
+        clip_rhos_t = jnp.clip(rhos_t, 1.0 - self.clip_eps, 1.0 + self.clip_eps)
+        policy_gradient = jnp.fmin(rhos_t * adv_t, clip_rhos_t * adv_t)
+        pg_loss = -jnp.mean(policy_gradient * mask_t)
+
+        # Entropy loss: negative average entropy of the policy across timesteps and environments
         ent_loss = jnp.mean(jax.vmap(rlax.entropy_loss, in_axes=1)(nn_logits_t, mask_t))
+
         total_loss = pg_loss
         total_loss += self.vf_coef * v_loss
         total_loss += self.ent_coef * ent_loss

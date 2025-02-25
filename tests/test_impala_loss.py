@@ -14,7 +14,7 @@ import rlax
 
 import cleanba.cleanba_impala as cleanba_impala
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.impala_loss import ImpalaLossConfig, Rollout
+from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig, Rollout
 from cleanba.network import Policy, PolicySpec
 
 
@@ -49,9 +49,38 @@ def test_vtrace_alignment(gamma: float, num_timesteps: int, last_value: float):
 
 
 @pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
+@pytest.mark.parametrize("gae_lambda", [0.0, 0.8, 1.0])
+@pytest.mark.parametrize("num_timesteps", [20, 2, 1])
+@pytest.mark.parametrize("last_value", [0.0, 1.0])
+def test_gae_alignment(gamma: float, gae_lambda: float, num_timesteps: int, last_value: float):
+    np_rng = np.random.default_rng(1234)
+
+    rewards = np_rng.uniform(0.1, 2.0, size=num_timesteps)
+    correct_returns = np.zeros(len(rewards) + 1)
+
+    # Discount is gamma everywhere, except once in the middle of the episode
+    discount = np.ones_like(rewards) * gamma
+    if num_timesteps > 2:
+        discount[num_timesteps // 2] = last_value
+
+    # There are no more returns after the last step
+    correct_returns[-1] = 0.0
+    # Bellman equation to compute the correct returns
+    for i in range(len(rewards) - 1, -1, -1):
+        correct_returns[i] = rewards[i] + discount[i] * correct_returns[i + 1]
+
+    gae = rlax.truncated_generalized_advantage_estimation(rewards, discount, gae_lambda, correct_returns)
+
+    assert np.allclose(gae, np.zeros(num_timesteps))
+
+
+@pytest.mark.parametrize("cls", [ImpalaLossConfig, PPOLossConfig])
+@pytest.mark.parametrize("gamma", [0.0, 0.9, 1.0])
 @pytest.mark.parametrize("num_timesteps", [20, 2])  # Note: with 1 timesteps we get zero-length arrays
 @pytest.mark.parametrize("last_value", [0.0, 1.0])
-def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5):
+def test_impala_loss_zero_when_accurate(
+    cls: type[ActorCriticLossConfig], gamma: float, num_timesteps: int, last_value: float, batch_size: int = 5
+):
     np_rng = np.random.default_rng(1234)
     rewards = np_rng.uniform(0.1, 2.0, size=(num_timesteps, batch_size))
     correct_returns = np.zeros((num_timesteps + 1, batch_size))
@@ -69,9 +98,8 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
 
     obs_t = correct_returns  #  Mimic how actual rollouts collect observations
     logits_t = jnp.zeros((num_timesteps, batch_size, 1))
-    value_t = jnp.zeros((num_timesteps + 1, batch_size))
     a_t = jnp.zeros((num_timesteps, batch_size), dtype=jnp.int32)
-    (total_loss, metrics_dict) = ImpalaLossConfig(gamma=gamma).loss(
+    (total_loss, metrics_dict) = cls(gamma=gamma).loss(
         params={},
         get_logits_and_value=lambda params, carry, obs, episode_starts: (
             carry,
@@ -86,7 +114,7 @@ def test_impala_loss_zero_when_accurate(gamma: float, num_timesteps: int, last_v
             truncated_t=np.zeros_like(done_tm1),
             a_t=a_t,
             logits_t=logits_t,
-            value_t=value_t,
+            value_t=jnp.array(obs_t),
             r_t=rewards,
         ),
     )
@@ -115,7 +143,8 @@ class TrivialEnvPolicy(Policy):
             ],
             axis=1,
         )
-        return (), actions, logits, logits, key
+        value = MockSokobanEnv.compute_return(obs)
+        return (), actions, logits, value, key
 
     def get_logits_and_value(
         self,
@@ -144,8 +173,11 @@ class ZeroActionNetworkSpec(PolicySpec):
         return policy, (), {}
 
 
+@pytest.mark.parametrize("cls", [ImpalaLossConfig, PPOLossConfig])
 @pytest.mark.parametrize("min_episode_steps", (10, 7))
-def test_loss_of_rollout(min_episode_steps: int, num_envs: int = 5, gamma: float = 1.0, num_timesteps: int = 30):
+def test_loss_of_rollout(
+    cls: type[ActorCriticLossConfig], min_episode_steps: int, num_envs: int = 5, gamma: float = 1.0, num_timesteps: int = 30
+):
     np.random.seed(1234)
 
     args = cleanba_impala.Args(
@@ -241,7 +273,7 @@ def test_loss_of_rollout(min_episode_steps: int, num_envs: int = 5, gamma: float
             episode_starts_t=transition.episode_starts_t,
             truncated_t=transition.truncated_t,
         )
-        (total_loss, metrics_dict) = ImpalaLossConfig(gamma=gamma, logit_l2_coef=0.0).loss(
+        (total_loss, metrics_dict) = cls(gamma=gamma).loss(
             params=params,
             get_logits_and_value=get_logits_and_value_fn,
             minibatch=transition,

@@ -428,7 +428,7 @@ def rollout(
                     with time_and_append(log_stats.inference_time):
                         carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
                             params, carry_t, obs_t, episode_starts_t, key
-                        )
+                        )  # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
                         assert a_t.shape == (args.local_num_envs,)
 
                     if isinstance(envs, CraftaxVectorEnv):
@@ -490,7 +490,9 @@ def rollout(
                         episode_count += len(done_indices)
 
             with time_and_append(log_stats.storage_time):
-                _, _, _, value_t, _ = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
+                _, _, _, value_t, _ = get_action_fn(
+                    params, carry_t, obs_t, episode_starts_t, key
+                )  # TODO: eliminate this extra call
                 sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, value_t, learner_devices)
                 storage.clear()
                 payload = (
