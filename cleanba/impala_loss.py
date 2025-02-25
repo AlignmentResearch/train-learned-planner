@@ -253,14 +253,16 @@ class PPOLossConfig(ActorCriticLossConfig):
 
         # Compute advantage and clipped value loss
         gae = jax.vmap(rlax.truncated_generalized_advantage_estimation, in_axes=(1, 1, None, 1, None), out_axes=1)(
-            r_t, discount_t, self.gae_lambda, nn_value_from_obs, True
+            r_t, discount_t, self.gae_lambda, minibatch_value_tm1, True
         )
         value_targets = gae + minibatch_value_tm1
 
-        value_errors = nn_value_tm1 - minibatch_value_tm1
-        value_losses = jnp.square(value_errors)
-        value_losses_clipped = jnp.square(jnp.clip(value_errors, -self.vf_clip_eps, self.vf_clip_eps))
-        v_loss = jnp.mean(jnp.maximum(value_losses, value_losses_clipped) * mask_t)
+        value_errors = nn_value_tm1 - value_targets
+        value_pred_clipped = minibatch_value_tm1 + jnp.clip(
+            nn_value_tm1 - minibatch_value_tm1, -self.vf_clip_eps, self.vf_clip_eps
+        )
+        value_clipped_errors = value_pred_clipped - value_targets
+        v_loss = jnp.mean(jnp.maximum(jnp.square(value_errors), jnp.square(value_clipped_errors)) * mask_t)
 
         rhos_t = rlax.categorical_importance_sampling_ratios(nn_logits_t, minibatch.logits_t, minibatch.a_t)
         adv_t = self.maybe_normalize_advantage(gae)
