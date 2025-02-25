@@ -233,7 +233,7 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
 
     assert envs.action_space.shape is not None
     # actions = np.zeros(action_shape, dtype=np.int64)
-    carry, actions, _, key = policy.apply(agent_params, carry, next_obs, episode_starts_no, key, method=policy.get_action)
+    carry, actions, _, _, key = policy.apply(agent_params, carry, next_obs, episode_starts_no, key, method=policy.get_action)
     actions = np.asarray(actions)
     envs.step_async(actions)
     next_obs, next_reward, terminated, truncated, info = envs.step_wait()

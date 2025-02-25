@@ -34,15 +34,16 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     env_params: "EnvParams"
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
-        obs_shape = (8268,) if self.cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
-        single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
-        single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        super().__init__(cfg.num_envs, single_observation_space, single_action_space)
-
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
         self.cfg = cfg
         self.env = CraftaxSymbolicEnv()
+
+        obs_shape = (8268,) if cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
+        single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
+        single_action_space = gym.spaces.Discrete(self.env.action_space().n)
+        super().__init__(cfg.num_envs, single_observation_space, single_action_space)
+
         self.env_params = self.env.default_params
         self.closed = False
 

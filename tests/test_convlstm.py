@@ -204,7 +204,7 @@ def test_policy_scan_correct(net: ConvLSTMConfig):
 
     assert jax.tree.all(jax.tree.map(partial(jnp.allclose, atol=1e-5), carry, scan_carry))
     assert jnp.allclose(scan_logits, jnp.stack(logits), atol=1e-5)
-    assert jnp.allclose(scan_values, jnp.stack(values).squeeze(-1), atol=1e-5)
+    assert jnp.allclose(scan_values, jnp.stack(values), atol=1e-5)
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)

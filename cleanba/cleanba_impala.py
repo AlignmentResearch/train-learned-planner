@@ -420,7 +420,6 @@ def rollout(
                             params, carry_t, obs_t, episode_starts_t, key
                         )
                         assert a_t.shape == (args.local_num_envs,)
-                        assert logits_t.shape == (args.local_num_envs, 43)
 
                     if isinstance(envs, CraftaxVectorEnv):
                         cpu_action = a_t  # Do not move to CPU forcibly if the environment is also Jax
@@ -545,22 +544,6 @@ def rollout(
             writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
 
             writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
-
-            reward_min = float(np.min(episode_returns))
-            reward_max = float(np.max(episode_returns))
-            reward_mean = float(np.mean(episode_returns))
-            reward_std = float(np.std(episode_returns))
-            writer.add_scalar("metrics/reward_min", reward_min, global_step)
-            writer.add_scalar("metrics/reward_max", reward_max, global_step)
-            writer.add_scalar("metrics/reward_mean", reward_mean, global_step)
-            writer.add_scalar("metrics/reward_std", reward_std, global_step)
-            writer.add_scalar("metrics/done_count", done_count, global_step)
-
-            logits_np = np.array(logits_t)
-            probs = jax.nn.softmax(logits_np, axis=-1)
-            entropy = -np.sum(probs * np.log(probs + 1e-8), axis=-1)
-            mean_entropy = float(np.mean(entropy))
-            writer.add_scalar("metrics/policy_entropy", mean_entropy, global_step)
 
             if episode_count > 0:
                 for ach, count in achievement_counts.items():
