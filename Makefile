@@ -34,7 +34,7 @@ requirements.txt.new: pyproject.toml
 	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:jax-${JAX_DATE}" \
     bash -c "pip install uv \
 		&& cd /workspace \
-		&& uv pip compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
+		&& uv pip compile --verbose -o requirements.txt.new --extra=py-tools pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
@@ -93,18 +93,18 @@ cuda-devbox/%: devbox/%
 cuda-devbox: cuda-devbox/main
 
 .PHONY: envpool-devbox
-envpool-devbox: devbox/envpool-ci
+envpool-devbox: devbox/envpool
 
 
 .PHONY: docker docker/%
 docker/%:
-	docker run -v "$(shell pwd):/workspace" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
+	docker run -v "${HOME}/.cache:/home/ubuntu/.cache" -v "$(shell pwd):/workspace" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
 docker: docker/main
 
 .PHONY: envpool-docker envpool-docker/%
 envpool-docker/%:
-	docker run -v "$(shell pwd)/third_party/envpool:/app" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
-envpool-docker: envpool-docker/envpool-ci
+	docker run -v "${HOME}/.cache:/home/ubuntu/.cache" -v "$(shell pwd)/third_party/envpool:/app" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
+envpool-docker: envpool-docker/envpool
 
 # Section 3: project commands
 

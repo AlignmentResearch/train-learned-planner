@@ -31,6 +31,7 @@ COPY --chown=ubuntu:ubuntu \
     third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
     third_party/pip_requirements/requirements-devtools.txt
 RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 pip install -r third_party/pip_requirements/requirements-devtools.txt
+ENV PATH="${HOME}/.local/bin:${PATH}"
 
 # Deal with the fact that envpool is a submodule and has no .git directory
 RUN rm .git

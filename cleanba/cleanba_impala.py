@@ -33,7 +33,7 @@ from typing_extensions import Self
 
 from cleanba.config import Args
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import convert_to_cleanba_config, random_seed
+from cleanba.environments import EpisodeEvalWrapper, convert_to_cleanba_config, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -343,11 +343,13 @@ def rollout(
 ):
     actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
 
-    envs = dataclasses.replace(
-        args.train_env,
-        seed=args.train_env.seed + actor_id,
-        num_envs=args.local_num_envs,
-    ).make()
+    envs = EpisodeEvalWrapper(
+        dataclasses.replace(
+            args.train_env,
+            seed=args.train_env.seed + actor_id,
+            num_envs=args.local_num_envs,
+        ).make()
+    )
 
     eval_envs: list[tuple[str, EvalConfig]] = list(args.eval_envs.items())
     # Spread various eval envs among the threads
@@ -362,15 +364,7 @@ def rollout(
     start_time = None
 
     log_stats = LoggingStats.new_empty()
-    # Counters for episode length and episode return
-    episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_returns = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_lengths = np.zeros((args.local_num_envs,), dtype=np.float32)
-    returned_episode_success = np.zeros((args.local_num_envs,), dtype=np.bool_)
-    achievement_counts = {}
-    episode_count = 0
-
+    info_t = {}
     actor_policy_version = 0
     storage = []
 
@@ -413,7 +407,6 @@ def rollout(
                     if (update - 1) % args.actor_update_frequency == 0:
                         params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
 
-            done_count = 0
             with time_and_append(log_stats.rollout_time, "rollout", global_step):
                 for _ in range(1, num_steps_with_bootstrap + 1):
                     global_step += (
@@ -449,32 +442,6 @@ def rollout(
                         obs_t = obs_tplus1
                         carry_t = carry_tplus1
                         episode_starts_t = done_t
-
-                        # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
-                        # the true return.
-                        non_clipped_reward = info_t.get("reward", r_t)
-
-                        episode_returns[:] += non_clipped_reward
-                        log_stats.episode_returns.extend(episode_returns[done_t])
-                        returned_episode_returns[done_t] = episode_returns[done_t]
-                        episode_returns[:] *= ~done_t
-
-                        episode_lengths[:] += 1
-                        log_stats.episode_lengths.extend(episode_lengths[done_t])
-                        returned_episode_lengths[done_t] = episode_lengths[done_t]
-                        episode_lengths[:] *= ~done_t
-
-                        log_stats.episode_success.extend(map(float, term_t[done_t]))
-                        returned_episode_success[done_t] = term_t[done_t]
-
-                        done_count += np.sum(done_t).item()
-                        done_indices = np.where(done_t)[0]
-
-                        for ach, arr in info_t.items():
-                            if "achievements" in ach.lower():
-                                for idx in done_indices:
-                                    achievement_counts[ach] = achievement_counts.get(ach, 0) + arr[idx]
-                        episode_count += len(done_indices)
 
             with time_and_append(log_stats.storage_time, "storage", global_step):
                 _, _, _, value_t, _ = get_action_fn(
@@ -518,51 +485,27 @@ def rollout(
                 start_time = time.time()
             else:
                 steps_per_second = global_step / (time.time() - start_time)
+
+            charts_dict = jax.tree.map(jnp.mean, {k: v for k, v in info_t.items() if k.startswith("returned")})
             print(
-                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={stats_dict['avg_episode_returns']:.2f}, avg_episode_length={stats_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
+                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={charts_dict['avg_episode_returns']:.2f}, avg_episode_length={charts_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
 
+            # Perf: Time performance metrics
+            writer.add_scalar(
+                f"Perf/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
+            )
+            writer.add_scalar(
+                f"Perf/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
+            )
+            writer.add_scalar(f"Perf/{device_thread_id}/SPS", steps_per_second, global_step)
             for k, v in stats_dict.items():
-                if k.endswith("_time"):
-                    writer.add_scalar(f"stats/{device_thread_id}/{k}", v, global_step)
-                else:
-                    writer.add_scalar(f"charts/{device_thread_id}/{k}", v, global_step)
-            writer.add_scalar("episode_return", stats_dict["avg_episode_returns"], global_step)
-            writer.add_scalar("episode_length", stats_dict["avg_episode_lengths"], global_step)
+                writer.add_scalar(f"Perf/{device_thread_id}/{k}", v, global_step)
 
-            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_length", np.mean(episode_lengths), global_step)
-            writer.add_scalar(f"charts/{device_thread_id}/instant_avg_episode_return", np.mean(episode_returns), global_step)
-            writer.add_scalar(
-                f"charts/{device_thread_id}/returned_avg_episode_length", np.mean(returned_episode_lengths), global_step
-            )
-            writer.add_scalar(
-                f"charts/{device_thread_id}/returned_avg_episode_return", np.mean(returned_episode_returns), global_step
-            )
-            writer.add_scalar(
-                f"charts/{device_thread_id}/returned_avg_episode_success", np.mean(returned_episode_success), global_step
-            )
-
-            writer.add_scalar(
-                f"stats/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
-            )
-            writer.add_scalar(
-                f"stats/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
-            )
-            writer.add_scalar(f"charts/{device_thread_id}/SPS", steps_per_second, global_step)
-
-            writer.add_scalar(f"policy_versions/actor_{device_thread_id}", actor_policy_version, global_step)
-
-            if episode_count > 0:
-                for ach, count in achievement_counts.items():
-                    fraction = count / episode_count
-                    writer.add_scalar(f"achievements/{device_thread_id}/{ach}", fraction, global_step)
-
-                episode_count = 0
-                achievement_counts = {}
-
-        # Reset the achievement counters for the next interval
-        achievement_counts = {}
-        episode_count = 0
+            # Charts: RL performance-related metrics
+            for k, v in charts_dict.items():
+                writer.add_scalar(f"Charts/{device_thread_id}/{k}", v, global_step)
+            writer.add_scalar(f"policy_versions/{device_thread_id}/actor", actor_policy_version, global_step)
 
         if update in args.eval_at_steps:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
@@ -808,7 +751,7 @@ def train(
                     ),
                 ).start()
 
-        rollout_queue_get_time = deque(maxlen=10)
+        rollout_queue_get_time = deque(maxlen=20)
         agent_state = jax.device_put_replicated(agent_state, devices=runtime_info.global_learner_devices)
 
         actor_policy_version = 0
@@ -827,20 +770,16 @@ def train(
                         actor_policy_version,
                         update,
                         sharded_storage,
-                        avg_params_queue_get_time,
                         device_thread_id,
                     ) = rollout_queues[d_idx * args.num_actor_threads + thread_id].get(timeout=args.queue_timeout)
                     sharded_storages.append(sharded_storage)
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
-            for _ in range(args.train_epochs):
-                (
-                    agent_state,
-                    metrics_dict,
-                ) = multi_device_update(
-                    agent_state,
-                    sharded_storages,
-                )
+
+            (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
+            for _ in range(1, args.train_epochs):
+                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
+
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
                 for d_idx, d_id in enumerate(args.actor_device_ids):
@@ -864,18 +803,13 @@ def train(
             # record rewards for plotting purposes
             if args.learner_policy_version % args.log_frequency == 0:
                 writer.add_scalar(
-                    "stats/rollout_queue_get_time",
+                    "Perf/rollout_queue_get_time",
                     np.mean(rollout_queue_get_time),
                     global_step,
                 )
-                writer.add_scalar(
-                    "stats/rollout_params_queue_get_time_diff",
-                    np.mean(rollout_queue_get_time) - avg_params_queue_get_time,
-                    global_step,
-                )
-                writer.add_scalar("stats/training_time", time.time() - training_time_start, global_step)
-                writer.add_scalar("stats/rollout_queue_size", rollout_queues[-1].qsize(), global_step)
-                writer.add_scalar("stats/params_queue_size", params_queues[-1].qsize(), global_step)
+                writer.add_scalar("Perf/training_time", time.time() - training_time_start, global_step)
+                writer.add_scalar("Perf/rollout_queue_size", rollout_queues[-1].qsize(), global_step)
+                writer.add_scalar("Perf/params_queue_size", params_queues[-1].qsize(), global_step)
                 print(
                     global_step,
                     f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={args.learner_policy_version}, training time: {time.time() - training_time_start}s",
@@ -971,7 +905,7 @@ def load_train_state(
         pass  # must be already unreplicated
     if isinstance(args.net, ConvLSTMConfig):
         for i in range(args.net.n_recurrent):
-            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = np.sum(
+            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = jnp.sum(
                 train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
                 axis=2,
                 keepdims=True,

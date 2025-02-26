@@ -150,3 +150,5 @@ k8s_copy/
 Craftax_Baselines
 
 nsight-profile
+
+uv.lock
