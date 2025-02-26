@@ -48,7 +48,8 @@ spec:
             cpu: {CPU}
           limits:
             memory: "{MEMORY}"
-            nvidia.com/mig-2g.20gb: {GPU}
+            # nvidia.com/mig-2g.20gb: {GPU}
+            nvidia.com/gpu: {GPU}
         env:
         - name: OMP_NUM_THREADS
           value: "{CPU}"

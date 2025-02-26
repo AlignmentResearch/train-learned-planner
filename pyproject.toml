@@ -65,19 +65,17 @@ dependencies = [
     "matplotlib",
     "craftax",
     "jax==0.5.1",
+    "names_generator",
+    "GitPython",
+    "pytest",
 ]
 [project.optional-dependencies]
-dev = [
+py-tools = [
     "pre-commit",
     "pyright",
     "ruff",
-    "pytest",
 ]
 
-launch-jobs = [
-    "names_generator",
-    "GitPython",
-]
 
 [tool.setuptools]
 packages = ["cleanba"]

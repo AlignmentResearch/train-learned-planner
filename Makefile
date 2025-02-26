@@ -42,8 +42,8 @@ requirements.txt: requirements.txt.new
 
 .PHONY: local-install
 local-install: requirements.txt
-	pip install --no-deps -r requirements.txt
-	pip install --config-settings editable_mode=compat -e ".[dev-local]" -e ./third_party/gym-sokoban
+	uv pip install --no-deps -r requirements.txt
+	uv pip install -e ".[py-tools]" -e ./third_party/gym-sokoban
 	pip install https://github.com/AlignmentResearch/envpool/releases/download/v0.1.0/envpool-0.8.4-cp310-cp310-linux_x86_64.whl
 
 

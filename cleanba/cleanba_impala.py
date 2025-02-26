@@ -12,6 +12,7 @@ import threading
 import time
 import warnings
 from collections import deque
+from ctypes import cdll
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Hashable, Iterator, List, Mapping, Optional
@@ -32,7 +33,7 @@ from typing_extensions import Self
 
 from cleanba.config import Args
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import CraftaxVectorEnv, convert_to_cleanba_config, random_seed
+from cleanba.environments import convert_to_cleanba_config, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
@@ -43,17 +44,9 @@ from cleanba.impala_loss import (
 from cleanba.network import AgentParams, Policy, PolicyCarryT, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
 
-# Make Jax CPU use 1 thread only https://github.com/google/jax/issues/743
-# os.environ["XLA_FLAGS"] = (
-#     os.environ.get("XLA_FLAGS", "") + " --xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1"
-# )
-# Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
-# os.environ["TF_XLA_FLAGS"] = (
-#     os.environ.get("TF_XLA_FLAGS", "") + " --xla_gpu_autotune_level=2 --xla_gpu_deterministic_reductions"
-# )
-
-# Fix CUDNN non-determinism; https://github.com/google/jax/issues/4823#issuecomment-952835771
-# os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+libcudart = None
+if os.getenv("NSIGHT_ACTIVE", "0") == "1":
+    libcudart = cdll.LoadLibrary("libcudart.so")
 
 
 def unreplicate(tree):
@@ -382,8 +375,7 @@ def rollout(
     storage = []
 
     # Store the first observation
-    envs.reset_async()
-    obs_t, _ = envs.reset_wait()
+    obs_t, _ = envs.reset()
 
     # Initialize carry_t and episode_starts_t
     key, carry_key = jax.random.split(key)
@@ -392,11 +384,14 @@ def rollout(
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
+    global libcudart
     for update in range(initial_update, runtime_info.num_updates + 2):
         if MUST_STOP_PROGRAM:
             break
 
         param_frequency = args.actor_update_frequency if update <= args.actor_update_cutoff else 1
+        if libcudart is not None and update == 4:
+            libcudart.cudaProfilerStart()
 
         with time_and_append(log_stats.update_time, "update", global_step):
             with time_and_append(log_stats.params_queue_get_time, "params_queue_get", global_step):
@@ -432,17 +427,8 @@ def rollout(
                         )
                         assert a_t.shape == (args.local_num_envs,)
 
-                    if isinstance(envs, CraftaxVectorEnv):
-                        cpu_action = a_t  # Do not move to CPU forcibly if the environment is also Jax
-                    else:
-                        with time_and_append(log_stats.device2host_time, "device2host", global_step):
-                            cpu_action = np.array(a_t)
-
-                    with time_and_append(log_stats.env_send_time, "env_send", global_step):
-                        envs.step_async(cpu_action)
-
-                    with time_and_append(log_stats.env_recv_time, "env_recv", global_step):
-                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step_wait()
+                    with time_and_append(log_stats.env_recv_time, "step", global_step):
+                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step(a_t)
                         done_t = term_t | trunc_t
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
@@ -587,6 +573,8 @@ def rollout(
                     if k.endswith("_all_episode_info"):
                         continue
                     writer.add_scalar(f"{eval_name}/{k}", v, global_step)
+    if libcudart is not None:
+        libcudart.cudaProfilerStop()
 
 
 def linear_schedule(

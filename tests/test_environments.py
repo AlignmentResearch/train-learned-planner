@@ -116,16 +116,14 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
     assert envs.single_observation_space.shape == (3, *shape)
     assert envs.observation_space.shape == (NUM_ENVS, 3, *shape)
 
-    envs.reset_async()
-    next_obs, info = envs.reset_wait()
+    next_obs, info = envs.reset()
     assert next_obs.shape == (NUM_ENVS, 3, *shape), "jax.lax convs are NCHW but you sent NHWC"
 
     assert (action_shape := envs.action_space.shape) is not None
     for i in range(50):
         prev_obs = next_obs
         actions = np.zeros(action_shape, dtype=np.int64)
-        envs.step_async(actions)
-        next_obs, next_reward, terminated, truncated, info = envs.step_wait()
+        next_obs, next_reward, terminated, truncated, info = envs.step(actions)
 
         assert next_obs.shape == (NUM_ENVS, 3, *shape)
 
@@ -142,14 +140,12 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
 def test_craftax_environment_basics():
     cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False)
     envs = cfg.make()
-    envs.reset_async()
-    next_obs, info = envs.reset_wait()
+    next_obs, info = envs.reset()
 
     assert (action_shape := envs.action_space.shape) is not None
     for i in range(50):
         actions = np.zeros(action_shape, dtype=np.int64)
-        envs.step_async(actions)
-        envs.step_wait()
+        envs.step(actions)
 
 
 @pytest.mark.parametrize("gamma", [1.0, 0.9])
@@ -217,8 +213,7 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
     cfg.nn_without_noop = nn_without_noop
     envs = cfg.make()
 
-    envs.reset_async()
-    next_obs, info = envs.reset_wait()
+    next_obs, info = envs.reset()
     assert next_obs.shape == (cfg.num_envs, 3, 10, 10), "jax.lax convs are NCHW but you sent NHWC"
 
     args = sokoban_drc33_59()
@@ -234,8 +229,6 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
     assert envs.action_space.shape is not None
     # actions = np.zeros(action_shape, dtype=np.int64)
     carry, actions, _, _, key = policy.apply(agent_params, carry, next_obs, episode_starts_no, key, method=policy.get_action)
-    actions = np.asarray(actions)
-    envs.step_async(actions)
-    next_obs, next_reward, terminated, truncated, info = envs.step_wait()
+    next_obs, next_reward, terminated, truncated, info = envs.step(actions)
 
     assert next_obs.shape == (cfg.num_envs, 3, 10, 10)

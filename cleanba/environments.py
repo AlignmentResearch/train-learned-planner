@@ -47,9 +47,10 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.env_params = self.env.default_params
         self.closed = False
 
+        self.device, *_ = jax.devices(cfg.jit_backend)
+
         # set rng_keys, state, obs
-        self.reset_async(self.cfg.seed)
-        self.reset_wait()
+        self.reset(self.cfg.seed)
 
     def _process_obs(self, obs_flat):
         if self.cfg.obs_flat:
@@ -75,17 +76,15 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         obs_processed = self._process_obs(obs_flat)
         return obs_processed, state, key
 
-    def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> None:
+    def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
+        """Reset the environment."""
         if isinstance(seed, int):
             self.rng_keys = jax.random.split(jax.random.PRNGKey(seed), self.num_envs)
         elif isinstance(seed, list):
             assert len(seed) == self.num_envs
-            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey))(np.array(seed))
+            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey))(jnp.asarray(seed))
+        self.rng_keys = jax.device_put(self.rng_keys, self.device)
         self.obs, self.state, self.rng_keys = self._reset_wait_pure(self.rng_keys)
-
-    def reset_wait(
-        self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None
-    ) -> Tuple[jnp.ndarray, dict]:
         return self.obs, {}
 
     @partial(jax.jit, static_argnames=("self",))
@@ -100,13 +99,13 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         obs = self._process_obs(obs_flat)
         return key, obs, state, rewards, terminated, truncated, info
 
-    def step_async(self, actions: np.ndarray | jnp.ndarray) -> None:
-        self.rng_keys, self.obs, self.state, self._rewards, self._terminated, self._truncated, self._info = self._step_pure(
+    def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
+        """Execute one step in the environment."""
+        actions = jax.device_put(actions, self.device)
+        self.rng_keys, self.obs, self.state, rewards, terminated, truncated, info = self._step_pure(
             self.rng_keys, self.state, actions
         )
-
-    def step_wait(self, **kwargs) -> Tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict]:
-        return self.obs, self._rewards, self._terminated, self._truncated, self._info
+        return self.obs, rewards, terminated, truncated, info
 
     def close(self, **kwargs):
         self.closed = True
@@ -125,6 +124,7 @@ class EnvConfig(abc.ABC):
     @property
     @abc.abstractmethod
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        """Create a vector environment."""
         ...
 
 
@@ -174,20 +174,16 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
         super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
         self.envs = envs
 
-    def step_async(self, actions: np.ndarray):
+    def step(self, actions: np.ndarray) -> Tuple[Any, NDArray[Any], NDArray[Any], NDArray[Any], dict]:
+        """Execute one step in the environment."""
         self.envs.send(actions)
+        return self.envs.recv()
 
-    def step_wait(self, **kwargs) -> Tuple[Any, NDArray[Any], NDArray[Any], NDArray[Any], dict]:
-        return self.envs.recv(**kwargs)
-
-    def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
+    def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[Any, dict]:
+        """Reset the environment."""
         assert seed is None
         assert not options
         self.envs.async_reset()
-
-    def reset_wait(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
-        assert seed is None
-        assert not options
         return self.envs.recv(reset=True, return_info=self.envs.config["gym_reset_return_info"])
 
 
@@ -303,8 +299,9 @@ class BaseSokobanEnvConfig(EnvConfig):
 
 
 class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv, remove_last_action: bool = False):
+    def __init__(self, env: gym.vector.VectorEnv, nn_without_noop: bool = False, use_np_arrays: bool = False):
         super().__init__(env)
+        self.use_np_arrays = use_np_arrays
         obs_space = env.single_observation_space
         if isinstance(obs_space, gym.spaces.Box):
             shape = (obs_space.shape[2], *obs_space.shape[:2], *obs_space.shape[3:])
@@ -317,24 +314,28 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         self.num_envs = env.num_envs
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
 
-        if remove_last_action:
+        if nn_without_noop:
             assert isinstance(env.single_action_space, gym.spaces.Discrete)
             env.single_action_space = gym.spaces.Discrete(env.single_action_space.n - 1)
             env.action_space = batch_space(env.single_action_space, n=self.num_envs)
         self.single_action_space = env.single_action_space
         self.action_space = env.action_space
 
-    def reset_wait(self, **kwargs) -> tuple[Any, dict]:
-        obs, info = super().reset_wait(**kwargs)
-        return np.moveaxis(obs, 3, 1), info
+    def reset(self, **kwargs) -> tuple[Any, dict]:
+        obs, info = super().reset(**kwargs)
+        return jnp.moveaxis(obs, 3, 1), info
 
-    def step_wait(self) -> tuple[Any, NDArray, NDArray, NDArray, dict]:
-        obs, reward, terminated, truncated, info = super().step_wait()
-        return np.moveaxis(obs, 3, 1), reward, terminated, truncated, info
+    def step(self, actions: jnp.ndarray) -> tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
+        if self.use_np_arrays:
+            actions = np.asarray(actions)
+        obs, reward, terminated, truncated, info = super().step(actions)
+        return jnp.moveaxis(obs, 3, 1), reward, terminated, truncated, info
 
     @classmethod
-    def from_fn(cls, fn: Callable[[], gym.vector.VectorEnv], nn_without_noop) -> gym.vector.VectorEnv:
-        return cls(fn(), nn_without_noop)
+    def from_fn(
+        cls, fn: Callable[[], gym.vector.VectorEnv], nn_without_noop: bool, use_np_arrays: bool
+    ) -> gym.vector.VectorEnv:
+        return cls(fn(), nn_without_noop=nn_without_noop, use_np_arrays=use_np_arrays)
 
 
 @dataclasses.dataclass
@@ -362,6 +363,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
                 **self.env_reward_kwargs(),
             ),
             self.nn_without_noop,
+            use_np_arrays=True,
         )
         return make_fn
 
@@ -400,6 +402,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 **self.env_reward_kwargs(),
             ),
             self.nn_without_noop,
+            use_np_arrays=True,  # TODO: use the XLA interface for envpool and set this to false
         )
         return make_fn
 
