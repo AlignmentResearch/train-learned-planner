@@ -13,6 +13,8 @@ import jax
 import jax.experimental.compilation_cache
 import jax.numpy as jnp
 import numpy as np
+from gymnasium.envs.registration import VectorizeMode
+from gymnasium.vector import AutoresetMode
 from gymnasium.vector.utils import batch_space
 from numpy.typing import NDArray
 
@@ -40,12 +42,14 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.env = CraftaxSymbolicEnv()
 
         obs_shape = (8268,) if cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
-        single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
-        single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        super().__init__(cfg.num_envs, single_observation_space, single_action_space)
-
+        self.single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
+        self.single_action_space = gym.spaces.Discrete(self.env.action_space().n)
+        self.observation_space = batch_space(self.single_observation_space, n=cfg.num_envs)
+        self.action_space = batch_space(self.single_action_space, n=cfg.num_envs)
+        self.num_envs = cfg.num_envs
         self.env_params = self.env.default_params
-        self.closed = False
+
+        super().__init__()
 
         self.device, *_ = jax.devices(cfg.jit_backend)
 
@@ -282,8 +286,8 @@ class BaseSokobanEnvConfig(EnvConfig):
             # Passing `max_episode_steps` to Gymnasium makes it add a TimeLimitWrapper
             terminate_on_first_box=self.terminate_on_first_box,
             reset_seed=self.seed,
-            reset=self.reset,
-            asynchronous=self.asynchronous,
+            vector_kwargs=dict(autoreset_mode=AutoresetMode.SAME_STEP if self.reset else AutoresetMode.DISABLED),
+            vectorization_mode=VectorizeMode.ASYNC if self.asynchronous else VectorizeMode.SYNC,
             min_episode_steps=self.min_episode_steps,
             dim_room=self.dim_room,
         )
@@ -298,7 +302,7 @@ class BaseSokobanEnvConfig(EnvConfig):
         )
 
 
-class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
+class VectorNHWCtoNCHWWrapper(gym.vector.VectorWrapper):
     def __init__(self, env: gym.vector.VectorEnv, nn_without_noop: bool = False, use_np_arrays: bool = False):
         super().__init__(env)
         self.use_np_arrays = use_np_arrays
@@ -311,7 +315,6 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         else:
             raise NotImplementedError(f"{type(obs_space)=}")
 
-        self.num_envs = env.num_envs
         self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
 
         if nn_without_noop:
@@ -322,8 +325,14 @@ class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
         self.action_space = env.action_space
 
     def reset(self, **kwargs) -> tuple[Any, dict]:
+        if "options" not in kwargs:
+            kwargs["options"] = {}
         obs, info = super().reset(**kwargs)
         return jnp.moveaxis(obs, 3, 1), info
+
+    @property
+    def num_envs(self):
+        return self.env.num_envs
 
     def step(self, actions: jnp.ndarray) -> tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
         if self.use_np_arrays:
@@ -357,7 +366,7 @@ class SokobanConfig(BaseSokobanEnvConfig):
             partial(
                 # We use `gym.vector.make` even though it is deprecated because it gives us `gym.vector.SyncVectorEnv`
                 # instead of `gym.experimental.vector.SyncVectorEnv`.
-                gym.vector.make,
+                gym.make_vec,
                 "Sokoban-v2",
                 **kwargs,
                 **self.env_reward_kwargs(),
@@ -393,7 +402,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 # instead of `gym.experimental.vector.SyncVectorEnv`.
                 #
                 # This makes it so we can use the gym.vector.Wrapper above
-                gym.vector.make,
+                gym.make_vec,
                 "Boxoban-Val-v1",
                 cache_path=self.cache_path,
                 split=self.split,

@@ -1,10 +1,11 @@
 import dataclasses
 from functools import partial
-from typing import Any, Callable, Iterable, List, Optional, SupportsFloat, Union
+from typing import Any, Callable, SupportsFloat
 
 import gymnasium as gym
 import jax.numpy as jnp
 import numpy as np
+from gymnasium.vector.vector_env import AutoresetMode
 from numpy.typing import NDArray
 
 from cleanba.environments import EnvConfig
@@ -80,30 +81,29 @@ class MockSokobanEnv(gym.Env[NDArray, np.int64]):
         return jnp.copy(obs[..., 0, 0, 0])
 
 
-class SeededSyncVectorEnv(gym.vector.SyncVectorEnv):
-    """
-    Seed the environments only when `reset_async()` is called, not every time the environment is reset. This way,
-    the environment is not the same every time. This mimics the behavior of Envpool and makes sure it's not the same
-    environment repeating over and over.
-    """
+# class SeededSyncVectorEnv(gym.vector.SyncVectorEnv):
+#     """
+#     Seed the environments only when `reset_async()` is called, not every time the environment is reset. This way,
+#     the environment is not the same every time. This mimics the behavior of Envpool and makes sure it's not the same
+#     environment repeating over and over.
+#     """
 
-    def __init__(
-        self,
-        env_fns: Iterable[Callable[[], gym.Env]],
-        seed: int,
-        observation_space: gym.Space = None,  # type: ignore
-        action_space: gym.Space = None,  # type: ignore
-        copy: bool = True,
-    ):
-        env_fns = list(env_fns)
-        super().__init__(env_fns, observation_space, action_space, copy)
-        seeds = np.random.default_rng(seed).integers(2**30 - 1, size=(len(env_fns),))
-        self._seeds = list(seeds)
+#     def __init__(
+#         self,
+#         env_fns: Iterable[Callable[[], gym.Env]],
+#         copy: bool = True,
+#         observation_mode: str | Space = "same",
+#         autoreset_mode: str | AutoresetMode = AutoresetMode.NEXT_STEP,
+#     ):
+#         env_fns = list(env_fns)
+#         super().__init__(env_fns, observation_space, action_space, copy)
+#         seeds = np.random.default_rng(seed).integers(2**30 - 1, size=(len(env_fns),))
+#         self._seeds = list(seeds)
 
-    def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
-        if seed is None:
-            seed = self._seeds
-        return super().reset_async(seed, options)
+#     def reset_async(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None):
+#         if seed is None:
+#             seed = self._seeds
+#         return super().reset_async(seed, options)
 
 
 @dataclasses.dataclass
@@ -114,4 +114,4 @@ class MockSokobanEnvConfig(EnvConfig):
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
         env_fns = [partial(MockSokobanEnv, cfg=self)] * self.num_envs
-        return partial(SeededSyncVectorEnv, env_fns, seed=self.seed)
+        return partial(gym.vector.SyncVectorEnv, env_fns, autoreset_mode=AutoresetMode.SAME_STEP)

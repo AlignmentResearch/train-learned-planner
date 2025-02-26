@@ -56,7 +56,7 @@ dependencies = [
     "wandb",
     "tensorboardx",
     "chex",
-    "gymnasium<1",
+    "gymnasium>=1",
     "opencv-python",
     "moviepy",
     "rlax",
