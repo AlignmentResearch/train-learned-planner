@@ -14,8 +14,7 @@ AgentParams = dict[str, Any]
 
 class NormConfig(abc.ABC):
     @abc.abstractmethod
-    def __call__(self, x: jax.Array) -> jax.Array:
-        ...
+    def __call__(self, x: jax.Array) -> jax.Array: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -48,8 +47,7 @@ class PolicySpec(abc.ABC):
     head_scale: float = 1.0
 
     @abc.abstractmethod
-    def make(self) -> nn.Module:
-        ...
+    def make(self) -> nn.Module: ...
 
     def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> tuple["Policy", PolicyCarryT, Any]:
         policy = Policy(n_actions_from_envs(envs), self)

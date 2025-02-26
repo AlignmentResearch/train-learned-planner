@@ -139,9 +139,9 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         if self.cfg.obs_flat:
             return obs_flat
         expected_size = 8268
-        assert (
-            obs_flat.shape[0] == expected_size
-        ), f"Observation size mismatch: got {obs_flat.shape[0]}, expected {expected_size}"
+        assert obs_flat.shape[0] == expected_size, (
+            f"Observation size mismatch: got {obs_flat.shape[0]}, expected {expected_size}"
+        )
 
         mapobs = obs_flat[:8217].reshape(9, 11, 83)
         invobs = obs_flat[8217:].reshape(51)
@@ -259,7 +259,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
 
     def step(self, actions: np.ndarray) -> Tuple[Any, NDArray[Any], NDArray[Any], NDArray[Any], dict]:
         """Execute one step in the environment."""
-        self.envs.send(actions)
+        self.envs.send(np.array(actions))
         return self.envs.recv()
 
     def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[Any, dict]:

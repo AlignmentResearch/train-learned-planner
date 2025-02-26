@@ -184,13 +184,13 @@ class RuntimeInformation:
 def initialize_multi_device(args: Args) -> Iterator[RuntimeInformation]:
     local_batch_size = int(args.local_num_envs * args.num_steps * args.num_actor_threads * len(args.actor_device_ids))
     local_minibatch_size = int(local_batch_size // args.num_minibatches)
-    assert (
-        args.local_num_envs % len(args.learner_device_ids) == 0
-    ), "local_num_envs must be divisible by len(learner_device_ids)"
+    assert args.local_num_envs % len(args.learner_device_ids) == 0, (
+        "local_num_envs must be divisible by len(learner_device_ids)"
+    )
 
-    assert (
-        int(args.local_num_envs / len(args.learner_device_ids)) * args.num_actor_threads % args.num_minibatches == 0
-    ), "int(local_num_envs / len(learner_device_ids)) must be divisible by num_minibatches"
+    assert int(args.local_num_envs / len(args.learner_device_ids)) * args.num_actor_threads % args.num_minibatches == 0, (
+        "int(local_num_envs / len(learner_device_ids)) must be divisible by num_minibatches"
+    )
 
     distributed = args.distributed  # guard agiainst edits to `args`
     if args.distributed:
@@ -418,7 +418,6 @@ def rollout(
                         (update - 2) == param_frequency
                     ):
                         payload = params_queue.get(timeout=args.queue_timeout)
-                        params, actor_policy_version = payload.params, payload.policy_version
                         # NOTE: block here is important because otherwise this thread will call
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
@@ -426,7 +425,7 @@ def rollout(
                 else:
                     if (update - 1) % args.actor_update_frequency == 0:
                         payload = params_queue.get(timeout=args.queue_timeout)
-                        params, actor_policy_version = payload.params, payload.policy_version
+                params, actor_policy_version = payload.params, payload.policy_version
 
             with time_and_append(log_stats.rollout_time, "rollout", global_step):
                 for _ in range(1, num_steps_with_bootstrap + 1):
@@ -509,7 +508,7 @@ def rollout(
 
             charts_dict = jax.tree.map(jnp.mean, {k: v for k, v in info_t.items() if k.startswith("returned")})
             print(
-                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, avg_episode_returns={charts_dict['avg_episode_returns']:.2f}, avg_episode_length={charts_dict['avg_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
+                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, ep_returns={charts_dict['returned_episode_returns']:.2f}, ep_length={charts_dict['returned_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
 
             # Perf: Time performance metrics

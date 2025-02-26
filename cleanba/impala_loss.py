@@ -42,8 +42,7 @@ class ActorCriticLossConfig(abc.ABC):
         params: Any,
         get_logits_and_value: GetLogitsAndValueFn,
         minibatch: Rollout,
-    ) -> tuple[jax.Array, dict[str, jax.Array]]:
-        ...
+    ) -> tuple[jax.Array, dict[str, jax.Array]]: ...
 
     def maybe_normalize_advantage(self, adv_t: jax.Array) -> jax.Array:
         def _norm_advantage():

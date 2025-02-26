@@ -54,8 +54,7 @@ class BaseLSTMConfig(PolicySpec):
     use_relu: bool = False
 
     @abc.abstractmethod
-    def make(self) -> "BaseLSTM":
-        ...
+    def make(self) -> "BaseLSTM": ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -112,8 +111,7 @@ class BaseLSTM(nn.Module):
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
     @abc.abstractmethod
-    def _compress_input(self, x: jax.Array) -> jax.Array:
-        ...
+    def _compress_input(self, x: jax.Array) -> jax.Array: ...
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
@@ -124,9 +122,9 @@ class BaseLSTM(nn.Module):
         """
         Applies all cells in `self.cell_list` once. `Inputs` gets passed as the input to every cell
         """
-        assert (
-            len(inputs.shape) == 4 or len(inputs.shape) == 2
-        ), f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        assert len(inputs.shape) == 4 or len(inputs.shape) == 2, (
+            f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        )
         carry = list(carry)  # copy
 
         # Top-down skip connection from previous time step
@@ -152,9 +150,9 @@ class BaseLSTM(nn.Module):
         Applies all cells in `self.cell_list`, several times: `self.cfg.repeats_per_step` times. Preprocesses the carry
         so it gets zeroed at the start of an episode
         """
-        assert (
-            len(inputs.shape) == 4 or len(inputs.shape) == 2
-        ), f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        assert len(inputs.shape) == 4 or len(inputs.shape) == 2, (
+            f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        )
         assert len(episode_starts.shape) == 1
 
         not_reset = ~episode_starts
@@ -372,9 +370,9 @@ class LSTM(BaseLSTM):
         self.cell_list = [LSTMCell(features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)]
 
     def _compress_input(self, x: jax.Array) -> jax.Array:
-        assert (
-            len(x.shape) == 4 or len(x.shape) == 2
-        ), f"observations shape must be [batch, c, h, w] or [batch, c] but is {x.shape=}"
+        assert len(x.shape) == 4 or len(x.shape) == 2, (
+            f"observations shape must be [batch, c, h, w] or [batch, c] but is {x.shape=}"
+        )
         if len(x.shape) == 4:
             x = jnp.reshape(x, (x.shape[0], math.prod(x.shape[1:])))
 
