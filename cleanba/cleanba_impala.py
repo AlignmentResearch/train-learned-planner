@@ -15,7 +15,7 @@ from collections import deque
 from ctypes import cdll
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Hashable, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Hashable, Iterator, List, Mapping, NamedTuple, Optional
 
 import chex
 import databind.core.converter
@@ -43,6 +43,25 @@ from cleanba.impala_loss import (
 )
 from cleanba.network import AgentParams, Policy, PolicyCarryT, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
+
+
+class ParamsPayload(NamedTuple):
+    """Structured data for the params queue."""
+
+    params: Any  # device_params
+    policy_version: int  # learner_policy_version
+
+
+class RolloutPayload(NamedTuple):
+    """Structured data for the rollout queue."""
+
+    global_step: int
+    policy_version: int  # actor_policy_version
+    update: int
+    storage: Rollout  # sharded_storage
+    params_queue_get_time: float
+    device_thread_id: int
+
 
 libcudart = None
 if os.getenv("NSIGHT_ACTIVE", "0") == "1":
@@ -398,14 +417,16 @@ def rollout(
                     if ((update - 1) % param_frequency == 0 and (update - 1) != param_frequency) or (
                         (update - 2) == param_frequency
                     ):
-                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
+                        payload = params_queue.get(timeout=args.queue_timeout)
+                        params, actor_policy_version = payload.params, payload.policy_version
                         # NOTE: block here is important because otherwise this thread will call
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
                         # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
                 else:
                     if (update - 1) % args.actor_update_frequency == 0:
-                        params, actor_policy_version = params_queue.get(timeout=args.queue_timeout)
+                        payload = params_queue.get(timeout=args.queue_timeout)
+                        params, actor_policy_version = payload.params, payload.policy_version
 
             with time_and_append(log_stats.rollout_time, "rollout", global_step):
                 for _ in range(1, num_steps_with_bootstrap + 1):
@@ -449,13 +470,13 @@ def rollout(
                 )  # TODO: eliminate this extra call
                 sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, value_t, learner_devices)
                 storage.clear()
-                payload = (
-                    global_step,
-                    actor_policy_version,
-                    update,
-                    sharded_storage,
-                    np.mean(log_stats.params_queue_get_time),
-                    device_thread_id,
+                payload = RolloutPayload(
+                    global_step=global_step,
+                    policy_version=actor_policy_version,
+                    update=update,
+                    storage=sharded_storage,
+                    params_queue_get_time=np.mean(log_stats.params_queue_get_time),
+                    device_thread_id=device_thread_id,
                 )
             with time_and_append(log_stats.rollout_queue_put_time, "rollout_queue_put", global_step):
                 rollout_queue.put(payload, timeout=args.queue_timeout)
@@ -733,7 +754,7 @@ def train(
             for thread_id in range(args.num_actor_threads):
                 params_queues.append(queue.Queue(maxsize=1))
                 rollout_queues.append(queue.Queue(maxsize=1))
-                params_queues[-1].put((device_params, args.learner_policy_version))
+                params_queues[-1].put(ParamsPayload(params=device_params, policy_version=args.learner_policy_version))
                 threading.Thread(
                     target=rollout,
                     args=(
@@ -765,14 +786,11 @@ def train(
             sharded_storages = []
             for d_idx, d_id in enumerate(args.actor_device_ids):
                 for thread_id in range(args.num_actor_threads):
-                    (
-                        global_step,
-                        actor_policy_version,
-                        update,
-                        sharded_storage,
-                        device_thread_id,
-                    ) = rollout_queues[d_idx * args.num_actor_threads + thread_id].get(timeout=args.queue_timeout)
-                    sharded_storages.append(sharded_storage)
+                    payload = rollout_queues[d_idx * args.num_actor_threads + thread_id].get(timeout=args.queue_timeout)
+                    global_step = payload.global_step
+                    actor_policy_version = payload.policy_version
+                    update = payload.update
+                    sharded_storages.append(payload.storage)
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
 
@@ -786,7 +804,8 @@ def train(
                     device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
                     for thread_id in range(args.num_actor_threads):
                         params_queues[d_idx * args.num_actor_threads + thread_id].put(
-                            (device_params, args.learner_policy_version), timeout=args.queue_timeout
+                            ParamsPayload(params=device_params, policy_version=args.learner_policy_version),
+                            timeout=args.queue_timeout,
                         )
 
             # Copy the parameters from the first device to all other learner devices
