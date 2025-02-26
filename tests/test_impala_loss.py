@@ -13,6 +13,7 @@ import pytest
 import rlax
 
 import cleanba.cleanba_impala as cleanba_impala
+from cleanba.cleanba_impala import ParamsPayload
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
 from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig, Rollout
 from cleanba.network import Policy, PolicySpec
@@ -201,7 +202,7 @@ def test_loss_of_rollout(
 
     params_queue = queue.Queue(maxsize=5)
     for _ in range(5):
-        params_queue.put((params, 1))
+        params_queue.put(ParamsPayload(params=params, policy_version=1))
 
     rollout_queue = queue.Queue(maxsize=5)
     key = jax.random.PRNGKey(seed=1234)

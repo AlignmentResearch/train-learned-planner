@@ -422,10 +422,11 @@ def rollout(
                         # the jitted `get_action` function that hangs until the params are ready.
                         # This blocks the `get_action` function in other actor threads.
                         # See https://excalidraw.com/#json=hSooeQL707gE5SWY8wOSS,GeaN1eb2r24PPi75a3n14Q for a visual explanation.
+                        params, actor_policy_version = jax.block_until_ready(payload.params), payload.policy_version
                 else:
                     if (update - 1) % args.actor_update_frequency == 0:
                         payload = params_queue.get(timeout=args.queue_timeout)
-                params, actor_policy_version = payload.params, payload.policy_version
+                        params, actor_policy_version = payload.params, payload.policy_version
 
             with time_and_append(log_stats.rollout_time, "rollout", global_step):
                 for _ in range(1, num_steps_with_bootstrap + 1):
@@ -508,7 +509,7 @@ def rollout(
 
             charts_dict = jax.tree.map(jnp.mean, {k: v for k, v in info_t.items() if k.startswith("returned")})
             print(
-                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, ep_returns={charts_dict['returned_episode_returns']:.2f}, ep_length={charts_dict['returned_episode_lengths']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
+                f"{update=} {device_thread_id=}, SPS={steps_per_second:.2f}, {global_step=}, ep_returns={charts_dict['returned_episode_return']:.2f}, ep_length={charts_dict['returned_episode_length']:.2f}, avg_rollout_time={stats_dict['avg_rollout_time']:.5f}"
             )
 
             # Perf: Time performance metrics
