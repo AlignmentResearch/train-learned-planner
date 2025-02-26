@@ -278,7 +278,7 @@ class CraftaxEnvConfig(EnvConfig):
     num_envs: int = 1
     seed: int = dataclasses.field(default_factory=random_seed)
     obs_flat: bool = False
-    jit_backend: str = "cpu"
+    jit_backend: str = "cuda"
 
     @property
     def make(self) -> Callable[[], CraftaxVectorEnv]:  # type: ignore

@@ -436,6 +436,8 @@ def rollout(
 
                     with time_and_append(log_stats.inference_time, "inference", global_step):
                         # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
+                        params_device = next(iter(jax.tree.leaves(params))).device
+                        obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=params_device)
                         carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
                             params, carry_t, obs_t, episode_starts_t, key
                         )
@@ -465,6 +467,8 @@ def rollout(
                         episode_starts_t = done_t
 
             with time_and_append(log_stats.storage_time, "storage", global_step):
+                params_device = next(iter(jax.tree.leaves(params))).device
+                obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=params_device)
                 _, _, _, value_t, _ = get_action_fn(
                     params, carry_t, obs_t, episode_starts_t, key
                 )  # TODO: eliminate this extra call
