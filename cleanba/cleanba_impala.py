@@ -522,11 +522,11 @@ def rollout(
                 }
             )
             for k, v in stats_dict.items():
-                metrics[f"Perf/{device_thread_id}/{k}"] = v
+                metrics[f"Perf/{device_thread_id}/{k}"] = v.item()
 
             # Charts: RL performance-related metrics
             for k, v in charts_dict.items():
-                metrics[f"Charts/{device_thread_id}/{k}"] = v
+                metrics[f"Charts/{device_thread_id}/{k}"] = v.item()
 
         # Evaluate whenever configured to
         if update in args.eval_at_steps:
