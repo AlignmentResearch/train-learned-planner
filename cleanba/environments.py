@@ -88,7 +88,7 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
 
     @staticmethod
     def _info_achievements(info: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in info.items() if "achievement" in k}
+        return {k: v for k, v in info.items() if "Achievement" in k}
 
     def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
         obs, info = self._env.reset()

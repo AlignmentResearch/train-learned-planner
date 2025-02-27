@@ -257,19 +257,13 @@ MUST_STOP_PROGRAM: bool = False
 
 @dataclasses.dataclass
 class LoggingStats:
-    episode_returns: list[float]
-    episode_lengths: list[float]
-    episode_success: list[float]
     params_queue_get_time: list[float]
     rollout_time: list[float]
     create_rollout_time: list[float]
     rollout_queue_put_time: list[float]
 
-    env_recv_time: list[float]
     inference_time: list[float]
     storage_time: list[float]
-    device2host_time: list[float]
-    env_send_time: list[float]
     update_time: list[float]
 
     @classmethod
@@ -522,7 +516,7 @@ def rollout(
                 }
             )
             for k, v in stats_dict.items():
-                metrics[f"Perf/{device_thread_id}/{k}"] = v.item()
+                metrics[f"Perf/{device_thread_id}/{k}"] = v
 
             # Charts: RL performance-related metrics
             for k, v in charts_dict.items():
