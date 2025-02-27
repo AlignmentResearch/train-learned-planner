@@ -362,7 +362,7 @@ def rollout(
 ):
     actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
 
-    envs = EpisodeEvalWrapper(
+    envs = EpisodeEvalWrapper.maybe_wrap(
         dataclasses.replace(
             args.train_env,
             seed=args.train_env.seed + actor_id,
@@ -798,7 +798,7 @@ def train(
 
             (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
             for _ in range(1, args.train_epochs):
-                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
+                (agent_state, metrics_dict) = jax.jit(multi_device_update)(agent_state, sharded_storages)
 
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:

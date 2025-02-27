@@ -5,9 +5,8 @@ import random
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, List, Literal, Optional, Self, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Iterable, List, Literal, NamedTuple, Optional, Self, Tuple, Union
 
-import flax.struct
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import jax
@@ -22,7 +21,7 @@ if TYPE_CHECKING:
     from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
 
-class EpisodeEvalState(flax.struct.PyTreeNode):
+class EpisodeEvalState(NamedTuple):
     episode_length: jax.Array
     episode_success: jax.Array
     episode_others: dict[str, jax.Array]
@@ -32,21 +31,18 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
     returned_episode_others: dict[str, jax.Array]
 
     @classmethod
-    def new(cls: type[Self], num_envs: int, others: Iterable[str]) -> Self:
-        zero_float = jnp.zeros(())
-        zero_int = jnp.zeros((), dtype=jnp.int32)
-        zero_bool = jnp.zeros((), dtype=jnp.bool)
+    def new(cls: type[Self], shape: tuple[int, ...], others: Iterable[str]) -> Self:
+        zero_float = jnp.zeros(shape)
+        zero_int = jnp.zeros(shape, dtype=jnp.int32)
+        zero_bool = jnp.zeros(shape, dtype=jnp.bool)
         others = set(others) | {"episode_return"}
-        return jax.tree.map(
-            partial(jnp.repeat, repeats=num_envs),
-            cls(
-                zero_int,
-                zero_bool,
-                {o: zero_float for o in others},
-                zero_int,
-                zero_bool,
-                {o: zero_float for o in others},
-            ),
+        return cls(
+            zero_int,
+            zero_bool,
+            {o: zero_float for o in others},
+            zero_int,
+            zero_bool,
+            {o: zero_float for o in others},
         )
 
     @jax.jit
@@ -57,7 +53,12 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
 
         new_episode_success = terminated
         new_episode_length = self.episode_length + 1
-        new_others = jax.tree.map(lambda a, b: a + b, self.episode_others, {"episode_return": reward, **others})
+
+        others["episode_return"] = reward
+        if set(others.keys()) != set(self.episode_others.keys()):
+            # We can't easily implement this, so we stop the program if it happens
+            raise RuntimeError("self and other keys different")
+        new_others = {k: self.returned_episode_others[k] + v for k, v in others.items()}
 
         new_state = self.__class__(
             episode_length=new_episode_length * (1 - done),
@@ -86,28 +87,26 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
         super().__init__(env)
         self._env = env
 
-    @staticmethod
-    def _info_achievements(info: dict[str, Any]) -> dict[str, Any]:
-        return {k: v for k, v in info.items() if "achievement" in k}
-
     def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
         obs, info = self._env.reset()
-        self.state = EpisodeEvalState.new(self._env.num_envs, self._info_achievements(info).keys())
+        self.state = EpisodeEvalState.new(self._env.num_envs, [])
         return obs, {**info, **self.state.update_info()}
 
     def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
-        self.state, other = self._step(actions)
-        return other
-
-    @partial(jax.jit, static_argnums=(0,))
-    def _step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
         obs, reward, terminated, truncated, info = self._env.step(actions)
         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
         # the true return.
         non_clipped_rewards = info.get("reward", reward)
-        new_state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
+        self.state = self.state.update(non_clipped_rewards, terminated, truncated, info)
         done = terminated | truncated
-        return new_state, (obs, reward, done, truncated, {**info, **new_state.update_info()})
+        return obs, reward, done, truncated, {**info, **self.state.update_info()}
+
+    @classmethod
+    def maybe_wrap(cls: type[Self], other: Any) -> Self | Any:
+        # HACK: we embed this class into CraftaxVectorEnv
+        if isinstance(other, CraftaxVectorEnv):
+            return other
+        return cls(other)
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):
@@ -118,9 +117,10 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     cfg: "CraftaxEnvConfig"
     env: "CraftaxSymbolicEnv"
     rng_keys: jnp.ndarray
-    state: Any
+    state: tuple[Any, EpisodeEvalState]
     obs: jnp.ndarray
     env_params: "EnvParams"
+    info_keys: str
 
     def __init__(self, cfg: "CraftaxEnvConfig"):
         from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
@@ -137,6 +137,15 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
         self.closed = False
 
         self.device, *_ = jax.devices(cfg.jit_backend)
+
+        # Get the full list of info keys that we have to track
+        def _get_info(rng):
+            _, env_state = self.env.reset_env(rng, self.env_params)
+            _, _, _, _, info = self.env.step(rng, env_state, single_action_space.sample())
+            return info
+
+        info_keys = list(jax.eval_shape(_get_info, jax.random.PRNGKey(1234)).keys())
+        self.info_keys = [k for k in info_keys if k.startswith("Achievement")]
 
         # set rng_keys, state, obs
         self.reset(self.cfg.seed)
@@ -161,9 +170,10 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     @partial(jax.vmap, in_axes=(None, 0))
     def _reset_wait_pure(self, key: jnp.ndarray) -> Tuple[jnp.ndarray, Any, jnp.ndarray]:
         key, reset_key = jax.random.split(key)
-        obs_flat, state = self.env.reset_env(reset_key, self.env_params)
+        obs_flat, env_state = self.env.reset_env(reset_key, self.env_params)
+        eval_state = EpisodeEvalState.new((), self.info_keys)
         obs_processed = self._process_obs(obs_flat)
-        return obs_processed, state, key
+        return obs_processed, (env_state, eval_state), key
 
     def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
         """Reset the environment."""
@@ -179,14 +189,17 @@ class CraftaxVectorEnv(gym.vector.VectorEnv):
     @partial(jax.jit, static_argnames=("self",))
     @partial(jax.vmap, in_axes=(None, 0, 0, 0))
     def _step_pure(self, key, state, action):
+        (env_state, eval_state) = state
+        del state
         key, step_key = jax.random.split(key)
-        obs_flat, state, rewards, dones, info = self.env.step(step_key, state, action)
+        obs_flat, env_state, rewards, dones, info = self.env.step(step_key, env_state, action)
         terminated = dones
         # assume no truncation (basically true as agent does not survive long enough)
         truncated = jnp.zeros_like(dones, dtype=bool)
+        eval_state = eval_state.update(rewards, terminated, truncated, {k: info[k] for k in self.info_keys})
         assert terminated.dtype == truncated.dtype
         obs = self._process_obs(obs_flat)
-        return key, obs, state, rewards, terminated, truncated, info
+        return key, obs, (env_state, eval_state), rewards, terminated, truncated, {**info, **eval_state.update_info()}
 
     def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
         """Execute one step in the environment."""

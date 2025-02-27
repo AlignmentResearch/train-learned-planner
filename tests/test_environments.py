@@ -7,7 +7,13 @@ import pytest
 
 from cleanba.config import sokoban_drc33_59
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.environments import BoxobanConfig, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
+from cleanba.environments import (
+    BoxobanConfig,
+    CraftaxEnvConfig,
+    EnvConfig,
+    EnvpoolBoxobanConfig,
+    SokobanConfig,
+)
 
 
 def sokoban_has_reset(tile_size: int, old_obs: np.ndarray, new_obs: np.ndarray) -> np.ndarray:
@@ -138,7 +144,7 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
 
 
 def test_craftax_environment_basics():
-    cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False)
+    cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False, jit_backend="cpu")
     envs = cfg.make()
     next_obs, info = envs.reset()
 
@@ -220,9 +226,9 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
     key = jax.random.PRNGKey(42)
     key, agent_params_subkey, carry_key = jax.random.split(key, 3)
     policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
-    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (
-        not nn_without_noop
-    ), "NOOP action not set correctly"
+    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (not nn_without_noop), (
+        "NOOP action not set correctly"
+    )
     carry = policy.apply(agent_params, carry_key, next_obs.shape, method=policy.initialize_carry)
     episode_starts_no = jnp.zeros(cfg.num_envs, dtype=jnp.bool_)
 
