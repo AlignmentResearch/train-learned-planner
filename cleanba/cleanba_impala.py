@@ -797,9 +797,12 @@ def train(
             rollout_queue_get_time.append(time.time() - rollout_queue_get_time_start)
             training_time_start = time.time()
 
-            (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
-            for _ in range(1, args.train_epochs):
-                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages)
+            key, *epoch_keys = jax.random.split(key, 1 + args.train_epochs)
+            permutation_key = jax.random.split(epoch_keys[0], len(runtime_info.global_learner_devices))
+            (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, key=permutation_key)
+            for epoch in range(1, args.train_epochs):
+                permutation_key = jax.random.split(epoch_keys[epoch], len(runtime_info.global_learner_devices))
+                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, key=permutation_key)
 
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:

@@ -300,6 +300,7 @@ def single_device_update(
     get_logits_and_value: GetLogitsAndValueFn,
     num_batches: int,
     impala_cfg: ImpalaLossConfig,
+    key: jax.Array,
 ) -> tuple[TrainState, dict[str, jax.Array]]:
     def update_minibatch(agent_state: TrainState, minibatch: Rollout):
         (loss, metrics_dict), grads = jax.value_and_grad(impala_cfg.loss, has_aux=True)(
@@ -327,8 +328,21 @@ def single_device_update(
         agent_state = agent_state.apply_gradients(grads=grads)
         return agent_state, metrics_dict
 
+    # Combine the sharded storages
     storage = jax.tree.map(lambda *x: jnp.hstack(x), *sharded_storages)
-    storage_by_minibatches = jax.tree.map(lambda x: jnp.array(jnp.split(x, num_batches, axis=1)), storage)
+
+    # Generate a random permutation for shuffling over the batch dimension only
+    batch_size = storage.obs_t.shape[1]
+    permutation = jax.random.permutation(key, batch_size)
+
+    # Shuffle the data using the permutation
+    shuffled_storage = jax.tree.map(lambda x: jnp.take(x, permutation, axis=1), storage)
+
+    # Split into minibatches
+    storage_by_minibatches = jax.tree.map(
+        lambda x: jnp.moveaxis(jnp.reshape(x, (x.shape[0], num_batches, batch_size // num_batches, *x.shape[2:])), 1, 0),
+        shuffled_storage,
+    )
 
     agent_state, loss_and_aux_per_step = jax.lax.scan(
         update_minibatch,

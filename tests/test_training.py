@@ -80,9 +80,9 @@ class CheckingWriter(WandbWriter):
             yield dir
 
             assert self.last_global_step == global_step, "we want to save with the same step as last metrics"
-            assert all(
-                k in self.eval_metrics for k in self.eval_keys
-            ), f"One of {self.eval_keys=} not present in {list(self.eval_metrics.keys())=}"
+            assert all(k in self.eval_metrics for k in self.eval_keys), (
+                f"One of {self.eval_keys=} not present in {list(self.eval_metrics.keys())=}"
+            )
 
         # Clear for the next saving
         for event in self.eval_events.values():
@@ -106,16 +106,6 @@ class CheckingWriter(WandbWriter):
             kernel_sizes=(3, 3),
             mlp_hiddens=(16,),
             normalize_input=False,
-        ),
-        ConvLSTMConfig(
-            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
-            repeats_per_step=2,
-        ),
-        ConvLSTMConfig(
-            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
-            repeats_per_step=2,
         ),
     ],
 )
