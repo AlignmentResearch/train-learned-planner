@@ -295,6 +295,12 @@ def time_and_append(stats: list[float], name: str, step_num: int):
     stats.append(time.time() - start_time)
 
 
+@dataclasses.dataclass(order=True)
+class PrioritizedItem:
+    priority: int
+    item: Any = dataclasses.field(compare=False)
+
+
 @partial(jax.jit, static_argnames=["len_learner_devices"])
 def _concat_and_shard_rollout_internal(
     storage: List[Rollout],
@@ -534,7 +540,7 @@ def rollout(
         if metrics:
             # Flush the metrics at most once per global_step. This way, in the learner we can check that all actor
             # threads have sent the metrics by simply counting.
-            metrics_queue.put((global_step, metrics), timeout=args.queue_timeout)
+            metrics_queue.put(PrioritizedItem(global_step, metrics), timeout=args.queue_timeout)
             metrics = {}
     if libcudart is not None:
         libcudart.cudaProfilerStop()
@@ -848,7 +854,8 @@ def train(
                 add_back_later_metrics = []
                 num_actor_metrics = 0
                 while num_actor_metrics < len(rollout_queues):
-                    actor_global_step, actor_metrics = metrics_queue.get(timeout=args.queue_timeout)
+                    item = metrics_queue.get(timeout=args.queue_timeout)
+                    actor_global_step, actor_metrics = item.priority, item.item
                     print(f"Got metrics from {actor_global_step=}")
 
                     if actor_global_step == global_step:
@@ -857,15 +864,15 @@ def train(
                         )
                         num_actor_metrics += 1
                     elif actor_global_step > global_step:
-                        add_back_later_metrics.append((actor_global_step, actor_metrics))
+                        add_back_later_metrics.append(item)
                     else:
                         log.warning(
                             f"Had to throw away metrics for global_step {actor_global_step}, which is less than the current {global_step=}. {actor_metrics}"
                         )
                 # We're done. Write metrics and add back the ones for the future.
                 writer.add_dict(metrics, global_step=global_step)
-                for a in add_back_later_metrics:
-                    metrics_queue.put(a)
+                for item in add_back_later_metrics:
+                    metrics_queue.put(item)
 
                 print(
                     global_step,
