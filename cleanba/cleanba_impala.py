@@ -262,6 +262,7 @@ class LoggingStats:
     create_rollout_time: list[float]
     rollout_queue_put_time: list[float]
 
+    env_recv_time: list[float]
     inference_time: list[float]
     storage_time: list[float]
     update_time: list[float]

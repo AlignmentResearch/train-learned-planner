@@ -57,7 +57,14 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
 
         new_episode_success = terminated
         new_episode_length = self.episode_length + 1
-        new_others = jax.tree.map(lambda a, b: a + b, self.episode_others, {"episode_return": reward, **others})
+
+        # Populate things to do tree.map
+        _episode_others = {k: jnp.zeros(new_episode_length.shape) for k in others.keys()}
+        _episode_others.update(self.episode_others)
+        _returned_episode_others = {k: jnp.zeros(new_episode_length.shape) for k in others.keys()}
+        _returned_episode_others.update(self.returned_episode_others)
+
+        new_others = jax.tree.map(lambda a, b: a + b, _episode_others, {"episode_return": reward, **others})
 
         new_state = self.__class__(
             episode_length=new_episode_length * (1 - done),
@@ -65,7 +72,7 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
             episode_others=jax.tree.map(lambda x: x * (1 - done), new_others),
             returned_episode_length=jax.lax.select(done, new_episode_length, self.returned_episode_length),
             returned_episode_success=jax.lax.select(done, new_episode_success, self.returned_episode_success),
-            returned_episode_others=jax.tree.map(partial(jax.lax.select, done), new_others, self.returned_episode_others),
+            returned_episode_others=jax.tree.map(partial(jax.lax.select, done), new_others, _returned_episode_others),
         )
         return new_state
 
