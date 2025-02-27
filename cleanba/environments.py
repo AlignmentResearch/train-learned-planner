@@ -96,12 +96,17 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
         return obs, {**info, **self.state.update_info()}
 
     def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
+        self._state, other = self._step(actions)
+        return other
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
         obs, reward, terminated, truncated, info = self._env.step(actions)
         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
         # the true return.
         non_clipped_rewards = info.get("reward", reward)
-        self.state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
-        return obs, reward, terminated, truncated, {**info, **self.state.update_info()}
+        state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
+        return state, (obs, reward, terminated, truncated, {**info, **self.state.update_info()})
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):

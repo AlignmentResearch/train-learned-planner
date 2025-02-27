@@ -336,7 +336,7 @@ def _concat_and_shard_rollout_internal(
 def concat_and_shard_rollout(
     storage: list[Rollout],
     last_obs: jax.Array,
-    last_episode_starts: np.ndarray,
+    last_episode_starts: jax.Array,
     last_value: jax.Array,
     learner_devices: list[jax.Device],
 ) -> Rollout:
@@ -357,7 +357,7 @@ def rollout(
     writer,
     learner_devices: list[jax.Device],
     device_thread_id: int,
-    actor_device,
+    actor_device: jax.Device,
     global_step: int = 0,
 ):
     actor_id: int = device_thread_id + args.num_actor_threads * jax.process_index()
@@ -436,8 +436,7 @@ def rollout(
 
                     with time_and_append(log_stats.inference_time, "inference", global_step):
                         # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
-                        params_device = next(iter(jax.tree.leaves(params))).device
-                        obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=params_device)
+                        obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=actor_device)
                         carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
                             params, carry_t, obs_t, episode_starts_t, key
                         )
@@ -467,8 +466,7 @@ def rollout(
                         episode_starts_t = done_t
 
             with time_and_append(log_stats.storage_time, "storage", global_step):
-                params_device = next(iter(jax.tree.leaves(params))).device
-                obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=params_device)
+                obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=actor_device)
                 _, _, _, value_t, _ = get_action_fn(
                     params, carry_t, obs_t, episode_starts_t, key
                 )  # TODO: eliminate this extra call
