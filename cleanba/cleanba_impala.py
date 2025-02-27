@@ -444,7 +444,8 @@ def rollout(
                         assert a_t.shape == (args.local_num_envs,)
 
                     with time_and_append(log_stats.env_recv_time, "step", global_step):
-                        obs_tplus1, r_t, done_t, trunc_t, info_t = envs.step(a_t)
+                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step(a_t)
+                        done_t = term_t | trunc_t
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
 
