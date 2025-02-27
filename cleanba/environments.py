@@ -96,7 +96,7 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
         return obs, {**info, **self.state.update_info()}
 
     def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
-        self._state, other = self._step(actions)
+        self.state, other = self._step(actions)
         return other
 
     @partial(jax.jit, static_argnums=(0,))
