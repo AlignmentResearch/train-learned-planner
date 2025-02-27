@@ -221,14 +221,13 @@ def test_loss_of_rollout(
 
     for iteration in range(100):
         try:
-            (
-                global_step,
-                actor_policy_version,
-                update,
-                sharded_transition,
-                params_queue_get_time,
-                device_thread_id,
-            ) = rollout_queue.get(timeout=1e-5)
+            payload = rollout_queue.get(timeout=1e-5)
+            global_step = payload.global_step
+            actor_policy_version = payload.policy_version
+            update = payload.update
+            sharded_transition = payload.storage
+            params_queue_get_time = payload.params_queue_get_time
+            device_thread_id = payload.device_thread_id
         except queue.Empty:
             break  # we're done
 
