@@ -106,7 +106,8 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
         # the true return.
         non_clipped_rewards = info.get("reward", reward)
         state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
-        return state, (obs, reward, terminated, truncated, {**info, **self.state.update_info()})
+        done = terminated | truncated
+        return state, (obs, reward, done, truncated, {**info, **self.state.update_info()})
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):

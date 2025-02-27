@@ -394,6 +394,7 @@ def rollout(
     key, carry_key = jax.random.split(key)
     policy, carry_t, _ = args.net.init_params(envs, carry_key)
     episode_starts_t = np.ones(envs.num_envs, dtype=np.bool_)
+
     get_action_fn = jax.jit(partial(policy.apply, method=policy.get_action), static_argnames="temperature")
 
     global MUST_STOP_PROGRAM
@@ -443,8 +444,7 @@ def rollout(
                         assert a_t.shape == (args.local_num_envs,)
 
                     with time_and_append(log_stats.env_recv_time, "step", global_step):
-                        obs_tplus1, r_t, term_t, trunc_t, info_t = envs.step(a_t)
-                        done_t = term_t | trunc_t
+                        obs_tplus1, r_t, done_t, trunc_t, info_t = envs.step(a_t)
                         assert r_t.shape == (args.local_num_envs,)
                         assert done_t.shape == (args.local_num_envs,)
 
