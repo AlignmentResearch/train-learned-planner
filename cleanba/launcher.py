@@ -148,7 +148,13 @@ def launch_jobs(
 ) -> tuple[str, str]:
     repo = Repo(".")
     repo.remote("origin").push(repo.active_branch.name)  # Push to an upstream branch with the same name
-    start_number = 1 + len(wandb.Api().runs(f"{entity}/{project}"))
+    try:
+        start_number = 1 + len(wandb.Api().runs(f"{entity}/{project}"))
+    except ValueError as e:
+        if str(e).startswith("Could not find project"):
+            start_number = 1
+        else:
+            raise
     jobs, launch_id = create_jobs(
         start_number,
         runs,
