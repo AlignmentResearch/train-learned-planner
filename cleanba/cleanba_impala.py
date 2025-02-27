@@ -1,6 +1,7 @@
 import contextlib
 import dataclasses
 import json
+import logging
 import math
 import os
 import queue
@@ -43,6 +44,8 @@ from cleanba.impala_loss import (
 )
 from cleanba.network import AgentParams, Policy, PolicyCarryT, label_and_learning_rate_for_params
 from cleanba.optimizer import rmsprop_pytorch_style
+
+log = logging.getLogger(__file__)
 
 
 class ParamsPayload(NamedTuple):
@@ -150,6 +153,9 @@ class WandbWriter:
 
     def add_scalar(self, name: str, value: int | float, global_step: int):
         wandb.log({name: value}, step=global_step)
+
+    def add_dict(self, metrics: dict[str, int | float], global_step: int):
+        wandb.log(metrics, step=global_step)
 
     @contextlib.contextmanager
     def save_dir(self, global_step: int) -> Iterator[Path]:
@@ -354,7 +360,7 @@ def rollout(
     runtime_info: RuntimeInformation,
     rollout_queue: queue.Queue,
     params_queue: queue.Queue,
-    writer,
+    metrics_queue: queue.PriorityQueue,
     learner_devices: list[jax.Device],
     device_thread_id: int,
     actor_device: jax.Device,
@@ -386,6 +392,7 @@ def rollout(
     info_t = {}
     actor_policy_version = 0
     storage = []
+    metrics = {}
 
     # Store the first observation
     obs_t, _ = envs.reset()
@@ -486,22 +493,7 @@ def rollout(
 
         # Log on all rollout threads
         if update % args.log_frequency == 0:
-            inner_loop_time = (
-                np.sum(log_stats.env_recv_time)
-                + np.sum(log_stats.create_rollout_time)
-                + np.sum(log_stats.inference_time)
-                + np.sum(log_stats.device2host_time)
-                + np.sum(log_stats.env_send_time)
-            )
             total_rollout_time = np.sum(log_stats.rollout_time)
-            middle_loop_time = (
-                total_rollout_time
-                + np.sum(log_stats.storage_time)
-                + np.sum(log_stats.params_queue_get_time)
-                + np.sum(log_stats.rollout_queue_put_time)
-            )
-            outer_loop_time = np.sum(log_stats.update_time)
-
             stats_dict: dict[str, float] = log_stats.avg_and_flush()
 
             if start_time is None:
@@ -516,30 +508,34 @@ def rollout(
             )
 
             # Perf: Time performance metrics
-            writer.add_scalar(
-                f"Perf/{device_thread_id}/inner_time_efficiency", inner_loop_time / total_rollout_time, global_step
+            metrics.update(
+                {
+                    f"Perf/{device_thread_id}/rollout_total": total_rollout_time,
+                    f"Perf/{device_thread_id}/SPS": steps_per_second,
+                    f"policy_versions/{device_thread_id}/actor": actor_policy_version,
+                }
             )
-            writer.add_scalar(
-                f"Perf/{device_thread_id}/middle_time_efficiency", middle_loop_time / outer_loop_time, global_step
-            )
-            writer.add_scalar(f"Perf/{device_thread_id}/SPS", steps_per_second, global_step)
             for k, v in stats_dict.items():
-                writer.add_scalar(f"Perf/{device_thread_id}/{k}", v, global_step)
+                metrics[f"Perf/{device_thread_id}/{k}"] = v
 
             # Charts: RL performance-related metrics
             for k, v in charts_dict.items():
-                writer.add_scalar(f"Charts/{device_thread_id}/{k}", v, global_step)
-            writer.add_scalar(f"policy_versions/{device_thread_id}/actor", actor_policy_version, global_step)
+                metrics[f"Charts/{device_thread_id}/{k}"] = v
 
+        # Evaluate whenever configured to
         if update in args.eval_at_steps:
             for i, (eval_name, env_config) in enumerate(this_thread_eval_cfg):
                 print("Evaluating ", eval_name)
                 this_thread_eval_keys[i], eval_key = jax.random.split(this_thread_eval_keys[i], 2)
                 log_dict = env_config.run(policy, get_action_fn, params, key=eval_key)
-                for k, v in log_dict.items():
-                    if k.endswith("_all_episode_info"):
-                        continue
-                    writer.add_scalar(f"{eval_name}/{k}", v, global_step)
+
+                metrics.update({f"{eval_name}/{k}": v for k, v in log_dict.items() if not k.endswith("_all_episode_info")})
+
+        if metrics:
+            # Flush the metrics at most once per global_step. This way, in the learner we can check that all actor
+            # threads have sent the metrics by simply counting.
+            metrics_queue.put((global_step, metrics), timeout=args.queue_timeout)
+            metrics = {}
     if libcudart is not None:
         libcudart.cudaProfilerStop()
 
@@ -749,6 +745,7 @@ def train(
 
         params_queues = []
         rollout_queues = []
+        metrics_queue = queue.PriorityQueue()
 
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
@@ -767,7 +764,7 @@ def train(
                         runtime_info,
                         rollout_queues[-1],
                         params_queues[-1],
-                        writer,
+                        metrics_queue,
                         runtime_info.learner_devices,
                         d_idx * args.num_actor_threads + thread_id,
                         runtime_info.local_devices[d_id],
@@ -827,31 +824,53 @@ def train(
 
             # record rewards for plotting purposes
             if args.learner_policy_version % args.log_frequency == 0:
-                writer.add_scalar(
-                    "Perf/rollout_queue_get_time",
-                    np.mean(rollout_queue_get_time),
-                    global_step,
-                )
-                writer.add_scalar("Perf/training_time", time.time() - training_time_start, global_step)
-                writer.add_scalar("Perf/rollout_queue_size", rollout_queues[-1].qsize(), global_step)
-                writer.add_scalar("Perf/params_queue_size", params_queues[-1].qsize(), global_step)
+                metrics = {
+                    "Perf/rollout_queue_get_time": np.mean(rollout_queue_get_time),
+                    "Perf/training_time": time.time() - training_time_start,
+                    "Perf/rollout_queue_size": rollout_queues[-1].qsize(),
+                    "Perf/params_queue_size": params_queues[-1].qsize(),
+                    "losses/value_loss": metrics_dict.pop("v_loss")[0].item(),
+                    "losses/policy_loss": metrics_dict.pop("pg_loss")[0].item(),
+                    "losses/entropy": metrics_dict.pop("ent_loss")[0].item(),
+                    "losses/loss": metrics_dict.pop("loss")[0].item(),
+                    "policy_versions/learner": args.learner_policy_version,
+                }
+                metrics.update({k: v[0].item() for k, v in metrics_dict.items()})
+
+                lr = unreplicate(agent_state.opt_state.hyperparams["learning_rate"])
+                assert lr is not None
+                metrics["losses/learning_rate"] = lr
+
+                # Receive actors' metrics from the metrics_queue, and once we have all of them plot them together
+                #
+                # If we get metrics from a future step, we just put them back in the queue for next time.
+                # If it is a previous step, we regretfully throw them away.
+                add_back_later_metrics = []
+                num_actor_metrics = 0
+                while num_actor_metrics < len(rollout_queues):
+                    actor_global_step, actor_metrics = metrics_queue.get(timeout=args.queue_timeout)
+                    print(f"Got metrics from {actor_global_step=}")
+
+                    if actor_global_step == global_step:
+                        metrics.update(
+                            {k: (v.item() if isinstance(v, jnp.ndarray) else v) for (k, v) in actor_metrics.items()}
+                        )
+                        num_actor_metrics += 1
+                    elif actor_global_step > global_step:
+                        add_back_later_metrics.append((actor_global_step, actor_metrics))
+                    else:
+                        log.warning(
+                            f"Had to throw away metrics for global_step {actor_global_step}, which is less than the current {global_step=}. {actor_metrics}"
+                        )
+                # We're done. Write metrics and add back the ones for the future.
+                writer.add_dict(metrics, global_step=global_step)
+                for a in add_back_later_metrics:
+                    metrics_queue.put(a)
+
                 print(
                     global_step,
                     f"actor_policy_version={actor_policy_version}, actor_update={update}, learner_policy_version={args.learner_policy_version}, training time: {time.time() - training_time_start}s",
                 )
-                writer.add_scalar("losses/value_loss", metrics_dict.pop("v_loss")[0].item(), global_step)
-                writer.add_scalar("losses/policy_loss", metrics_dict.pop("pg_loss")[0].item(), global_step)
-                writer.add_scalar("losses/entropy", metrics_dict.pop("ent_loss")[0].item(), global_step)
-                writer.add_scalar("losses/loss", metrics_dict.pop("loss")[0].item(), global_step)
-
-                for name, value in metrics_dict.items():
-                    writer.add_scalar(name, value[0].item(), global_step)
-
-                writer.add_scalar("policy_versions/learner", args.learner_policy_version, global_step)
-
-                lr = unreplicate(agent_state.opt_state.hyperparams["learning_rate"])
-                assert lr is not None
-                writer.add_scalar("losses/learning_rate", lr, global_step)
 
             if args.save_model and args.learner_policy_version in args.eval_at_steps:
                 print("Learner thread entering save barrier (should be last)")

@@ -71,8 +71,14 @@ class CheckingWriter(WandbWriter):
             self.eval_events[name].set()
             self.eval_metrics[name] = value
 
+    def add_dict(self, metrics: dict[str, int | float], global_step: int):
+        print(f"Adding {metrics=} at {global_step=}")
+        for k, v in metrics.items():
+            self.add_scalar(k, v, global_step)
+
     @contextlib.contextmanager
     def save_dir(self, global_step: int) -> Iterator[Path]:
+        print(f"Saving at {global_step=}")
         for event in self.eval_events.values():
             event.wait(timeout=5)
 

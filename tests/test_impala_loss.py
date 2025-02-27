@@ -205,6 +205,7 @@ def test_loss_of_rollout(
         params_queue.put(ParamsPayload(params=params, policy_version=1))
 
     rollout_queue = queue.Queue(maxsize=5)
+    metrics_queue = queue.PriorityQueue()
     key = jax.random.PRNGKey(seed=1234)
     cleanba_impala.rollout(
         initial_update=1,
@@ -213,7 +214,7 @@ def test_loss_of_rollout(
         runtime_info=cleanba_impala.RuntimeInformation(0, [], 0, 1, 0, 0, 0, 0, 0, [], []),
         rollout_queue=rollout_queue,
         params_queue=params_queue,
-        writer=None,  # OK because device_thread_id != 0
+        metrics_queue=metrics_queue,
         learner_devices=jax.local_devices(),
         device_thread_id=1,
         actor_device=None,  # Currently unused
