@@ -31,6 +31,7 @@ markers = [
 [tool.pyright]
 exclude = [
 	".venv/**",  # venv
+    "nsight-profile/**",
     "wandb/**",  # Saved old codes
     "third_party/**",  # Other libraries
 ]
