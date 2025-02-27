@@ -105,9 +105,9 @@ class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
         # the true return.
         non_clipped_rewards = info.get("reward", reward)
-        state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
+        new_state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
         done = terminated | truncated
-        return state, (obs, reward, done, truncated, {**info, **self.state.update_info()})
+        return new_state, (obs, reward, done, truncated, {**info, **new_state.update_info()})
 
 
 class CraftaxVectorEnv(gym.vector.VectorEnv):
