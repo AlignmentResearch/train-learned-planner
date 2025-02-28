@@ -11,7 +11,7 @@ from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 clis: list[list[str]] = []
 all_args: list[Args] = []
 
-for gae_lambda in [0.8, 0.9, 0.99]:
+for gae_lambda in [0.8]:
     for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
 
         def update_seeds(config: Args) -> Args:
@@ -23,8 +23,6 @@ for gae_lambda in [0.8, 0.9, 0.99]:
             config.train_epochs = 4
             config.queue_timeout = 3000
             config.total_timesteps = 1000_000_000
-            # No evaluation
-            config.eval_at_steps = frozenset([])
             return config
 
         cli, _ = update_fns_to_cli(craftax_drc, update_seeds)
@@ -62,7 +60,7 @@ if __name__ == "__main__":
     launch_jobs(
         runs,
         group=GROUP,
-        job_template_path=Path(__file__).parent.parent.parent / "k8s/runner-no-nfs.yaml",
+        job_template_path=Path(__file__).parent.parent.parent / "k8s/runner.yaml",
         project="impala2",
         entity="matsrlgoals",
     )
