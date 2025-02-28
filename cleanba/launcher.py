@@ -83,9 +83,9 @@ def create_jobs(
     start_number: int,
     runs: Sequence[FlamingoRun],
     group: str,
-    project: str = "impala",
-    entity: str = "matsrlgoals",
-    wandb_mode: str = "online",
+    project: str,
+    entity: str,
+    wandb_mode: str,
     job_template_path: Optional[Path] = None,
 ) -> tuple[Sequence[str], str]:
     launch_id = generate_name(style="hyphen")
@@ -157,12 +157,12 @@ def launch_jobs(
             raise
     jobs, launch_id = create_jobs(
         start_number,
-        runs,
+        runs=runs,
         group=group,
-        job_template_path=job_template_path,
-        wandb_mode=wandb_mode,
         project=project,
         entity=entity,
+        wandb_mode=wandb_mode,
+        job_template_path=job_template_path,
     )
     yamls_for_all_jobs = "\n\n---\n\n".join(jobs)
 

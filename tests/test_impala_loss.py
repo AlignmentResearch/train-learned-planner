@@ -187,10 +187,7 @@ def test_loss_of_rollout(
         ),
         eval_envs={},
         net=ZeroActionNetworkSpec(),
-        loss=ImpalaLossConfig(
-            gamma=0.9,
-            vtrace_lambda=1.0,
-        ),
+        loss=cls(gamma=0.9),
         num_steps=num_timesteps,
         concurrency=True,
         local_num_envs=num_envs,

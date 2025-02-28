@@ -444,7 +444,6 @@ def rollout(
                     )
 
                     with time_and_append(log_stats.inference_time, "inference", global_step):
-                        # TODO: roll this over to out of the loop and end of the loop, so we don't have to call it twice
                         obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=actor_device)
                         carry_tplus1, a_t, logits_t, value_t, key = get_action_fn(
                             params, carry_t, obs_t, episode_starts_t, key
@@ -476,9 +475,13 @@ def rollout(
 
             with time_and_append(log_stats.storage_time, "storage", global_step):
                 obs_t, episode_starts_t = jax.device_put((obs_t, episode_starts_t), device=actor_device)
-                _, _, _, value_t, _ = get_action_fn(
-                    params, carry_t, obs_t, episode_starts_t, key
-                )  # TODO: eliminate this extra call
+                if args.loss.needs_last_value:
+                    # We can't roll this out of the loop. In the next loop iteration, we will use the updated parameters
+                    # to gather rollouts.
+                    _, _, _, value_t, _ = get_action_fn(params, carry_t, obs_t, episode_starts_t, key)
+                else:
+                    value_t = jnp.full(value_t.shape, jnp.nan, dtype=value_t.dtype, device=value_t.device)
+
                 sharded_storage = concat_and_shard_rollout(storage, obs_t, episode_starts_t, value_t, learner_devices)
                 storage.clear()
                 payload = RolloutPayload(

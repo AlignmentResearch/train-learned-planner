@@ -1,7 +1,7 @@
 import abc
 import dataclasses
 from functools import partial
-from typing import Any, Callable, List, Literal, NamedTuple, Self
+from typing import Any, Callable, ClassVar, List, Literal, NamedTuple, Self
 
 import jax
 import jax.numpy as jnp
@@ -30,6 +30,8 @@ GetLogitsAndValueFn = Callable[
 
 @dataclasses.dataclass(frozen=True)
 class ActorCriticLossConfig(abc.ABC):
+    needs_last_value: ClassVar[bool]
+
     gamma: float = 0.99  # the discount factor gamma
     ent_coef: float = 0.01  # coefficient of the entropy
     vf_coef: float = 0.25  # coefficient of the value function
@@ -53,6 +55,8 @@ class ActorCriticLossConfig(abc.ABC):
 
 @dataclasses.dataclass(frozen=True)
 class ImpalaLossConfig(ActorCriticLossConfig):
+    needs_last_value: ClassVar[bool] = False
+
     # Interpolate between VTrace (1.0) and monte-carlo function (0.0) estimates, for the estimate of targets, used in
     # both the value and policy losses. It's the parameter in Remark 2 of Espeholt et al.
     # (https://arxiv.org/pdf/1802.01561.pdf)
@@ -222,6 +226,8 @@ class ImpalaLossConfig(ActorCriticLossConfig):
 
 @dataclasses.dataclass(frozen=True)
 class PPOLossConfig(ActorCriticLossConfig):
+    needs_last_value: ClassVar[bool] = True
+
     gae_lambda: float = 0.8
     clip_eps: float = 0.2
     vf_clip_eps: float = 0.2
