@@ -741,7 +741,8 @@ def train(
                     num_batches=args.num_minibatches * args.gradient_accumulation_steps,
                     get_logits_and_value=partial(policy.apply, method=policy.get_logits_and_value),
                     impala_cfg=args.loss,
-                )
+                ),
+                donate_argnames=("agent_state", "key"),
             ),
             axis_name=SINGLE_DEVICE_UPDATE_DEVICES_AXIS,
             devices=runtime_info.global_learner_devices,
@@ -754,7 +755,11 @@ def train(
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))
         for d_idx, d_id in enumerate(args.actor_device_ids):
-            device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
+            # Copy device_params so we can donate the agent_state in the multi_device_update
+            device_params = jax.tree.map(
+                partial(jnp.array, copy=True),
+                jax.device_put(unreplicated_params, runtime_info.local_devices[d_id]),
+            )
             for thread_id in range(args.num_actor_threads):
                 params_queues.append(queue.Queue(maxsize=1))
                 rollout_queues.append(queue.Queue(maxsize=1))
@@ -800,15 +805,19 @@ def train(
 
             key, *epoch_keys = jax.random.split(key, 1 + args.train_epochs)
             permutation_key = jax.random.split(epoch_keys[0], len(runtime_info.global_learner_devices))
-            (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, key=permutation_key)
+            (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, permutation_key)
             for epoch in range(1, args.train_epochs):
                 permutation_key = jax.random.split(epoch_keys[epoch], len(runtime_info.global_learner_devices))
-                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, key=permutation_key)
+                (agent_state, metrics_dict) = multi_device_update(agent_state, sharded_storages, permutation_key)
 
             unreplicated_params = unreplicate(agent_state.params)
             if update > args.actor_update_cutoff or update % args.actor_update_frequency == 0:
                 for d_idx, d_id in enumerate(args.actor_device_ids):
-                    device_params = jax.device_put(unreplicated_params, runtime_info.local_devices[d_id])
+                    # Copy device_params so we can donate the agent_state in the multi_device_update
+                    device_params = jax.tree.map(
+                        partial(jnp.array, copy=True),
+                        jax.device_put(unreplicated_params, runtime_info.local_devices[d_id]),
+                    )
                     for thread_id in range(args.num_actor_threads):
                         params_queues[d_idx * args.num_actor_threads + thread_id].put(
                             ParamsPayload(params=device_params, policy_version=args.learner_policy_version),
@@ -954,11 +963,13 @@ def load_train_state(
         pass  # must be already unreplicated
     if isinstance(args.net, ConvLSTMConfig):
         for i in range(args.net.n_recurrent):
-            train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"] = jnp.sum(
-                train_state.params["params"]["network_params"][f"cell_list_{i}"]["fence"]["kernel"],
-                axis=2,
-                keepdims=True,
-            )
+            this_cell = train_state.params["params"]["network_params"][f"cell_list_{i}"]
+            if "fence" in this_cell:
+                this_cell["fence"]["kernel"] = jnp.sum(
+                    this_cell["fence"]["kernel"],
+                    axis=2,
+                    keepdims=True,
+                )
 
     if finetune_with_noop_head:
         loaded_head = train_state.params["params"]["actor_params"]["Output"]
