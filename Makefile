@@ -8,7 +8,7 @@ export DOCKERFILE
 
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
-JAX_DATE=2025-02-22
+JAX_DATE=2025-03-01
 
 default: release/main
 
@@ -93,8 +93,9 @@ cuda-devbox/%: devbox/%
 cuda-devbox: cuda-devbox/main
 
 .PHONY: envpool-devbox
-envpool-devbox: devbox/envpool
-
+envpool-devbox:
+	git push
+	python -c "print(open('k8s/envpool-devbox.yaml').read().format(NAME='envpool-devbox', IMAGE='${APPLICATION_URL}:${RELEASE_PREFIX}-envpool-devbox', COMMIT_HASH='${COMMIT_HASH}', CPU='${CPU}', MEMORY='${MEMORY}', SHM_SIZE='${SHM_SIZE}', GPU='${GPU}', USER_ID=${DEVBOX_UID}, GROUP_ID=${DEVBOX_UID}))" | kubectl create -f -
 
 .PHONY: docker docker/%
 docker/%:

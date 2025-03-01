@@ -1,9 +1,9 @@
 ARG JAX_DATE
 
-FROM ghcr.io/nvidia/jax:base-${JAX_DATE} AS envpool
+FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS envpool-devbox
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
-    && apt-get install -y golang-1.21 git \
+RUN sudo apt-get update \
+    && sudo apt-get install -y \
     # Linters
     clang-format clang-tidy \
     # Cmake dependencies, for building CMake to build Envpool
@@ -11,12 +11,25 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-USER ubuntu
-ENV HOME=/home/ubuntu
-ENV PATH=/usr/lib/go-1.21/bin:${HOME}/go/bin:$PATH
-ENV UID=1000
-ENV GID=1000
-RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/bazelisk@v1.19.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
+# Install Go 1.24.0 from official source
+RUN curl -OL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz \
+    && sudo rm -rf /usr/local/go \
+    && sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz \
+    && rm go1.24.0.linux-amd64.tar.gz
+
+
+# Install bazel-remote
+RUN curl -OL 'https://github.com/buchgr/bazel-remote/releases/download/v2.5.0/bazel-remote-2.5.0-linux-x86_64' \
+    && chmod +x bazel-remote-2.5.0-linux-x86_64 \
+    && sudo mv bazel-remote-2.5.0-linux-x86_64 /usr/local/bin/bazel-remote
+ENV USERNAME=dev
+ENV UID=1001
+ENV GID=1001
+USER ${USERNAME}
+ENV HOME=/home/${USERNAME}
+ENV PATH=/usr/local/go/bin:${HOME}/go/bin:$PATH
+
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/bazelisk@v1.25.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
 # Install Go linting tools
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/google/addlicense@v1.1.1
@@ -26,74 +39,35 @@ RUN bazel version
 
 WORKDIR /app
 # Copy the whole repository
-COPY --chown=ubuntu:ubuntu third_party/envpool .
+COPY --chown=${USERNAME}:${USERNAME} third_party/envpool .
 
 # Install python-based linting dependencies
-COPY --chown=ubuntu:ubuntu \
+COPY --chown=${USERNAME}:${USERNAME} \
     third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
     third_party/pip_requirements/requirements-devtools.txt
-RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 pip install -r third_party/pip_requirements/requirements-devtools.txt
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} pip install -r third_party/pip_requirements/requirements-devtools.txt
 ENV PATH="${HOME}/.local/bin:${PATH}"
 
 # Deal with the fact that envpool is a submodule and has no .git directory
 RUN rm .git
 # Copy the .git repository for this submodule
-COPY --chown=ubuntu:ubuntu .git/modules/envpool ./.git
+COPY --chown=${USERNAME}:${USERNAME} .git/modules/envpool ./.git
 # Remove config line stating that the worktree for this repo is elsewhere
 RUN sed -e 's/^.*worktree =.*$//' .git/config > .git/config.new && mv .git/config.new .git/config
 
-RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 make bazel-release && cp bazel-bin/*.whl .
+FROM envpool-devbox AS envpool
 
-FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} AS main-pre-pip
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
+    make bazel-release && cp bazel-bin/*.whl .
+
+FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS main-pre-pip
 
 ARG APPLICATION_NAME
-ARG UID=1001
-ARG GID=1001
-ARG USERNAME=dev
 
 ENV GIT_URL="https://github.com/AlignmentResearch/${APPLICATION_NAME}"
 
-ENV DEBIAN_FRONTEND=noninteractive
-MAINTAINER Adrià Garriga-Alonso <adria@far.ai>
+LABEL org.opencontainers.image.authors="Adrià Garriga-Alonso <adria@far.ai>"
 LABEL org.opencontainers.image.source=${GIT_URL}
-
-RUN apt-get update -q \
-    && apt-get install -y --no-install-recommends \
-    # essential for running.
-    git git-lfs tini python3-dev python3-venv \
-    # devbox niceties
-    curl vim tmux less sudo \
-    # CircleCI
-    ssh \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Tini: reaps zombie processes and forwards signals
-ENTRYPOINT ["/usr/bin/tini", "--"]
-
-# Devbox niceties
-WORKDIR "/devbox-niceties"
-## the Unison file synchronizer
-RUN curl -OL https://github.com/bcpierce00/unison/releases/download/v2.53.4/unison-2.53.4-ubuntu-x86_64-static.tar.gz \
-    && tar xf unison-2.53.4-ubuntu-x86_64-static.tar.gz \
-    && mv bin/unison bin/unison-fsmonitor /usr/local/bin/ \
-    && rm -rf /devbox-niceties \
-## Terminfo for the Alacritty terminal
-    && curl -L https://raw.githubusercontent.com/alacritty/alacritty/master/extra/alacritty.info | tic -x /dev/stdin
-
-# Simulate virtualenv activation
-ENV VIRTUAL_ENV="/opt/venv"
-ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
-
-RUN python3 -m venv "${VIRTUAL_ENV}" --system-site-packages \
-    && addgroup --gid ${GID} ${USERNAME} \
-    && adduser --uid ${UID} --gid ${GID} --disabled-password --gecos '' ${USERNAME} \
-    && usermod -aG sudo ${USERNAME} \
-    && echo "${USERNAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
-    && mkdir -p "/workspace" \
-    && chown -R ${USERNAME}:${USERNAME} "${VIRTUAL_ENV}" "/workspace"
-USER ${USERNAME}
-WORKDIR "/workspace"
 
 # Get a pip modern enough that can resolve farconf
 RUN pip install "pip ==24.0" && rm -rf "${HOME}/.cache"

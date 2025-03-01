@@ -1,0 +1,101 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {NAME}
+  labels:
+    kueue.x-k8s.io/queue-name: farai
+spec:
+  suspend: true
+  backoffLimit: 1  # How many times to try to run the job until giving up
+  template:
+    metadata:
+      name: {NAME}
+    spec:
+      securityContext:
+        runAsUser: {USER_ID}
+        runAsGroup: {GROUP_ID}
+      priorityClassName: interactive
+      volumes:
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: "{SHM_SIZE}"
+      - name: training
+        persistentVolumeClaim:
+          claimName: vast-learned-planners
+      containers:
+      - name: devbox-container
+        image: "{IMAGE}"
+        imagePullPolicy: Always
+        command:
+          - bash
+          - -c
+          - |
+            git pull
+            git checkout {COMMIT_HASH}
+            git submodule update --recursive
+
+            # Start bazel-remote in the background
+            mkdir -p $HOME/.cache/bazel-remote
+            bazel-remote --dir=$HOME/.cache/bazel-remote --max_size=${{BAZEL_REMOTE_MAX_SIZE}} &
+
+            sleep 1d
+        resources:
+          requests:
+            cpu: {CPU}
+          limits:
+            memory: "{MEMORY}"
+            # nvidia.com/mig-2g.20gb: {GPU}
+            nvidia.com/gpu: {GPU}
+        env:
+        - name: OMP_NUM_THREADS
+          value: "{CPU}"
+        - name: WANDB_MODE
+          value: offline
+        - name: WANDB_PROJECT
+          value: impala
+        - name: WANDB_ENTITY
+          value: matsrlgoals
+        - name: WANDB_RUN_GROUP
+          value: devbox
+        - name: GIT_ASKPASS
+          value: "true"
+        - name: GITHUB_PAT
+          valueFrom:
+            secretKeyRef:
+              name: github-credentials
+              key: pat
+        - name: WANDB_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: wandb
+              key: api-key
+        - name: GIT_CONFIG_PARAMETERS
+          value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
+        # Bazel Remote S3 Environment Variables
+        - name: BAZEL_REMOTE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: bazel-remote-s3-credentials
+              key: access-key-id
+        - name: BAZEL_REMOTE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bazel-remote-s3-credentials
+              key: secret-access-key
+        - name: BAZEL_REMOTE_S3_ENDPOINT
+          value: "s3.us-east-005.backblazeb2.com"
+        - name: BAZEL_REMOTE_S3_BUCKET
+          value: "learned-planners-buildcache"
+        - name: BAZEL_REMOTE_S3_AUTH_METHOD
+          value: "access_key"
+        - name: BAZEL_REMOTE_MAX_SIZE
+          value: "100"  # in GB
+        volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: training
+          mountPath: /training
+      restartPolicy: Never
+      imagePullSecrets:
+      - name: docker

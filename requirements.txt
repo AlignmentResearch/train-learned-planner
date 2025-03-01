@@ -243,6 +243,8 @@ optax==0.2.4
     #   train-learned-planner (pyproject.toml)
     #   craftax
     #   flax
+optree==0.14.0
+    # via train-learned-planner (pyproject.toml)
 orbax-checkpoint==0.11.6
     # via flax
 packaging==24.2
@@ -398,6 +400,7 @@ typing-extensions==4.12.2
     #   flax
     #   gymnasium
     #   huggingface-hub
+    #   optree
     #   orbax-checkpoint
     #   pydantic
     #   pydantic-core
