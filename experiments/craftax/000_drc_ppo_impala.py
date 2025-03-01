@@ -23,6 +23,7 @@ for gae_lambda in [0.8]:
             config.train_epochs = 4
             config.queue_timeout = 3000
             config.total_timesteps = 1000_000_000
+            config.load_path = Path("/training/craftax/000-drc-ppo-impala/wandb/unruffled-golick-1/local-files/cp_063897600")
             return config
 
         cli, _ = update_fns_to_cli(craftax_drc, update_seeds)
