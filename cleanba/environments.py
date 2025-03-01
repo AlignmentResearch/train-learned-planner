@@ -34,8 +34,7 @@ if TYPE_CHECKING:
     from craftax.craftax.craftax_state import StaticEnvParams as CraftaxStaticEnvParams
 
 
-@flax.struct.dataclass
-class EpisodeEvalWrapperState:
+class EpisodeEvalWrapperState(flax.struct.PyTreeNode):
     episode_length: jax.Array
     episode_success: jax.Array
     episode_others: dict[str, jax.Array]
@@ -182,9 +181,16 @@ class EpisodeEvalWrapper(SimpleVectorizedEnvironment[Tuple[TState, EpisodeEvalWr
         info = {**step_out.info, **new_eval_state.update_info()}
         return StepOutput(step_out.obs, new_state, step_out.reward, step_out.terminated, step_out.truncated, info)
 
+    @property
+    def single_observation_space(self) -> Space:
+        return self._env.single_observation_space
 
-@flax.struct.dataclass
-class EnvConfig(abc.ABC, Generic[TState]):
+    @property
+    def single_action_space(self) -> Space:
+        return self._env.single_action_space
+
+
+class EnvConfig(abc.ABC, Generic[TState], flax.struct.PyTreeNode):
     num_envs: int
     max_episode_steps: int
 
@@ -234,14 +240,13 @@ class GymnaxSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[TEnvState]):
         return self.env.action_space(self.params)
 
 
-@flax.struct.dataclass
-class CraftaxEnvConfig(EnvConfig["CraftaxEnvState", "CraftaxEnvParams"]):  # type: ignore
+class CraftaxEnvConfig(EnvConfig["CraftaxEnvState"]):
     static_params: Optional["CraftaxStaticEnvParams"] = None
     obs_flat: bool = False
     classic: bool = False
     symbolic: bool = True
 
-    def make(self) -> SimpleVectorizedEnvironment[CraftaxEnvState]:
+    def make(self) -> SimpleVectorizedEnvironment["CraftaxEnvState"]:
         if self.symbolic:
             from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
@@ -274,7 +279,6 @@ class CraftaxEnvConfig(EnvConfig["CraftaxEnvState", "CraftaxEnvParams"]):  # typ
         return obs_nchw
 
 
-@flax.struct.dataclass
 class EnvpoolEnvConfig(EnvConfig[Any]):
     env_id: str | None = None
 
@@ -301,7 +305,10 @@ class EnvpoolEnvConfig(EnvConfig[Any]):
                     env_kwargs[k] = getattr(self, k)
                 except AttributeError as e:
                     warnings.warn(f"Could not get environment setting: {e}")
-        env = EnvpoolSimpleVectorizedEnvironment(env_id=self.env_id, batch_size=self.num_envs, **env_kwargs, **special_kwargs)  # type: ignore
+        for k in special_kwargs.keys():
+            if k in env_kwargs:
+                env_kwargs.pop(k)
+        env = EnvpoolSimpleVectorizedEnvironment(env_id=self.env_id, **env_kwargs, **special_kwargs)  # type: ignore
         return env
 
 
@@ -309,7 +316,7 @@ def gym_to_gymnax_space(space: gym.Space) -> Space:
     if isinstance(space, gym.spaces.Discrete):
         return Discrete(int(space.n))
     elif isinstance(space, gym.spaces.Box):
-        return Box(low=jnp.array(space.low), high=jnp.array(space.high), shape=jnp.array(space.shape))
+        return Box(low=jnp.array(space.low), high=jnp.array(space.high), shape=tuple(space.shape))
     else:
         raise NotImplementedError(f"Envpool space {space} not implemented")
 
@@ -335,7 +342,7 @@ class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[Any]):
         seed_int = int(seed)
         if existing_handle is None:
             envs = envpool.make_gymnasium(self.env_id, seed=seed_int, batch_size=self.num_envs, **self.kwargs)
-            handle, _send, _recv = envs.xla()
+            handle, _recv, _send, _ = envs.xla()
             self.active_envs[np.array(handle).tobytes()] = envs
             envs.async_reset()  # Send the reset signal
             return handle, _send, _recv
@@ -349,9 +356,11 @@ class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[Any]):
         seed = jax.random.randint(key, (), 0, 2**31 - 1)
         handle = jax.experimental.io_callback(
             lambda seed, existing_handle: self._effectful_make_envs(seed, existing_handle)[0],
+            jnp.zeros((64 // 8,), dtype=jnp.uint8),
+            seed,
+            state,
             ordered=False,
-            result_shape_dtypes=jnp.zeros((64 // 8,), dtype=jnp.uint8),
-        )(seed, state)
+        )
         obs, _ = self._recv(handle)
         return ResetOutput(obs=obs, state=handle)
 
@@ -370,7 +379,6 @@ class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[Any]):
         return gym_to_gymnax_space(self._single_action_space)
 
 
-@flax.struct.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
     env_id: str = "Sokoban-v0"  # type: ignore
 
@@ -420,7 +428,6 @@ class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
         return str(levels_dir)
 
 
-@dataclasses.dataclass
 class BaseSokobanEnvConfig(EnvConfig):
     min_episode_steps: int = 60
     tinyworld_obs: bool = False
@@ -479,8 +486,12 @@ class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[None]):
     def reset_env(self, key: chex.PRNGKey, state: Optional[None] = None) -> ResetOutput[None]:
         seeds = jax.random.randint(key, (self.num_envs,), 0, 2**31 - 1)
         obs = jax.experimental.io_callback(
-            lambda x, seed: x.reset(seed=seed)[0], ordered=False, result_shape_dtypes=self.example_observation
-        )(seeds)
+            lambda x, seed: x.reset(seed=seed)[0],
+            seeds,
+            # TODO: fix the arguments to lambdfa
+            self.example_observation,
+            ordered=False,
+        )
         return ResetOutput(obs=obs, state=None)
 
     def step_env(self, key: chex.PRNGKey, state: None, action: chex.Array) -> StepOutput[None]:
@@ -495,7 +506,6 @@ class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[None]):
         return gym_to_gymnax_space(self.envs[0].action_space)
 
 
-@dataclasses.dataclass
 class SokobanConfig(BaseSokobanEnvConfig):
     "Procedurally-generated Sokoban"
 
@@ -524,7 +534,6 @@ class SokobanConfig(BaseSokobanEnvConfig):
         return out
 
 
-@dataclasses.dataclass
 class BoxobanConfig(BaseSokobanEnvConfig):
     "Sokoban levels from the Boxoban data set"
 
@@ -568,7 +577,6 @@ ATARI_MAX_FRAMES = int(
 # This equals 27k, which is the default max_episode_steps for Atari in Envpool
 
 
-@flax.struct.dataclass
 class AtariEnv(EnvpoolEnvConfig):
     max_episode_steps: int = ATARI_MAX_FRAMES  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
     episodic_life: bool = False  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6

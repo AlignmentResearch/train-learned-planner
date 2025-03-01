@@ -32,9 +32,9 @@ from names_generator import generate_name
 from rich.pretty import pprint
 from typing_extensions import Self
 
-from cleanba.config import Args
+from cleanba.config import Args, random_seed
 from cleanba.convlstm import ConvLSTMConfig
-from cleanba.environments import EpisodeEvalWrapper, convert_to_cleanba_config, random_seed
+from cleanba.environments import EpisodeEvalWrapper, convert_to_cleanba_config
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     SINGLE_DEVICE_UPDATE_DEVICES_AXIS,

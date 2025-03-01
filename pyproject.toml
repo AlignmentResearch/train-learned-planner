@@ -69,6 +69,7 @@ dependencies = [
     "names_generator",
     "GitPython",
     "pytest",
+    "optree",
 ]
 [project.optional-dependencies]
 py-tools = [

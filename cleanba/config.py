@@ -1,13 +1,18 @@
 import dataclasses
+import random
 from dataclasses import field
 from pathlib import Path
 from typing import List, Optional
 
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMConfig
-from cleanba.environments import AtariEnv, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig, random_seed
+from cleanba.environments import AtariEnv, CraftaxEnvConfig, EnvConfig, EnvpoolBoxobanConfig
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig
 from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, MLPConfig, PolicySpec, SokobanResNetConfig
+
+
+def random_seed() -> int:
+    return random.randint(0, 2**31 - 2)
 
 
 @dataclasses.dataclass

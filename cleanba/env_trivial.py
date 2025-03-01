@@ -1,4 +1,3 @@
-import dataclasses
 from functools import partial
 from typing import Any, Callable, Iterable, List, Optional, SupportsFloat, Union
 
@@ -110,7 +109,6 @@ class SeededSyncVectorEnv(gym.vector.SyncVectorEnv):
         return super().step(np.asarray(actions))
 
 
-@dataclasses.dataclass
 class MockSokobanEnvConfig(EnvConfig):
     min_episode_steps: int = 1
     gamma: float = 1.0
