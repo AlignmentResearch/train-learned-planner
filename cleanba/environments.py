@@ -1,12 +1,24 @@
 import abc
 import dataclasses
 import os
-import random
 import warnings
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable, List, Literal, Optional, Self, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Iterable,
+    Literal,
+    NamedTuple,
+    Optional,
+    Self,
+    Tuple,
+    TypeVar,
+)
 
+import chex
 import flax.struct
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
@@ -14,15 +26,16 @@ import jax
 import jax.experimental.compilation_cache
 import jax.numpy as jnp
 import numpy as np
-from gymnasium.vector.utils import batch_space
-from numpy.typing import NDArray
+from gymnax.environments.environment import Environment, TEnvState
+from gymnax.environments.spaces import Box, Discrete, Space
 
 if TYPE_CHECKING:
-    from craftax.craftax.craftax_state import EnvParams
-    from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+    from craftax.craftax.craftax_state import EnvState as CraftaxEnvState
+    from craftax.craftax.craftax_state import StaticEnvParams as CraftaxStaticEnvParams
 
 
-class EpisodeEvalState(flax.struct.PyTreeNode):
+@flax.struct.dataclass
+class EpisodeEvalWrapperState:
     episode_length: jax.Array
     episode_success: jax.Array
     episode_others: dict[str, jax.Array]
@@ -53,9 +66,8 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
     def update(
         self: Self, reward: jnp.ndarray, terminated: jnp.ndarray, truncated: jnp.ndarray, others: dict[str, jnp.ndarray]
     ) -> Self:
-        done = terminated | truncated
-
         new_episode_success = terminated
+        done = terminated | truncated
         new_episode_length = self.episode_length + 1
 
         # Populate things to do tree.map
@@ -84,150 +96,193 @@ class EpisodeEvalState(flax.struct.PyTreeNode):
         }
 
 
-class EpisodeEvalWrapper(gym.vector.VectorEnvWrapper):
+TState = TypeVar("TState")
+
+
+class StepOutput(NamedTuple, Generic[TState]):
+    obs: chex.Array
+    state: TState
+    reward: jnp.ndarray
+    terminated: jnp.ndarray
+    truncated: jnp.ndarray
+    info: dict[str, jnp.ndarray]
+
+
+class ResetOutput(NamedTuple, Generic[TState]):
+    obs: chex.Array
+    state: TState
+
+
+class SimpleVectorizedEnvironment(abc.ABC, Generic[TState]):
+    """Vectorized environment with five methods: reset and step (with truncation), obs and action spaces, and delete."""
+
+    num_envs: int
+
+    @abc.abstractmethod
+    def reset_env(self, key: chex.PRNGKey, state: Optional[TState] = None) -> ResetOutput[TState]: ...
+
+    @abc.abstractmethod
+    def step_env(self, key: chex.PRNGKey, state: TState, action: chex.Array) -> StepOutput[TState]: ...
+
+    @property
+    @abc.abstractmethod
+    def single_observation_space(self) -> Space: ...
+
+    @property
+    @abc.abstractmethod
+    def single_action_space(self) -> Space: ...
+
+    def delete(self, state: TState) -> None:
+        pass
+
+    def example_observation(self) -> chex.Array:
+        return jax.eval_shape(
+            jax.vmap(self.single_observation_space.sample), jax.random.split(jax.random.PRNGKey(0), self.num_envs)
+        )
+
+    def example_action(self) -> chex.Array:
+        return jax.eval_shape(
+            jax.vmap(self.single_action_space.sample), jax.random.split(jax.random.PRNGKey(0), self.num_envs)
+        )
+
+
+class EpisodeEvalWrapper(SimpleVectorizedEnvironment[Tuple[TState, EpisodeEvalWrapperState]]):
     """Log the episode returns and lengths."""
 
-    state: EpisodeEvalState
-
-    def __init__(self, env: gym.vector.VectorEnv):
-        super().__init__(env)
+    def __init__(self, env: SimpleVectorizedEnvironment[TState]):
         self._env = env
+
+    def reset_env(
+        self, key: chex.PRNGKey, state: Optional[TState] = None
+    ) -> ResetOutput[Tuple[TState, EpisodeEvalWrapperState]]:
+        assert key.ndim >= 2, "key must have at least 2 dimensions. That is, the envs must be vectorized."
+        num_envs = key.shape[0]
+        obs, env_state = self._env.reset_env(key, state)
+        step_out = jax.eval_shape(self._env.step_env, key, env_state, self.example_action())
+        eval_state = EpisodeEvalWrapperState.new(num_envs, self._info_achievements(step_out.info).keys())
+        return ResetOutput(obs, (env_state, eval_state))
 
     @staticmethod
     def _info_achievements(info: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in info.items() if "Achievement" in k}
 
-    def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
-        obs, info = self._env.reset()
-        self.state = EpisodeEvalState.new(self._env.num_envs, self._info_achievements(info).keys())
-        return obs, {**info, **self.state.update_info()}
-
-    def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
-        obs, reward, terminated, truncated, info = self._env.step(actions)
+    def step_env(
+        self, key: chex.PRNGKey, state: Tuple[TState, EpisodeEvalWrapperState], action: chex.Array
+    ) -> StepOutput[Tuple[TState, EpisodeEvalWrapperState]]:
+        (env_state, eval_state) = state
+        step_out = self._env.step_env(key, env_state, action)
         # Atari envs clip their reward to [-1, 1], meaning we need to use the reward in `info` to get
         # the true return.
-        non_clipped_rewards = info.get("reward", reward)
-        self.state = self.state.update(non_clipped_rewards, terminated, truncated, self._info_achievements(info))
-        return obs, reward, terminated, truncated, {**info, **self.state.update_info()}
+        non_clipped_rewards = step_out.info.get("reward", step_out.reward)
+        new_eval_state = eval_state.update(
+            non_clipped_rewards, step_out.terminated, step_out.truncated, self._info_achievements(step_out.info)
+        )
+
+        new_state = (step_out.state, new_eval_state)
+        info = {**step_out.info, **new_eval_state.update_info()}
+        return StepOutput(step_out.obs, new_state, step_out.reward, step_out.terminated, step_out.truncated, info)
 
 
-class CraftaxVectorEnv(gym.vector.VectorEnv):
-    """
-    Craftax environment with a generic VectorEnv interface.
-    """
+@flax.struct.dataclass
+class EnvConfig(abc.ABC, Generic[TState]):
+    num_envs: int
+    max_episode_steps: int
 
-    cfg: "CraftaxEnvConfig"
-    env: "CraftaxSymbolicEnv"
-    rng_keys: jnp.ndarray
-    state: Any
-    obs: jnp.ndarray
-    env_params: "EnvParams"
+    @abc.abstractmethod
+    def make(self) -> SimpleVectorizedEnvironment[TState]: ...
 
-    def __init__(self, cfg: "CraftaxEnvConfig"):
-        from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
 
-        self.cfg = cfg
-        self.env = CraftaxSymbolicEnv()
+# skip type checking for env params -- CraftaxEnvParams are not the same as EnvParams
+class GymnaxSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[TEnvState]):
+    env: Environment[TEnvState, Any]
+    num_envs: int
+    params: Any
+    obs_fn: Callable[[chex.Array], chex.Array]
 
-        obs_shape = (8268,) if cfg.obs_flat else (134, 9, 11)  # My guess is it should be (9, 11, 134) should be reversed
-        single_observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float32)
-        single_action_space = gym.spaces.Discrete(self.env.action_space().n)
-        super().__init__(cfg.num_envs, single_observation_space, single_action_space)
+    def __init__(
+        self,
+        env: Environment[TEnvState, Any],
+        num_envs: int,
+        params: Any,
+        obs_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
+    ):
+        self.env = env
+        self.num_envs = num_envs
+        self.params = params
+        self.obs_fn = obs_fn or (lambda x: x)
 
-        self.env_params = self.env.default_params
-        self.closed = False
+    def reset_env(self, key: chex.PRNGKey, state: Optional[TEnvState] = None) -> ResetOutput[TEnvState]:
+        many_keys = jax.random.split(key, self.num_envs)
+        obs, state = jax.vmap(self.env.reset_env, in_axes=(0, None), out_axes=0)(many_keys, self.params)
+        return ResetOutput(self.obs_fn(obs), state)
 
-        self.device, *_ = jax.devices(cfg.jit_backend)
+    def step_env(self, key: chex.PRNGKey, state: TEnvState, action: chex.Array) -> StepOutput[TEnvState]:
+        many_keys = jax.random.split(key, self.num_envs)
+        obs, state, reward, done, info = jax.vmap(self.env.step_env, in_axes=(0, 0, 0, None), out_axes=0)(
+            many_keys, state, action, self.params
+        )
+        truncated = info.get("truncated", jnp.zeros_like(done))
+        terminated = done & (~truncated)
+        return StepOutput(self.obs_fn(obs), state, reward, terminated, truncated, info)
 
-        # set rng_keys, state, obs
-        self.reset(self.cfg.seed)
+    @property
+    def single_observation_space(self) -> Space:
+        return self.env.observation_space(self.params)
 
-    def _process_obs(self, obs_flat):
-        if self.cfg.obs_flat:
-            return obs_flat
+    @property
+    def single_action_space(self) -> Space:
+        return self.env.action_space(self.params)
+
+
+@flax.struct.dataclass
+class CraftaxEnvConfig(EnvConfig["CraftaxEnvState", "CraftaxEnvParams"]):  # type: ignore
+    static_params: Optional["CraftaxStaticEnvParams"] = None
+    obs_flat: bool = False
+    classic: bool = False
+    symbolic: bool = True
+
+    def make(self) -> SimpleVectorizedEnvironment[CraftaxEnvState]:
+        if self.symbolic:
+            from craftax.craftax.envs.craftax_symbolic_env import CraftaxSymbolicEnv
+
+            craftax_env = CraftaxSymbolicEnv(self.static_params)
+            obs_fn = self._make_obs_nchw if self.obs_flat else None
+        else:
+            from craftax.craftax.envs.craftax_pixels_env import CraftaxPixelsEnv
+
+            if self.obs_flat:
+                raise ValueError("You probably don't want to use the pixels env with obs_flat=True")
+            obs_fn = None
+            craftax_env = CraftaxPixelsEnv(self.static_params)
+
+        default_params = craftax_env.default_params
+        default_params.max_timesteps = self.max_episode_steps
+        env = GymnaxSimpleVectorizedEnvironment(craftax_env, self.num_envs, default_params, obs_fn)
+        return env
+
+    @staticmethod
+    def _make_obs_nchw(obs_flat):
         expected_size = 8268
         assert obs_flat.shape[0] == expected_size, (
             f"Observation size mismatch: got {obs_flat.shape[0]}, expected {expected_size}"
         )
-
         mapobs = obs_flat[:8217].reshape(9, 11, 83)
         invobs = obs_flat[8217:].reshape(51)
         invobs_spatial = invobs.reshape(1, 1, 51).repeat(9, axis=0).repeat(11, axis=1)
         obs_nhwc = jnp.concatenate([mapobs, invobs_spatial], axis=-1)  # (9, 11, 134)
         obs_nchw = jnp.transpose(obs_nhwc, (2, 0, 1))  # (134, 9, 11)
-
         return obs_nchw
 
-    @partial(jax.jit, static_argnames=("self",))
-    @partial(jax.vmap, in_axes=(None, 0))
-    def _reset_wait_pure(self, key: jnp.ndarray) -> Tuple[jnp.ndarray, Any, jnp.ndarray]:
-        key, reset_key = jax.random.split(key)
-        obs_flat, state = self.env.reset_env(reset_key, self.env_params)
-        obs_processed = self._process_obs(obs_flat)
-        return obs_processed, state, key
 
-    def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[jnp.ndarray, dict]:
-        """Reset the environment."""
-        if isinstance(seed, int):
-            self.rng_keys = jax.random.split(jax.random.PRNGKey(seed), self.num_envs)
-        elif isinstance(seed, list):
-            assert len(seed) == self.num_envs
-            self.rng_keys = jax.jit(jax.vmap(jax.random.PRNGKey))(jnp.asarray(seed))
-        self.rng_keys = jax.device_put(self.rng_keys, self.device)
-        self.obs, self.state, self.rng_keys = self._reset_wait_pure(self.rng_keys)
-        return self.obs, {}
-
-    @partial(jax.jit, static_argnames=("self",))
-    @partial(jax.vmap, in_axes=(None, 0, 0, 0))
-    def _step_pure(self, key, state, action):
-        key, step_key = jax.random.split(key)
-        obs_flat, state, rewards, dones, info = self.env.step(step_key, state, action)
-        terminated = dones
-        # assume no truncation (basically true as agent does not survive long enough)
-        truncated = jnp.zeros_like(dones, dtype=bool)
-        assert terminated.dtype == truncated.dtype
-        obs = self._process_obs(obs_flat)
-        return key, obs, state, rewards, terminated, truncated, info
-
-    def step(self, actions: jnp.ndarray) -> Tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
-        """Execute one step in the environment."""
-        actions = jax.device_put(actions, self.device)
-        self.rng_keys, self.obs, self.state, rewards, terminated, truncated, info = self._step_pure(
-            self.rng_keys, self.state, actions
-        )
-        return self.obs, rewards, terminated, truncated, info
-
-    def close(self, **kwargs):
-        self.closed = True
-
-
-def random_seed() -> int:
-    return random.randint(0, 2**31 - 2)
-
-
-@dataclasses.dataclass
-class EnvConfig(abc.ABC):
-    max_episode_steps: int
-    num_envs: int = 0  # gets overwritten anyways
-    seed: int = dataclasses.field(default_factory=random_seed)
-
-    @property
-    @abc.abstractmethod
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
-        """Create a vector environment."""
-        ...
-
-
-@dataclasses.dataclass
-class EnvpoolEnvConfig(EnvConfig):
+@flax.struct.dataclass
+class EnvpoolEnvConfig(EnvConfig[Any]):
     env_id: str | None = None
 
     num_threads: int = 0
     thread_affinity_offset: int = -1
     max_num_players: int = 1
 
-    @property
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+    def make(self) -> SimpleVectorizedEnvironment[Any]:
         # Import envpool only when needed so we can run on Mac OS
         import envpool
 
@@ -246,56 +301,78 @@ class EnvpoolEnvConfig(EnvConfig):
                     env_kwargs[k] = getattr(self, k)
                 except AttributeError as e:
                     warnings.warn(f"Could not get environment setting: {e}")
-
-        vec_envs_fn = partial(
-            EnvpoolVectorEnv,
-            self.num_envs,
-            partial(envpool.make_gymnasium, self.env_id, **special_kwargs, **env_kwargs),
-            remove_last_action=getattr(self, "nn_without_noop", False),
-        )
-        return vec_envs_fn
+        env = EnvpoolSimpleVectorizedEnvironment(env_id=self.env_id, batch_size=self.num_envs, **env_kwargs, **special_kwargs)  # type: ignore
+        return env
 
 
-class EnvpoolVectorEnv(gym.vector.VectorEnv):
-    def __init__(self, num_envs: int, envs_fn: Callable[[], Any], remove_last_action: bool = False):
-        envs = envs_fn()
-        if remove_last_action:
-            envs.action_space.n -= 1  # can't set envs.action_space directly as it has no setter
-        super().__init__(num_envs=num_envs, observation_space=envs.observation_space, action_space=envs.action_space)
-        self.envs = envs
+def gym_to_gymnax_space(space: gym.Space) -> Space:
+    if isinstance(space, gym.spaces.Discrete):
+        return Discrete(int(space.n))
+    elif isinstance(space, gym.spaces.Box):
+        return Box(low=jnp.array(space.low), high=jnp.array(space.high), shape=jnp.array(space.shape))
+    else:
+        raise NotImplementedError(f"Envpool space {space} not implemented")
 
-    def step(self, actions: np.ndarray) -> Tuple[Any, NDArray[Any], NDArray[Any], NDArray[Any], dict]:
+
+class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[Any]):
+    def __init__(self, env_id: str, batch_size: int, remove_last_action: bool = False, **kwargs):
+        self.env_id = env_id
+        self.num_envs = batch_size
+        self.kwargs = kwargs
+        self.remove_last_action = remove_last_action
+
+        # State of the envpools
+        self.active_envs = {}
+        handle, self._send, self._recv = self._effectful_make_envs(np.array(0))
+        envs = self.active_envs[np.array(handle).tobytes()]
+        self._single_observation_space = envs.observation_space
+        self._single_action_space = envs.action_space
+
+    def _effectful_make_envs(self, seed: np.ndarray, existing_handle: Optional[np.ndarray] = None) -> Any:
+        import envpool
+
+        assert seed.shape == ()
+        seed_int = int(seed)
+        if existing_handle is None:
+            envs = envpool.make_gymnasium(self.env_id, seed=seed_int, batch_size=self.num_envs, **self.kwargs)
+            handle, _send, _recv = envs.xla()
+            self.active_envs[np.array(handle).tobytes()] = envs
+            envs.async_reset()  # Send the reset signal
+            return handle, _send, _recv
+        else:
+            envs = self.active_envs[np.array(existing_handle).tobytes()]
+            envs.async_reset()  # Send the reset signal
+            return existing_handle
+
+    def reset_env(self, key: chex.PRNGKey, state: Optional[Any] = None) -> ResetOutput[Any]:
+        chex.assert_rank(key, 1)
+        seed = jax.random.randint(key, (), 0, 2**31 - 1)
+        handle = jax.experimental.io_callback(
+            lambda seed, existing_handle: self._effectful_make_envs(seed, existing_handle)[0],
+            ordered=False,
+            result_shape_dtypes=jnp.zeros((64 // 8,), dtype=jnp.uint8),
+        )(seed, state)
+        obs, _ = self._recv(handle)
+        return ResetOutput(obs=obs, state=handle)
+
+    def step_env(self, key: chex.PRNGKey, state: Any, action: chex.Array) -> StepOutput[Any]:
         """Execute one step in the environment."""
-        self.envs.send(np.array(actions))
-        return self.envs.recv()
-
-    def reset(self, seed: Optional[Union[int, List[int]]] = None, options: Optional[dict] = None) -> Tuple[Any, dict]:
-        """Reset the environment."""
-        assert seed is None
-        assert not options
-        self.envs.async_reset()
-        return self.envs.recv(reset=True, return_info=self.envs.config["gym_reset_return_info"])
-
-
-@dataclasses.dataclass
-class CraftaxEnvConfig(EnvConfig):
-    """Configuration class for integrating Craftax with IMPALA."""
-
-    max_episode_steps: int
-    num_envs: int = 1
-    seed: int = dataclasses.field(default_factory=random_seed)
-    obs_flat: bool = False
-    jit_backend: str = dataclasses.field(default_factory=lambda: jax.devices()[0].platform)
+        handle = state
+        obs, reward, terminated, truncated, info = self._send(handle, action, env_id=None)
+        return StepOutput(obs=obs, state=handle, reward=reward, terminated=terminated, truncated=truncated, info=info)
 
     @property
-    def make(self) -> Callable[[], CraftaxVectorEnv]:  # type: ignore
-        # This property returns a function that creates the Craftax environment wrapper.
-        return lambda: CraftaxVectorEnv(self)
+    def single_observation_space(self) -> Space:
+        return gym_to_gymnax_space(self._single_observation_space)
+
+    @property
+    def single_action_space(self) -> Space:
+        return gym_to_gymnax_space(self._single_action_space)
 
 
-@dataclasses.dataclass
+@flax.struct.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
-    env_id: str = "Sokoban-v0"
+    env_id: str = "Sokoban-v0"  # type: ignore
 
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
@@ -388,44 +465,34 @@ class BaseSokobanEnvConfig(EnvConfig):
         )
 
 
-class VectorNHWCtoNCHWWrapper(gym.vector.VectorEnvWrapper):
-    def __init__(self, env: gym.vector.VectorEnv, nn_without_noop: bool = False, use_np_arrays: bool = False):
-        super().__init__(env)
-        self.use_np_arrays = use_np_arrays
-        obs_space = env.single_observation_space
-        if isinstance(obs_space, gym.spaces.Box):
-            shape = (obs_space.shape[2], *obs_space.shape[:2], *obs_space.shape[3:])
-            low = obs_space.low if isinstance(obs_space.low, float) else np.moveaxis(obs_space.low, 2, 0)
-            high = obs_space.high if isinstance(obs_space.high, float) else np.moveaxis(obs_space.high, 2, 0)
-            self.single_observation_space = gym.spaces.Box(low, high, shape, dtype=obs_space.dtype)
-        else:
-            raise NotImplementedError(f"{type(obs_space)=}")
+class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[None]):
+    def __init__(
+        self,
+        make_fn: Callable[[], gym.Env],
+        nn_without_noop: bool,
+        num_envs: int,
+        obs_fn: Optional[Callable[[chex.Array], chex.Array]] = None,
+    ):
+        self.envs = [make_fn() for _ in range(num_envs)]
+        self.num_envs = num_envs
 
-        self.num_envs = env.num_envs
-        self.observation_space = batch_space(self.single_observation_space, n=self.num_envs)
+    def reset_env(self, key: chex.PRNGKey, state: Optional[None] = None) -> ResetOutput[None]:
+        seeds = jax.random.randint(key, (self.num_envs,), 0, 2**31 - 1)
+        obs = jax.experimental.io_callback(
+            lambda x, seed: x.reset(seed=seed)[0], ordered=False, result_shape_dtypes=self.example_observation
+        )(seeds)
+        return ResetOutput(obs=obs, state=None)
 
-        if nn_without_noop:
-            assert isinstance(env.single_action_space, gym.spaces.Discrete)
-            env.single_action_space = gym.spaces.Discrete(env.single_action_space.n - 1)
-            env.action_space = batch_space(env.single_action_space, n=self.num_envs)
-        self.single_action_space = env.single_action_space
-        self.action_space = env.action_space
+    def step_env(self, key: chex.PRNGKey, state: None, action: chex.Array) -> StepOutput[None]:
+        raise NotImplementedError("Not implemented")
 
-    def reset(self, **kwargs) -> tuple[Any, dict]:
-        obs, info = super().reset(**kwargs)
-        return jnp.moveaxis(obs, 3, 1), info
+    @property
+    def single_observation_space(self) -> Space:
+        return gym_to_gymnax_space(self.envs[0].observation_space)
 
-    def step(self, actions: jnp.ndarray) -> tuple[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray, dict]:
-        if self.use_np_arrays:
-            actions = np.asarray(actions)
-        obs, reward, terminated, truncated, info = super().step(actions)
-        return jnp.moveaxis(obs, 3, 1), reward, terminated, truncated, info
-
-    @classmethod
-    def from_fn(
-        cls, fn: Callable[[], gym.vector.VectorEnv], nn_without_noop: bool, use_np_arrays: bool
-    ) -> gym.vector.VectorEnv:
-        return cls(fn(), nn_without_noop=nn_without_noop, use_np_arrays=use_np_arrays)
+    @property
+    def single_action_space(self) -> Space:
+        return gym_to_gymnax_space(self.envs[0].action_space)
 
 
 @dataclasses.dataclass
@@ -436,14 +503,12 @@ class SokobanConfig(BaseSokobanEnvConfig):
     num_boxes: int = 4
     num_gen_steps: int | None = None
 
-    @property
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+    def make(self) -> SimpleVectorizedEnvironment[None]:
         kwargs = self.env_kwargs()
         for k in ["dim_room", "num_boxes", "num_gen_steps"]:
             if (a := getattr(self, k)) is not None:
                 kwargs[k] = a
-        make_fn = partial(
-            VectorNHWCtoNCHWWrapper.from_fn,
+        out = GymnasiumSimpleVectorizedEnvironment(
             partial(
                 # We use `gym.vector.make` even though it is deprecated because it gives us `gym.vector.SyncVectorEnv`
                 # instead of `gym.experimental.vector.SyncVectorEnv`.
@@ -452,10 +517,11 @@ class SokobanConfig(BaseSokobanEnvConfig):
                 **kwargs,
                 **self.env_reward_kwargs(),
             ),
-            self.nn_without_noop,
-            use_np_arrays=True,
+            nn_without_noop=self.nn_without_noop,
+            num_envs=self.num_envs,
+            obs_fn=lambda x: np.moveaxis(x, 2, 0),
         )
-        return make_fn
+        return out
 
 
 @dataclasses.dataclass
@@ -467,8 +533,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
     difficulty: Literal["unfiltered", "medium", "hard"] = "unfiltered"
     level_idxs_path: Path | None = None
 
-    @property
-    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+    def make(self) -> SimpleVectorizedEnvironment[None]:
         if self.difficulty == "hard":
             if self.split is not None:
                 raise ValueError("`hard` levels have no splits")
@@ -476,8 +541,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
             if self.split == "test":
                 raise ValueError("`medium` levels don't have a `test` split")
 
-        make_fn = partial(
-            VectorNHWCtoNCHWWrapper.from_fn,
+        out = GymnasiumSimpleVectorizedEnvironment(
             partial(
                 # We use `gym.vector.make` even though it is deprecated because it gives us `gym.vector.SyncVectorEnv`
                 # instead of `gym.experimental.vector.SyncVectorEnv`.
@@ -492,9 +556,10 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 **self.env_reward_kwargs(),
             ),
             self.nn_without_noop,
-            use_np_arrays=True,  # TODO: use the XLA interface for envpool and set this to false
+            self.num_envs,
+            obs_fn=lambda x: np.moveaxis(x, 2, 0),
         )
-        return make_fn
+        return out
 
 
 ATARI_MAX_FRAMES = int(
@@ -503,7 +568,7 @@ ATARI_MAX_FRAMES = int(
 # This equals 27k, which is the default max_episode_steps for Atari in Envpool
 
 
-@dataclasses.dataclass
+@flax.struct.dataclass
 class AtariEnv(EnvpoolEnvConfig):
     max_episode_steps: int = ATARI_MAX_FRAMES  # Hessel et al. 2018 (Rainbow DQN), Table 3, Max frames per episode
     episodic_life: bool = False  # Machado et al. 2017 (Revisitng ALE: Eval protocols) p. 6
