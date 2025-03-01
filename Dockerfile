@@ -1,11 +1,13 @@
 ARG JAX_DATE
 
-FROM ghcr.io/nvidia/jax:base-${JAX_DATE} AS envpool-environment
+FROM ghcr.io/nvidia/jax:base-${JAX_DATE} AS envpool
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y golang-1.21 git \
     # Linters
-      clang-format clang-tidy \
+    clang-format clang-tidy \
+    # Cmake dependencies, for building CMake to build Envpool
+    openssl libssl-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -40,12 +42,6 @@ COPY --chown=ubuntu:ubuntu .git/modules/envpool ./.git
 # Remove config line stating that the worktree for this repo is elsewhere
 RUN sed -e 's/^.*worktree =.*$//' .git/config > .git/config.new && mv .git/config.new .git/config
 
-# Abort if repo is dirty
-RUN echo "$(git status --porcelain --ignored=traditional)" \
-    && if ! { [ -z "$(git status --porcelain --ignored=traditional)" ] \
-    ; }; then exit 1; fi
-
-FROM envpool-environment AS envpool
 RUN --mount=type=cache,target=${HOME}/.cache,uid=1000,gid=1000 make bazel-release && cp bazel-bin/*.whl .
 
 FROM ghcr.io/nvidia/jax:jax-${JAX_DATE} AS main-pre-pip
@@ -119,9 +115,6 @@ ENV ENVPOOL_WHEEL="envpool-0.9.0-cp312-cp312-linux_x86_64.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "${ENVPOOL_WHEEL}"
 RUN uv pip install "${ENVPOOL_WHEEL}" && rm "${ENVPOOL_WHEEL}"
 
-# Cache Craftax textures
-RUN python -c "import craftax.craftax.constants"
-
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
@@ -134,13 +127,9 @@ RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.c
 # Abort if repo is dirty
 RUN rm NVIDIA_Deep_Learning_Container_License.pdf \
     && echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
-    && echo "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
+    # && echo "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && echo "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
     && if ! { [ -z "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
-    && [ -z "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
+    # && [ -z "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     && [ -z "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
     ; }; then exit 1; fi
-
-
-FROM main AS atari
-RUN uv pip uninstall -y envpool && uv pip install envpool && rm -rf "${HOME}/.cache"
