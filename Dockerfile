@@ -8,8 +8,8 @@ RUN sudo apt-get update \
     clang-format clang-tidy \
     # Cmake dependencies, for building CMake to build Envpool
     openssl libssl-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && sudo apt-get clean \
+    && sudo rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.24.0 from official source
 RUN curl -OL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz \
