@@ -67,7 +67,7 @@ release: release/main
 .PHONY: release-remote release-remote/%
 release-remote/%:
 	git push
-	python -c "print(open('k8s/kaniko-build.yaml').read().format(APPLICATION_NAME='${APPLICATION_NAME}', JAX_DATE='${JAX_DATE}', BUILD_TAG='${BUILD_PREFIX}-$*', RELEASE_TAG='${RELEASE_PREFIX}-$*', COMMIT_HASH='${COMMIT_HASH}', BRANCH_NAME='${BRANCH_NAME}'))" | kubectl create -f -
+	python -c "print(open('k8s/kaniko-build.yaml').read().format(APPLICATION_NAME='${APPLICATION_NAME}', JAX_DATE='${JAX_DATE}', BUILD_TAG='${BUILD_PREFIX}-$*', RELEASE_TAG='${RELEASE_PREFIX}-$*', COMMIT_HASH='${COMMIT_HASH}', BRANCH_NAME='${BRANCH_NAME}', TARGET='$*'))" | kubectl create -f -
 release-remote: release-remote/main
 
 # Section 2: Make Devboxes and local devboxes (with Docker)
