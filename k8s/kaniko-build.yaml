@@ -30,7 +30,7 @@ spec:
             # Destinations to push the images. Can be multiple.
             - --destination=ghcr.io/alignmentresearch/{APPLICATION_NAME}:{RELEASE_TAG}
             - --destination=ghcr.io/alignmentresearch/{APPLICATION_NAME}:{BUILD_TAG}
-            - --verbosity=debug
+            - --verbosity=info
             - --push-retry=3
             - --target={TARGET}
             - "--build-arg=APPLICATION_NAME='{APPLICATION_NAME}'"

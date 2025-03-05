@@ -60,22 +60,16 @@ FROM envpool-devbox AS envpool
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
     make bazel-release && cp bazel-bin/*.whl .
 
-FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS main-pre-pip
-
-ARG APPLICATION_NAME
-
+FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS main
 ENV GIT_URL="https://github.com/AlignmentResearch/${APPLICATION_NAME}"
-
 LABEL org.opencontainers.image.authors="Adrià Garriga-Alonso <adria@far.ai>"
 LABEL org.opencontainers.image.source=${GIT_URL}
 
-# Get a pip modern enough that can resolve farconf
-RUN pip install "pip ==24.0" && rm -rf "${HOME}/.cache"
+ENV USERNAME=dev
+ENV UID=1001
+ENV GID=1001
+ARG APPLICATION_NAME
 
-FROM main-pre-pip AS main-pip-tools
-RUN pip install "pip-tools ~=7.4.1"
-
-FROM main-pre-pip AS main
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} pip install uv
 COPY --chown=${USERNAME}:${USERNAME} requirements.txt ./
 # Install all dependencies, which should be explicit in `requirements.txt`
