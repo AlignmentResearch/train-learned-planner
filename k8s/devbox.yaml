@@ -37,11 +37,12 @@ spec:
             sudo mkdir -p "/training/cleanba"
             sudo chown dev:dev "/training/cleanba"
             git clone https://github.com/google-deepmind/boxoban-levels "/opt/sokoban_cache/boxoban-levels-master"
+            mkdir -p /opt/venv/lib/python3.12/site-packages/envpool/atari/roms  # Hack to work around botched image
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
-            pip install matplotlib jupyter
-            pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            uv pip install matplotlib jupyter
+            uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
             sleep 1d
         resources:
           requests:
