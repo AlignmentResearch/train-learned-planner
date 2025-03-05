@@ -117,8 +117,16 @@ class SimpleVectorizedEnvironment(abc.ABC, Generic[TState]):
 
     num_envs: int
 
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def reset(self, key: chex.PRNGKey, state: Optional[TState] = None) -> StepOutput[TState]:
+        return self.reset_env(key)
+
+    @partial(jax.jit, static_argnums=(0,), donate_argnums=(1,))
+    def step(self, key: chex.PRNGKey, state: TState, action: chex.Array) -> StepOutput[TState]:
+        return self.step_env(key, state, action)
+
     @abc.abstractmethod
-    def reset_env(self, key: chex.PRNGKey, state: Optional[TState] = None) -> ResetOutput[TState]: ...
+    def reset_env(self, key: chex.PRNGKey, state: Optional[TState]) -> ResetOutput[TState]: ...
 
     @abc.abstractmethod
     def step_env(self, key: chex.PRNGKey, state: TState, action: chex.Array) -> StepOutput[TState]: ...
@@ -321,54 +329,67 @@ def gym_to_gymnax_space(space: gym.Space) -> Space:
         raise NotImplementedError(f"Envpool space {space} not implemented")
 
 
-class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[Any]):
+class EnvpoolSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[chex.Array]):
     def __init__(self, env_id: str, batch_size: int, remove_last_action: bool = False, **kwargs):
+        import envpool
+
         self.env_id = env_id
         self.num_envs = batch_size
         self.kwargs = kwargs
         self.remove_last_action = remove_last_action
+        self.envs = None
+        spec = envpool.make_spec(self.env_id)
+        self._single_observation_space = spec.observation_space
+        self._single_action_space = spec.action_space
 
-        # State of the envpools
-        self.active_envs = {}
-        handle, self._send, self._recv = self._effectful_make_envs(np.array(0))
-        envs = self.active_envs[np.array(handle).tobytes()]
-        self._single_observation_space = envs.observation_space
-        self._single_action_space = envs.action_space
-
-    def _effectful_make_envs(self, seed: np.ndarray, existing_handle: Optional[np.ndarray] = None) -> Any:
+    def _reset_env(self, seed: np.ndarray) -> np.ndarray:
         import envpool
 
-        assert seed.shape == ()
-        seed_int = int(seed)
-        if existing_handle is None:
-            envs = envpool.make_gymnasium(self.env_id, seed=seed_int, batch_size=self.num_envs, **self.kwargs)
-            handle, _recv, _send, _ = envs.xla()
-            self.active_envs[np.array(handle).tobytes()] = envs
-            envs.async_reset()  # Send the reset signal
-            return handle, _send, _recv
-        else:
-            envs = self.active_envs[np.array(existing_handle).tobytes()]
-            envs.async_reset()  # Send the reset signal
-            return existing_handle
+        if self.envs is None:
+            self.envs = envpool.make_gymnasium(self.env_id, seed=int(seed), batch_size=self.num_envs, **self.kwargs)
+        self.envs.async_reset()
+        return np.zeros((), dtype=np.int32)
 
     def reset_env(self, key: chex.PRNGKey, state: Optional[Any] = None) -> ResetOutput[Any]:
         chex.assert_rank(key, 1)
         seed = jax.random.randint(key, (), 0, 2**31 - 1)
-        handle = jax.experimental.io_callback(
-            lambda seed, existing_handle: self._effectful_make_envs(seed, existing_handle)[0],
-            jnp.zeros((64 // 8,), dtype=jnp.uint8),
+
+        state = jax.experimental.io_callback(
+            self._reset_env,
             seed,
-            state,
+            jnp.zeros((), dtype=jnp.int32),
             ordered=False,
         )
-        obs, _ = self._recv(handle)
-        return ResetOutput(obs=obs, state=handle)
+        # Split send and recv into two so we can release the GIL in the middle
+        obs = jax.experimental.io_callback(
+            lambda state: self.envs.recv()[0],
+            state,
+            self.example_observation,
+            ordered=False,
+        )
+        return ResetOutput(obs=obs, state=state)
+
+    def _step_env(self, state: np.ndarray, action: np.ndarray) -> np.ndarray:
+        self.envs.send(action)
+        return state + 1
 
     def step_env(self, key: chex.PRNGKey, state: Any, action: chex.Array) -> StepOutput[Any]:
         """Execute one step in the environment."""
-        handle = state
-        obs, reward, terminated, truncated, info = self._send(handle, action, env_id=None)
-        return StepOutput(obs=obs, state=handle, reward=reward, terminated=terminated, truncated=truncated, info=info)
+        state = jax.experimental.io_callback(self._step_env, state, action, jnp.zeros((), dtype=jnp.int32), ordered=False)
+        new_state, (obs, reward, terminated, truncated, info) = jax.experimental.io_callback(
+            lambda s: (s + 1, self.envs.recv()),
+            state,
+            (
+                state,
+                (
+                    self.example_obs,
+                    jnp.zeros(self.num_envs),
+                    jnp.zeros(self.num_envs, dtype=jnp.bool),
+                    jnp.zeros(self.num_envs, dtype=jnp.bool),
+                ),
+            ),
+        )
+        return StepOutput(obs=obs, state=new_state, reward=reward, terminated=terminated, truncated=truncated, info=info)
 
     @property
     def single_observation_space(self) -> Space:
@@ -472,7 +493,7 @@ class BaseSokobanEnvConfig(EnvConfig):
         )
 
 
-class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[None]):
+class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[jax.Array]):
     def __init__(
         self,
         make_fn: Callable[[], gym.Env],
@@ -483,18 +504,18 @@ class GymnasiumSimpleVectorizedEnvironment(SimpleVectorizedEnvironment[None]):
         self.envs = [make_fn() for _ in range(num_envs)]
         self.num_envs = num_envs
 
-    def reset_env(self, key: chex.PRNGKey, state: Optional[None] = None) -> ResetOutput[None]:
+    def reset_env(self, key: chex.PRNGKey) -> ResetOutput[jax.Array]:
         seeds = jax.random.randint(key, (self.num_envs,), 0, 2**31 - 1)
-        obs = jax.experimental.io_callback(
-            lambda x, seed: x.reset(seed=seed)[0],
-            seeds,
+        obs, state = jax.experimental.io_callback(
+            lambda seed: (self.reset(seed=seed)[0], 0),
+            (seeds, jnp.zeros((), dtype=jnp.int64)),
             # TODO: fix the arguments to lambdfa
             self.example_observation,
             ordered=False,
         )
-        return ResetOutput(obs=obs, state=None)
+        return ResetOutput(obs=obs, state=state)
 
-    def step_env(self, key: chex.PRNGKey, state: None, action: chex.Array) -> StepOutput[None]:
+    def step_env(self, key: chex.PRNGKey, state: jax.Array, action: chex.Array) -> StepOutput[jax.Array]:
         raise NotImplementedError("Not implemented")
 
     @property

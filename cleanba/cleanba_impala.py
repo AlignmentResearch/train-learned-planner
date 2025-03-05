@@ -396,7 +396,8 @@ def rollout(
     metrics = {}
 
     # Store the first observation
-    obs_t, _ = envs.reset()
+    key, env_key = jax.random.split(key)
+    obs_t, state_t = envs.reset(env_key)
 
     # Initialize carry_t and episode_starts_t
     key, carry_key = jax.random.split(key)
