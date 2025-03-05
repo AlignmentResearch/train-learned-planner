@@ -1,0 +1,61 @@
+ARG JAX_DATE
+
+FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS envpool-devbox
+ENV DEBIAN_FRONTEND=noninteractive
+RUN sudo apt-get update \
+    && sudo apt-get install -y \
+    # Linters
+    clang-format clang-tidy \
+    # Cmake dependencies, for building CMake to build Envpool
+    openssl libssl-dev \
+    && sudo apt-get clean \
+    && sudo rm -rf /var/lib/apt/lists/*
+
+# Install Go 1.24.0 from official source
+RUN curl -OL https://go.dev/dl/go1.24.0.linux-amd64.tar.gz \
+    && sudo rm -rf /usr/local/go \
+    && sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz \
+    && rm go1.24.0.linux-amd64.tar.gz
+
+
+# Install bazel-remote
+RUN curl -OL 'https://github.com/buchgr/bazel-remote/releases/download/v2.5.0/bazel-remote-2.5.0-linux-x86_64' \
+    && chmod +x bazel-remote-2.5.0-linux-x86_64 \
+    && sudo mv bazel-remote-2.5.0-linux-x86_64 /usr/local/bin/bazel-remote
+ENV USERNAME=dev
+ENV UID=1001
+ENV GID=1001
+USER ${USERNAME}
+ENV HOME=/home/${USERNAME}
+ENV PATH=/usr/local/go/bin:${HOME}/go/bin:$PATH
+
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/bazelisk@v1.25.0 && ln -sf $HOME/go/bin/bazelisk $HOME/go/bin/bazel
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/bazelbuild/buildtools/buildifier@v0.0.0-20231115204819-d4c9dccdfbb1
+# Install Go linting tools
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} go install github.com/google/addlicense@v1.1.1
+
+ENV USE_BAZEL_VERSION=8.1.0
+RUN bazel version
+
+WORKDIR /app
+# Copy the whole repository
+COPY --chown=${USERNAME}:${USERNAME} third_party/envpool .
+
+# Install python-based linting dependencies
+COPY --chown=${USERNAME}:${USERNAME} \
+    third_party/envpool/third_party/pip_requirements/requirements-devtools.txt \
+    third_party/pip_requirements/requirements-devtools.txt
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} pip install -r third_party/pip_requirements/requirements-devtools.txt
+ENV PATH="${HOME}/.local/bin:${PATH}"
+
+# Deal with the fact that envpool is a submodule and has no .git directory
+RUN rm .git
+# Copy the .git repository for this submodule
+COPY --chown=${USERNAME}:${USERNAME} .git/modules/envpool ./.git
+# Remove config line stating that the worktree for this repo is elsewhere
+RUN sed -e 's/^.*worktree =.*$//' .git/config > .git/config.new && mv .git/config.new .git/config
+
+FROM envpool-devbox AS envpool
+
+RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
+    make bazel-release && cp bazel-bin/*.whl .
