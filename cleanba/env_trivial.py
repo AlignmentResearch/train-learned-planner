@@ -1,8 +1,8 @@
-import dataclasses
 from functools import partial
 from typing import Any, Callable, Iterable, List, Optional, SupportsFloat, Union
 
 import gymnasium as gym
+import jax
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
@@ -105,8 +105,10 @@ class SeededSyncVectorEnv(gym.vector.SyncVectorEnv):
             seed = self._seeds
         return super().reset_async(seed, options)
 
+    def step(self, actions: np.ndarray | jax.Array) -> tuple[Any, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        return super().step(np.asarray(actions))
 
-@dataclasses.dataclass
+
 class MockSokobanEnvConfig(EnvConfig):
     min_episode_steps: int = 1
     gamma: float = 1.0

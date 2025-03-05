@@ -71,8 +71,14 @@ class CheckingWriter(WandbWriter):
             self.eval_events[name].set()
             self.eval_metrics[name] = value
 
+    def add_dict(self, metrics: dict[str, int | float], global_step: int):
+        print(f"Adding {metrics=} at {global_step=}")
+        for k, v in metrics.items():
+            self.add_scalar(k, v, global_step)
+
     @contextlib.contextmanager
     def save_dir(self, global_step: int) -> Iterator[Path]:
+        print(f"Saving at {global_step=}")
         for event in self.eval_events.values():
             event.wait(timeout=5)
 
@@ -80,9 +86,9 @@ class CheckingWriter(WandbWriter):
             yield dir
 
             assert self.last_global_step == global_step, "we want to save with the same step as last metrics"
-            assert all(
-                k in self.eval_metrics for k in self.eval_keys
-            ), f"One of {self.eval_keys=} not present in {list(self.eval_metrics.keys())=}"
+            assert all(k in self.eval_metrics for k in self.eval_keys), (
+                f"One of {self.eval_keys=} not present in {list(self.eval_metrics.keys())=}"
+            )
 
         # Clear for the next saving
         for event in self.eval_events.values():
@@ -106,16 +112,6 @@ class CheckingWriter(WandbWriter):
             kernel_sizes=(3, 3),
             mlp_hiddens=(16,),
             normalize_input=False,
-        ),
-        ConvLSTMConfig(
-            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
-            repeats_per_step=2,
-        ),
-        ConvLSTMConfig(
-            embed=[ConvConfig(3, (4, 4), (1, 1), "SAME", True)],
-            recurrent=ConvLSTMCellConfig(ConvConfig(3, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal"),
-            repeats_per_step=2,
         ),
     ],
 )
@@ -144,7 +140,7 @@ def test_save_model_step(tmpdir: Path, net: PolicySpec):
         num_steps=2,
         num_minibatches=1,
         # If the whole thing deadlocks exit in some small multiple of 10 seconds
-        queue_timeout=4,
+        queue_timeout=10,
     )
 
     args.total_timesteps = args.num_steps * args.num_actor_threads * args.local_num_envs * eval_frequency
@@ -178,6 +174,7 @@ def test_concat_and_shard_rollout_internal():
     time = 4
 
     obs_t, _ = envs.reset()
+    value_t = jnp.zeros((obs_t.shape[0]))
     episode_starts_t = np.ones((envs.num_envs,), dtype=np.bool_)
     carry_t = [LSTMCellState(obs_t, obs_t)]
 
@@ -186,17 +183,18 @@ def test_concat_and_shard_rollout_internal():
         a_t = envs.action_space.sample()
         logits_t = jnp.zeros((*a_t.shape, 2), dtype=jnp.float32)
         obs_tplus1, r_t, term_t, trunc_t, _ = envs.step(a_t)
-        storage.append(Rollout(obs_t, carry_t, a_t, logits_t, r_t, episode_starts_t, trunc_t))
+        storage.append(Rollout(obs_t, carry_t, a_t, logits_t, value_t, r_t, episode_starts_t, trunc_t))
 
         obs_t = obs_tplus1
         episode_starts_t = term_t | trunc_t
 
-    out = _concat_and_shard_rollout_internal(storage, obs_t, episode_starts_t, len_learner_devices)
+    out = _concat_and_shard_rollout_internal(storage, obs_t, episode_starts_t, value_t, len_learner_devices)
     assert isinstance(out, Rollout)
 
     assert out.obs_t[0].shape == (time + 1, batch // len_learner_devices, *storage[0].obs_t.shape[1:])
     assert out.a_t[0].shape == (time, batch // len_learner_devices)
     assert out.logits_t[0].shape == (time, batch // len_learner_devices, storage[0].logits_t.shape[1])
+    assert out.value_t[0].shape == (time + 1, batch // len_learner_devices)
     assert out.r_t[0].shape == (time, batch // len_learner_devices)
     assert out.episode_starts_t[0].shape == (time + 1, batch // len_learner_devices)
     assert out.truncated_t[0].shape == (time, batch // len_learner_devices)

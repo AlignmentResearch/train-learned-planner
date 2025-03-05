@@ -23,7 +23,6 @@ spec:
       - name: training
         persistentVolumeClaim:
           claimName: vast-learned-planners
-
       containers:
       - name: devbox-container
         image: "{IMAGE}"
@@ -32,16 +31,14 @@ spec:
           - bash
           - -c
           - |
-            sudo mkdir -p "/opt/sokoban_cache"
-            sudo chown -R dev:dev "/opt/"
-            sudo mkdir -p "/training/cleanba"
-            sudo chown dev:dev "/training/cleanba"
-            git clone https://github.com/google-deepmind/boxoban-levels "/opt/sokoban_cache/boxoban-levels-master"
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
-            pip install matplotlib jupyter
-            pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+            # Start bazel-remote in the background
+            mkdir -p $HOME/.cache/bazel-remote
+            bazel-remote --dir=$HOME/.cache/bazel-remote --max_size=${{BAZEL_REMOTE_MAX_SIZE}} &
+
             sleep 1d
         resources:
           requests:
@@ -75,6 +72,25 @@ spec:
               key: api-key
         - name: GIT_CONFIG_PARAMETERS
           value: "'credential.https://github.com.username=$(GITHUB_PAT)'"
+        # Bazel Remote S3 Environment Variables
+        - name: BAZEL_REMOTE_S3_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: bazel-remote-s3-credentials
+              key: access-key-id
+        - name: BAZEL_REMOTE_S3_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: bazel-remote-s3-credentials
+              key: secret-access-key
+        - name: BAZEL_REMOTE_S3_ENDPOINT
+          value: "s3.us-east-005.backblazeb2.com"
+        - name: BAZEL_REMOTE_S3_BUCKET
+          value: "learned-planners-buildcache"
+        - name: BAZEL_REMOTE_S3_AUTH_METHOD
+          value: "access_key"
+        - name: BAZEL_REMOTE_MAX_SIZE
+          value: "100"  # in GB
         volumeMounts:
         - name: dshm
           mountPath: /dev/shm
@@ -83,4 +99,3 @@ spec:
       restartPolicy: Never
       imagePullSecrets:
       - name: docker
-

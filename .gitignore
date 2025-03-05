@@ -146,4 +146,10 @@ envpool
 .sokoban_cache
 .build
 .vscode
+.vscode/**
 k8s_copy/
+Craftax_Baselines
+
+nsight-profile
+
+uv.lock

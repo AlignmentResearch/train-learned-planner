@@ -32,6 +32,7 @@ spec:
             - --destination=ghcr.io/alignmentresearch/{APPLICATION_NAME}:{BUILD_TAG}
             - --verbosity=debug
             - --push-retry=3
+            - --target={TARGET}
             - "--build-arg=APPLICATION_NAME='{APPLICATION_NAME}'"
             - "--build-arg=JAX_DATE='{JAX_DATE}'"
           volumeMounts:
@@ -49,7 +50,7 @@ spec:
             requests:
               cpu: "50m"
             limits:
-              memory: "20G"
+              memory: "60G"
       restartPolicy: Never
       imagePullSecrets:
       - name: docker

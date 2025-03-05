@@ -1,6 +1,7 @@
 """RMSProp implementation for PyTorch-style RMSProp
 see https://github.com/deepmind/optax/issues/532#issuecomment-1676371843
 """
+
 from typing import Optional
 
 import jax
