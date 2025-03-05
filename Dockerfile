@@ -89,6 +89,9 @@ ENV ENVPOOL_WHEEL="envpool-0.9.0-cp312-cp312-linux_x86_64.whl"
 COPY --from=envpool --chown=${USERNAME}:${USERNAME} "/app/${ENVPOOL_WHEEL}" "${ENVPOOL_WHEEL}"
 RUN uv pip install "${ENVPOOL_WHEEL}" && rm "${ENVPOOL_WHEEL}"
 
+# Cache Craftax textures
+RUN python -c "import craftax.craftax.constants"
+
 # Copy whole repo
 COPY --chown=${USERNAME}:${USERNAME} . .
 RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
