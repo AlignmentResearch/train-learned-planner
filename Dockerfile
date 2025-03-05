@@ -1,10 +1,6 @@
 ARG JAX_DATE
 
-FROM ghcr.io/alignmentresearch/train-learned-planner:614e97a-envpool-devbox AS envpool
-
-RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
-    make bazel-release && cp bazel-bin/*.whl .
-
+FROM ghcr.io/alignmentresearch/train-learned-planner:latest-envpool AS envpool
 FROM ghcr.io/alignmentresearch/flamingo-devbox:jax-${JAX_DATE} AS main
 ENV GIT_URL="https://github.com/AlignmentResearch/${APPLICATION_NAME}"
 LABEL org.opencontainers.image.authors="Adrià Garriga-Alonso <adria@far.ai>"
