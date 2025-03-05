@@ -35,13 +35,3 @@ RUN --mount=type=cache,target=${HOME}/.cache,uid=${UID},gid=${GID} \
 # Set git remote URL to https for all sub-repos
 RUN git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" \
     && (cd third_party/envpool && git remote set-url origin "$(git remote get-url origin | sed 's|git@github.com:|https://github.com/|' )" )
-
-# Abort if repo is dirty
-RUN rm NVIDIA_Deep_Learning_Container_License.pdf \
-    && echo "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
-    # && echo "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
-    && echo "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" \
-    && if ! { [ -z "$(git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
-    # && [ -z "$(cd third_party/envpool && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
-    && [ -z "$(cd third_party/gym-sokoban && git status --porcelain --ignored=traditional | grep -v '.egg-info/$')" ] \
-    ; }; then exit 1; fi
