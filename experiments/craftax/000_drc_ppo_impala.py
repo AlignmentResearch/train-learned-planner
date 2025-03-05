@@ -12,7 +12,7 @@ clis: list[list[str]] = []
 all_args: list[Args] = []
 
 for gae_lambda in [0.8]:
-    for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
+    for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(4)]:
 
         def update_seeds(config: Args) -> Args:
             config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -35,7 +35,7 @@ for gae_lambda in [0.8]:
         clis.append(cli)
 
 runs: list[FlamingoRun] = []
-RUNS_PER_MACHINE = 1
+RUNS_PER_MACHINE = 2
 for i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
         ["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
@@ -49,7 +49,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             GPU=1,
             PRIORITY="normal-batch",
             # PRIORITY="high-batch",
-            XLA_PYTHON_CLIENT_MEM_FRACTION='".9"',  # Can go down to .48
+            XLA_PYTHON_CLIENT_MEM_FRACTION='".48"',  # Can go down to .48
         )
     )
 
