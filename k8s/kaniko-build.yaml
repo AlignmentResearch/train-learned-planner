@@ -48,9 +48,9 @@ spec:
                   key: pat
           resources:
             requests:
-              cpu: "50m"
+              cpu: "4"
             limits:
-              memory: "60G"
+              memory: "200G"
       restartPolicy: Never
       imagePullSecrets:
       - name: docker
