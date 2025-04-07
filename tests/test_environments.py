@@ -7,7 +7,7 @@ import pytest
 
 from cleanba.config import sokoban_drc33_59
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.environments import BoxobanConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
+from cleanba.environments import BoxobanConfig, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
 
 
 def sokoban_has_reset(tile_size: int, old_obs: np.ndarray, new_obs: np.ndarray) -> np.ndarray:
@@ -186,6 +186,7 @@ def test_mock_sokoban_returns(gamma: float, num_envs: int = 7):
             min_episode_steps=8,
             cache_path=Path(__file__).parent,
         ),
+        BoxWorldConfig(max_episode_steps=10, num_envs=5, seed=1234, asynchronous=False, dim_room=8),
         pytest.param(
             EnvpoolBoxobanConfig(
                 max_episode_steps=10,
@@ -200,7 +201,7 @@ def test_mock_sokoban_returns(gamma: float, num_envs: int = 7):
 )
 @pytest.mark.parametrize("nn_without_noop", [True, False])
 def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bool):
-    assert isinstance(cfg, BoxobanConfig) or isinstance(cfg, EnvpoolBoxobanConfig)
+    assert isinstance(cfg, BoxobanConfig) or isinstance(cfg, EnvpoolBoxobanConfig) or isinstance(cfg, BoxWorldConfig)
     cfg.nn_without_noop = nn_without_noop
     envs = cfg.make()
 

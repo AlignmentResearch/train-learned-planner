@@ -13,6 +13,8 @@ import numpy as np
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
 
+import cleanba  # noqa: F401
+
 
 def random_seed() -> int:
     return random.randint(0, 2**31 - 2)
@@ -284,6 +286,38 @@ class BoxobanConfig(BaseSokobanEnvConfig):
                 difficulty=self.difficulty,
                 **self.env_kwargs(),
                 **self.env_reward_kwargs(),
+            ),
+            self.nn_without_noop,
+        )
+        return make_fn
+
+
+@dataclasses.dataclass
+class BoxWorldConfig(EnvConfig):
+    dim_room: int = 12
+    goal_length: int = 4
+    num_distractor: int = 1
+    distractor_length: int = 3
+    max_episode_steps: int = 120
+    collect_key: bool = True
+    nn_without_noop: bool = True
+    asynchronous: bool = True
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        make_fn = partial(
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                gym.vector.make,
+                "BoxWorld-v0",
+                n=self.dim_room,
+                goal_length=self.goal_length,
+                num_distractor=self.num_distractor,
+                distractor_length=self.distractor_length,
+                max_steps=self.max_episode_steps,
+                collect_key=self.collect_key,
+                asynchronous=self.asynchronous,
+                num_envs=self.num_envs,
             ),
             self.nn_without_noop,
         )
