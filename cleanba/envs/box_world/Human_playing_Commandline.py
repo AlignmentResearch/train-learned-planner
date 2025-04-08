@@ -55,7 +55,7 @@ def print_available_actions():
     display_actions = "\n".join(available_actions_list)
     print()
     print("Action out of Range!")
-    print("Available Actions:\n{}".format(display_a1ctions))
+    print("Available Actions:\n{}".format(display_actions))
     print()
 
 
@@ -77,7 +77,9 @@ for i_episode in range(n_rounds):
             print_available_actions()
             continue
 
-        observation, reward, done, info = env.step(action)
+        observation, reward, term, trunc, info = env.step(action)
+        done = term or trunc
+        print(f"Reward: {reward}")
         print(ACTION_LOOKUP[action], reward, done, info)
         print(len(observation), len(observation[0]), len(observation[0][0]))
         if save_images:
