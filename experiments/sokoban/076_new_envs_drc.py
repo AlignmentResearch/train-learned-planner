@@ -4,7 +4,7 @@ from pathlib import Path
 
 from farconf import parse_cli, update_fns_to_cli
 
-from cleanba.config import Args, boxworld_drc33, minipacman_drc33
+from cleanba.config import Args, minipacman_drc33
 from cleanba.environments import random_seed
 from cleanba.launcher import FlamingoRun, group_from_fname, launch_jobs
 
@@ -12,8 +12,11 @@ clis: list[list[str]] = []
 all_args: list[Args] = []
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
-    for base_fn in [boxworld_drc33, minipacman_drc33]:
-        # for base_fn in [minipacman_drc33]:
+    # for base_fn in [boxworld_drc33, minipacman_drc33]:
+    # for base_fn in [boxworld_drc33]:
+    # for ent_coef in [1e-3, 1e-2, 5e-2]:
+    #     for vtrace_lambda in [0.97, 1.0, 0.5]:
+    for base_fn in [minipacman_drc33]:
 
         def update_seeds(config: Args) -> Args:
             config.train_env = dataclasses.replace(config.train_env, seed=env_seed)
@@ -25,6 +28,8 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
 
             config.eval_envs = {}
             config.total_timesteps = 200_000_000
+
+            # config.loss = dataclasses.replace(config.loss, ent_coef=ent_coef, vtrace_lambda=vtrace_lambda)
 
             return config
 

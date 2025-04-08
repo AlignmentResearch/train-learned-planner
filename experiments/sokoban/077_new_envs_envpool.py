@@ -183,11 +183,51 @@ env_params = [
         lstm_trunk_size=13,
         obs_shape=(3, 64, 64),
     ),
-    # EnvParameters("MazeHard-v0", 120, (32, 32, 32), (5, 5, 4), (2, 1, 1), ("same", 0, 0), 3, 3, 1, lstm_trunk_size=25, obs_shape=(3, 64, 64)),
-    # EnvParameters("MinerHard-v0", 120, (32, 32, 32), (3, 3, 3), (3, 1, 1), ("same", "same", 0), 3, 3, 1, lstm_trunk_size=20, obs_shape=(3, 64, 64)),
-    # EnvParameters("ChaserEasy-v0", 120, (32, 32, 32), (7, 4, 4), (2, 2, 1), (0, 0, 0), 3, 3, 1, lstm_trunk_size=11, obs_shape=(3, 64, 64)),
-    # EnvParameters("MazeEasy-v0", 120, (32, 32, 32), (7, 3, 3), (2, 2, 1), (0, "same", "same"), 3, 3, 1, lstm_trunk_size=15, obs_shape=(3, 64, 64)),
-    # EnvParameters("MinerEasy-v0", 120, (32, 32, 32), (7, 4, 4), (2, 2, 1), (0, 0, 0), 3, 3, 1, lstm_trunk_size=10, obs_shape=(3, 64, 64)),
+    EnvParameters(
+        "MazeHard-v0",
+        120,
+        (32, 32, 32),
+        (5, 5, 4),
+        (2, 1, 1),
+        ("same", 0, 0),
+        3,
+        3,
+        1,
+        lstm_trunk_size=25,
+        obs_shape=(3, 64, 64),
+    ),
+    EnvParameters(
+        "MinerHard-v0",
+        120,
+        (32, 32, 32),
+        (3, 3, 3),
+        (3, 1, 1),
+        ("same", "same", 0),
+        3,
+        3,
+        1,
+        lstm_trunk_size=20,
+        obs_shape=(3, 64, 64),
+    ),
+    EnvParameters(
+        "ChaserEasy-v0", 120, (32, 32, 32), (7, 4, 3), (2, 2, 1), (0, 0, 0), 3, 3, 1, lstm_trunk_size=11, obs_shape=(3, 64, 64)
+    ),
+    EnvParameters(
+        "MazeEasy-v0",
+        120,
+        (32, 32, 32),
+        (7, 3, 3),
+        (2, 2, 1),
+        (0, "same", "same"),
+        3,
+        3,
+        1,
+        lstm_trunk_size=15,
+        obs_shape=(3, 64, 64),
+    ),
+    EnvParameters(
+        "MinerEasy-v0", 120, (32, 32, 32), (7, 4, 4), (2, 2, 1), (0, 0, 0), 3, 3, 1, lstm_trunk_size=10, obs_shape=(3, 64, 64)
+    ),
     # atari
     # EnvParameters("Alien-v5", 120, (32, 32, 32), (5, 3, 3), (3, 2, 1), ("same", 0, "same"), 3, 3, 1),
     # EnvParameters("Amidar-v5", 120, (32, 32, 32), (5, 3, 3), (3, 2, 1), ("same", 0, "same"), 3, 3, 1),
@@ -196,13 +236,18 @@ env_params = [
 
 for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
     for env_p in env_params:
-        assert calculate_encoded_shape(
+        actual_lstm_trunk_size = calculate_encoded_shape(
             env_p.obs_shape,
             env_p.embed_channels,
             env_p.embed_kernel_sizes,
             env_p.embed_strides,
             env_p.paddings,
-        ) == (env_p.embed_channels[-1], env_p.lstm_trunk_size, env_p.lstm_trunk_size), f"env_p: {env_p}"
+        )
+        assert actual_lstm_trunk_size == (
+            env_p.embed_channels[-1],
+            env_p.lstm_trunk_size,
+            env_p.lstm_trunk_size,
+        ), f"env_p: {env_p}, actual: {actual_lstm_trunk_size}"
 
         def update_seeds(config: Args) -> Args:
             config.train_env = EnvpoolEnvConfig(env_id=env_p.env_id, max_episode_steps=env_p.max_steps, seed=env_seed)
@@ -262,7 +307,9 @@ runs: list[FlamingoRun] = []
 RUNS_PER_MACHINE = 1
 for i in range(0, len(clis), RUNS_PER_MACHINE):
     this_run_clis = [
-        ["python", "-m", "cleanba.cleanba_impala", *clis[i + j]] for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
+        ["python", "-m", "cleanba.cleanba_impala", *clis[i + j]]
+        for j in range(min(RUNS_PER_MACHINE, len(clis) - i))
+        # ["sleep", "100000"]
     ]
     runs.append(
         FlamingoRun(
