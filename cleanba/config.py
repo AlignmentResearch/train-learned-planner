@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
-from cleanba.environments import AtariEnv, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, random_seed
+from cleanba.environments import AtariEnv, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, MiniPacManConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
@@ -354,4 +354,11 @@ def boxworld_drc33() -> Args:
     )
 
     out.total_timesteps = 200_000_000
+    return out
+
+
+def minipacman_drc33() -> Args:
+    out = boxworld_drc33()
+    out.train_env = MiniPacManConfig(seed=1234, max_episode_steps=500, num_envs=1)
+    out.eval_envs = dict(valid=EvalConfig(MiniPacManConfig(seed=0, max_episode_steps=500, num_envs=256), n_episode_multiple=4))
     return out
