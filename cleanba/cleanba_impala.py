@@ -798,7 +798,6 @@ def train(
         global MUST_STOP_PROGRAM
         MUST_STOP_PROGRAM = False  # setting here as well to False to ensure multiple test cases don't override it
         while not MUST_STOP_PROGRAM:
-            print("train learner_policy_version", args.learner_policy_version)
             args.learner_policy_version += 1
             rollout_queue_get_time_start = time.time()
             sharded_storages = []

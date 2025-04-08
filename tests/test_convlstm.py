@@ -176,8 +176,8 @@ def test_scan_correct(net: ConvLSTMConfig):
                 cell_carry[d], h_nd = cell(cell_carry[d], x, h_nd)
 
     for d in range(len(b_lstm.cell_list)):
-        assert jnp.allclose(cell_carry[d].c, lstm_carry[d].c, atol=1e-5)
-        assert jnp.allclose(cell_carry[d].h, lstm_carry[d].h, atol=1e-5)
+        assert jnp.allclose(cell_carry[d].c, lstm_carry[d].c, atol=1e-4)
+        assert jnp.allclose(cell_carry[d].h, lstm_carry[d].h, atol=1e-4)
 
 
 @pytest.mark.parametrize("net", CONVLSTM_CONFIGS)

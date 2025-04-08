@@ -320,8 +320,15 @@ def sokoban_drc33_59() -> Args:
 
 def boxworld_drc33() -> Args:
     drc_n_n = 3
-
     out = sokoban_resnet59()
+    out.loss = PPOLossConfig(
+        gae_lambda=0.8,
+        gamma=0.99,
+        ent_coef=0.01,
+        vf_coef=0.25,
+        normalize_advantage=False,
+    )
+
 
     out.train_env = BoxWorldConfig(
         seed=1234,
@@ -362,6 +369,21 @@ def boxworld_drc33() -> Args:
     out.total_timesteps = 200_000_000
     return out
 
+
+def boxworld_mlp() -> Args:
+    args = boxworld_drc33()
+    args.net = MLPConfig(hiddens=(512, 512, 512), norm=IdentityNorm(), yang_init=False, activation="tanh", head_scale=0.01)
+    args.loss = PPOLossConfig(
+        gae_lambda=0.8,
+        gamma=0.99,
+        ent_coef=0.01,
+        vf_coef=0.25,
+        normalize_advantage=False,
+    )
+    args.local_num_envs = 256
+    args.num_steps = 16
+    args.train_env.num_distractor = 0
+    return args
 
 def minipacman_drc33() -> Args:
     out = boxworld_drc33()
