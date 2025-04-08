@@ -295,6 +295,7 @@ class BoxobanConfig(BaseSokobanEnvConfig):
 
 @dataclasses.dataclass
 class BoxWorldConfig(EnvConfig):
+    env_id: str = "BoxWorld-v0"
     dim_room: int = 12
     goal_length: int = 4
     num_distractor: int = 1
@@ -314,7 +315,7 @@ class BoxWorldConfig(EnvConfig):
             VectorNHWCtoNCHWWrapper.from_fn,
             partial(
                 gym.vector.make,
-                "BoxWorld-v0",
+                self.env_id,
                 n=self.dim_room,
                 goal_length=self.goal_length,
                 num_distractor=self.num_distractor,

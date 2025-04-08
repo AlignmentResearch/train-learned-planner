@@ -23,8 +23,8 @@ STANDARD_MAP = np.array([
     [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1],
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]])
 
-# ACTION_REMAP = [2, 4, 3, 1, 0]
-ACTION_REMAP = [3, 1, 2, 4, 0]
+ACTION_REMAP = [2, 4, 3, 1, 0]
+# ACTION_REMAP = [3, 1, 2, 4, 0]
 ACTION_LOOKUP = {
     0: "move up",
     1: "move down",
