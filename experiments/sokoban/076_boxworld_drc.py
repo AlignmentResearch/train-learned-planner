@@ -21,6 +21,9 @@ for env_seed, learn_seed in [(random_seed(), random_seed()) for _ in range(1)]:
         config.final_learning_rate = 4e-6
         config.anneal_lr = True
 
+        config.eval_envs = {}
+        config.total_timesteps = 200_000_000
+
         return config
 
     cli, _ = update_fns_to_cli(boxworld_drc33, update_seeds)
@@ -43,7 +46,7 @@ for i in range(0, len(clis), RUNS_PER_MACHINE):
             this_run_clis,
             CONTAINER_TAG="4f8513c-main",
             CPU=6,
-            MEMORY="20G",
+            MEMORY="150G",
             GPU=1,
             PRIORITY="high-batch",
             XLA_PYTHON_CLIENT_MEM_FRACTION='".95"',

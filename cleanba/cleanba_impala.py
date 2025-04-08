@@ -737,8 +737,8 @@ def train(
             devices=runtime_info.global_learner_devices,
         )
 
-        params_queues = []
-        rollout_queues = []
+        params_queues: list[queue.Queue] = []
+        rollout_queues: list[queue.Queue] = []
 
         unreplicated_params = agent_state.params
         key, *actor_keys = jax.random.split(key, 1 + len(args.actor_device_ids))

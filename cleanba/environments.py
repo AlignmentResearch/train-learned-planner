@@ -39,6 +39,7 @@ class EnvpoolEnvConfig(EnvConfig):
     num_threads: int = 0
     thread_affinity_offset: int = -1
     max_num_players: int = 1
+    extra_env_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
@@ -53,7 +54,7 @@ class EnvpoolEnvConfig(EnvConfig):
             batch_size=self.num_envs,
         )
         SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
-        env_kwargs = {}
+        env_kwargs = self.extra_env_kwargs.copy()
         for k in dummy_spec._config_keys:
             if not (k in special_kwargs or k in SPECIAL_KEYS):
                 try:
@@ -328,6 +329,31 @@ ATARI_MAX_FRAMES = int(
     108000 / 4
 )  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
 # This equals 27k, which is the default max_episode_steps for Atari in Envpool
+
+
+@dataclasses.dataclass
+class MiniPacManConfig(EnvConfig):
+    env_id: str = "MiniPacMan-v0"
+    mode: str = "regular"
+    max_episode_steps: int = 1000
+    nn_without_noop: bool = True
+    asynchronous: bool = True
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        make_fn = partial(
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                gym.vector.make,
+                self.env_id,
+                mode=self.mode,
+                frame_cap=self.max_episode_steps,
+                num_envs=self.num_envs,
+                asynchronous=self.asynchronous,
+            ),
+            self.nn_without_noop,
+        )
+        return make_fn
 
 
 @dataclasses.dataclass

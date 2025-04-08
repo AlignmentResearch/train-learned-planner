@@ -353,5 +353,5 @@ def boxworld_drc33() -> Args:
         head_scale=1.0,
     )
 
-    out.total_timesteps = 2_000_000
+    out.total_timesteps = 200_000_000
     return out
