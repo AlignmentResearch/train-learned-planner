@@ -9,6 +9,7 @@ export DOCKERFILE
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
 JAX_DATE=2025-02-22
+PYTHON_VERSION=3.12
 
 default: release/main
 
@@ -29,12 +30,10 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 		-f "${DOCKERFILE}" .
 	touch ".build/with-reqs/${BUILD_PREFIX}/$*"
 
-# NOTE: --extra=extra is for stable-baselines3 testing.
 requirements.txt.new: pyproject.toml
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:jax-${JAX_DATE}" \
-    bash -c "pip install uv \
-		&& cd /workspace \
-		&& uv pip compile --verbose -o requirements.txt.new --extra=py-tools pyproject.toml"
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine" \
+    sh -c "cd /workspace \
+		&& uv pip compile --verbose -o requirements.txt.new --extra=dev pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
