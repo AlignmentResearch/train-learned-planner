@@ -7,7 +7,15 @@ import pytest
 
 from cleanba.config import sokoban_drc33_59
 from cleanba.env_trivial import MockSokobanEnv, MockSokobanEnvConfig
-from cleanba.environments import BoxobanConfig, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, SokobanConfig
+from cleanba.environments import (
+    BoxobanConfig,
+    BoxWorldConfig,
+    CraftaxEnvConfig,
+    EnvConfig,
+    EnvpoolBoxobanConfig,
+    EpisodeEvalWrapper,
+    SokobanConfig,
+)
 
 
 def sokoban_has_reset(tile_size: int, old_obs: np.ndarray, new_obs: np.ndarray) -> np.ndarray:
@@ -116,16 +124,14 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
     assert envs.single_observation_space.shape == (3, *shape)
     assert envs.observation_space.shape == (NUM_ENVS, 3, *shape)
 
-    envs.reset_async()
-    next_obs, info = envs.reset_wait()
+    next_obs, info = envs.reset()
     assert next_obs.shape == (NUM_ENVS, 3, *shape), "jax.lax convs are NCHW but you sent NHWC"
 
     assert (action_shape := envs.action_space.shape) is not None
     for i in range(50):
         prev_obs = next_obs
         actions = np.zeros(action_shape, dtype=np.int64)
-        envs.step_async(actions)
-        next_obs, next_reward, terminated, truncated, info = envs.step_wait()
+        next_obs, next_reward, terminated, truncated, info = envs.step(actions)
 
         assert next_obs.shape == (NUM_ENVS, 3, *shape)
 
@@ -137,6 +143,17 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
             # The environment should terminate | truncate in the same steps as it changes. In practice we're not solving
             # environments so it should always truncate.
             assert np.array_equal(truncated, sokoban_has_reset(tile_size, prev_obs, next_obs))
+
+
+def test_craftax_environment_basics():
+    cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False)
+    envs = EpisodeEvalWrapper(cfg.make())
+    next_obs, info = envs.reset()
+
+    assert (action_shape := envs.action_space.shape) is not None
+    for i in range(50):
+        actions = np.zeros(action_shape, dtype=np.int64)
+        envs.step(actions)
 
 
 @pytest.mark.parametrize("gamma", [1.0, 0.9])
@@ -205,25 +222,22 @@ def test_loading_network_without_noop_action(cfg: EnvConfig, nn_without_noop: bo
     cfg.nn_without_noop = nn_without_noop
     envs = cfg.make()
 
-    envs.reset_async()
-    next_obs, info = envs.reset_wait()
+    next_obs, info = envs.reset()
     assert next_obs.shape == (cfg.num_envs, 3, 10, 10), "jax.lax convs are NCHW but you sent NHWC"
 
     args = sokoban_drc33_59()
     key = jax.random.PRNGKey(42)
     key, agent_params_subkey, carry_key = jax.random.split(key, 3)
     policy, _, agent_params = args.net.init_params(envs, agent_params_subkey)
-    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (
-        not nn_without_noop
-    ), "NOOP action not set correctly"
+    assert agent_params["params"]["actor_params"]["Output"]["kernel"].shape[1] == 4 + (not nn_without_noop), (
+        "NOOP action not set correctly"
+    )
     carry = policy.apply(agent_params, carry_key, next_obs.shape, method=policy.initialize_carry)
     episode_starts_no = jnp.zeros(cfg.num_envs, dtype=jnp.bool_)
 
     assert envs.action_space.shape is not None
     # actions = np.zeros(action_shape, dtype=np.int64)
-    carry, actions, _, key = policy.apply(agent_params, carry, next_obs, episode_starts_no, key, method=policy.get_action)
-    actions = np.asarray(actions)
-    envs.step_async(actions)
-    next_obs, next_reward, terminated, truncated, info = envs.step_wait()
+    carry, actions, _, _, key = policy.apply(agent_params, carry, next_obs, episode_starts_no, key, method=policy.get_action)
+    next_obs, next_reward, terminated, truncated, info = envs.step(actions)
 
     assert next_obs.shape == (cfg.num_envs, 3, 10, 10)

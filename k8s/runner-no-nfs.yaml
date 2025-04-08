@@ -36,7 +36,7 @@ spec:
                 - "true"
       containers:
       - name: devbox-container
-        image: "ghcr.io/alignmentresearch/lp-cleanba:{CONTAINER_TAG}"
+        image: "ghcr.io/alignmentresearch/train-learned-planner:{CONTAINER_TAG}"
         imagePullPolicy: Always
         command:
           - bash

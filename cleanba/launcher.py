@@ -83,9 +83,9 @@ def create_jobs(
     start_number: int,
     runs: Sequence[FlamingoRun],
     group: str,
-    project: str = "lp-cleanba",
-    entity: str = "farai",
-    wandb_mode: str = "online",
+    project: str,
+    entity: str,
+    wandb_mode: str,
     job_template_path: Optional[Path] = None,
 ) -> tuple[Sequence[str], str]:
     launch_id = generate_name(style="hyphen")
@@ -148,15 +148,21 @@ def launch_jobs(
 ) -> tuple[str, str]:
     repo = Repo(".")
     repo.remote("origin").push(repo.active_branch.name)  # Push to an upstream branch with the same name
-    start_number = 1 + len(wandb.Api().runs(f"{entity}/{project}"))
+    try:
+        start_number = 1 + len(wandb.Api().runs(f"{entity}/{project}"))
+    except ValueError as e:
+        if str(e).startswith("Could not find project"):
+            start_number = 1
+        else:
+            raise
     jobs, launch_id = create_jobs(
         start_number,
-        runs,
+        runs=runs,
         group=group,
-        job_template_path=job_template_path,
-        wandb_mode=wandb_mode,
         project=project,
         entity=entity,
+        wandb_mode=wandb_mode,
+        job_template_path=job_template_path,
     )
     yamls_for_all_jobs = "\n\n---\n\n".join(jobs)
 

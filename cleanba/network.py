@@ -1,6 +1,6 @@
 import abc
 import dataclasses
-from typing import Any, Literal, SupportsFloat
+from typing import Any, Literal, SupportsFloat, Tuple
 
 import flax.linen as nn
 import gymnasium as gym
@@ -14,8 +14,7 @@ AgentParams = dict[str, Any]
 
 class NormConfig(abc.ABC):
     @abc.abstractmethod
-    def __call__(self, x: jax.Array) -> jax.Array:
-        ...
+    def __call__(self, x: jax.Array) -> jax.Array: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -48,8 +47,7 @@ class PolicySpec(abc.ABC):
     head_scale: float = 1.0
 
     @abc.abstractmethod
-    def make(self) -> nn.Module:
-        ...
+    def make(self) -> nn.Module: ...
 
     def init_params(self, envs: gym.vector.VectorEnv, key: jax.Array) -> tuple["Policy", PolicyCarryT, Any]:
         policy = Policy(n_actions_from_envs(envs), self)
@@ -106,18 +104,15 @@ class Policy(nn.Module):
         self.critic_params = Critic(self.cfg.yang_init, self.cfg.norm, self.cfg.head_scale)
 
     def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
-        # Convert from NCHW to NHWC
-        assert len(x.shape) == 4, "x must be a NCHW image"
-        # assert (
-        #     x.shape[2] == x.shape[3]
-        # ), f"x is not a rectangular NCHW image, but is instead {x.shape=}. This is probably wrong."
-
-        x = jnp.transpose(x, (0, 2, 3, 1))
+        # Convert from NCHW to NHWC if needed
+        if len(x.shape) == 4:
+            x = jnp.transpose(x, (0, 2, 3, 1))
 
         if self.cfg.normalize_input:
+            print(f"Normalizing input image {x.shape=}")
             x = x - jnp.mean(x, axis=(0, 1), keepdims=True)
             x = x / jax.lax.rsqrt(jnp.mean(jnp.square(x), axis=(0, 1), keepdims=True))
-        else:
+        elif jnp.dtype(x) == jnp.uint8:
             x = x / 255.0
 
         return x
@@ -130,9 +125,11 @@ class Policy(nn.Module):
         key: jax.Array,
         *,
         temperature: float = 1.0,
-    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array]:
-        assert len(obs.shape) == 4
+    ) -> tuple[PolicyCarryT, jax.Array, jax.Array, jax.Array, jax.Array]:
+        # assert len(obs.shape) == 4
         assert len(episode_starts.shape) == 1
+        print(f"{obs.shape=}")
+        print(f"{episode_starts.shape=}")
         assert episode_starts.shape[:1] == obs.shape[:1]
 
         obs = self._maybe_normalize_input_image(obs)
@@ -141,7 +138,9 @@ class Policy(nn.Module):
         else:
             carry, hidden = self.network_params.step(carry, obs, episode_starts)
         logits, _ = self.actor_params(hidden)
+        value, _ = self.critic_params(hidden)
         assert isinstance(logits, jax.Array)
+        assert isinstance(value, jax.Array)
 
         if temperature == 0.0:
             action = jnp.argmax(logits, axis=1)
@@ -151,7 +150,7 @@ class Policy(nn.Module):
             key, subkey = jax.random.split(key)
             u = jax.random.uniform(subkey, shape=logits.shape)
             action = jnp.argmax(logits / temperature - jnp.log(-jnp.log(u)), axis=1)
-        return carry, action, logits, key
+        return carry, action, logits, value.squeeze(-1), key
 
     def get_logits_and_value(
         self,
@@ -159,7 +158,6 @@ class Policy(nn.Module):
         obs: jax.Array,
         episode_starts: jax.Array,
     ) -> tuple[PolicyCarryT, jax.Array, jax.Array, dict[str, jax.Array]]:
-        assert len(obs.shape) == 5
         assert len(episode_starts.shape) == 2
         assert episode_starts.shape[:2] == obs.shape[:2]
 
@@ -311,10 +309,10 @@ class Critic(nn.Module):
         if self.yang_init:
             kernel_init = yang_initializer("output", "identity")
         else:
-            kernel_init = nn.initializers.orthogonal(1.0)
+            kernel_init = nn.initializers.orthogonal(self.kernel_scale)
         bias_init = nn.initializers.zeros_init()
         x = self.norm(x)
-        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x) * self.kernel_scale
+        x = nn.Dense(1, kernel_init=kernel_init, bias_init=bias_init, use_bias=True, name="Output")(x)
         bias = jnp.squeeze(self.variables["params"]["Output"]["bias"])
         return x, {"critic_ma": jnp.mean(jnp.abs(x)), "critic_bias": bias, "critic_diff": jnp.mean(x - bias)}
 
@@ -574,4 +572,31 @@ class GuezResNet(nn.Module):
             else:
                 x = nn.Dense(hidden)(x)
             x = nn.relu(x)
+        return x
+
+
+@dataclasses.dataclass(frozen=True)
+class MLPConfig(PolicySpec):
+    hiddens: Tuple[int, ...] = (256, 256)
+    activation: str = "relu"
+
+    yang_init: bool = dataclasses.field(default=False)
+    norm: NormConfig = dataclasses.field(default_factory=IdentityNorm)
+    normalize_input: bool = False
+
+    def make(self) -> "MLP":
+        return MLP(self)
+
+
+class MLP(nn.Module):
+    cfg: MLPConfig
+
+    @nn.compact
+    def __call__(self, x):
+        activation_fn = {"relu": nn.relu, "tanh": nn.tanh}[self.cfg.activation]
+        x = jnp.reshape(x, (x.shape[0], -1))
+        for hidden in self.cfg.hiddens:
+            x = self.cfg.norm(x)
+            x = nn.Dense(hidden, use_bias=True, kernel_init=nn.initializers.orthogonal(2**0.5))(x)
+            x = activation_fn(x)
         return x

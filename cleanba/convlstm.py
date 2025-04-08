@@ -53,17 +53,16 @@ class BaseLSTMConfig(PolicySpec):
     mlp_hiddens: Tuple[int, ...] = (256,)
     skip_final: bool = True
     residual: bool = False
+    use_relu: bool = False
 
     @abc.abstractmethod
-    def make(self) -> "BaseLSTM":
-        ...
+    def make(self) -> "BaseLSTM": ...
 
 
 @dataclasses.dataclass(frozen=True)
 class ConvLSTMConfig(BaseLSTMConfig):
     embed: List[ConvConfig] = dataclasses.field(default_factory=list)
     recurrent: ConvLSTMCellConfig = ConvLSTMCellConfig(ConvConfig(32, (3, 3), (1, 1), "SAME", True))
-    use_relu: bool = True
 
     def make(self) -> "ConvLSTM":
         return ConvLSTM(self)
@@ -114,8 +113,7 @@ class BaseLSTM(nn.Module):
         self.dense_list = [nn.Dense(hidden) for hidden in self.cfg.mlp_hiddens]
 
     @abc.abstractmethod
-    def _compress_input(self, x: jax.Array) -> jax.Array:
-        ...
+    def _compress_input(self, x: jax.Array) -> jax.Array: ...
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
@@ -126,7 +124,9 @@ class BaseLSTM(nn.Module):
         """
         Applies all cells in `self.cell_list` once. `Inputs` gets passed as the input to every cell
         """
-        assert len(inputs.shape) == 4
+        assert len(inputs.shape) == 4 or len(inputs.shape) == 2, (
+            f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        )
         carry = list(carry)  # copy
 
         # Top-down skip connection from previous time step
@@ -152,7 +152,9 @@ class BaseLSTM(nn.Module):
         Applies all cells in `self.cell_list`, several times: `self.cfg.repeats_per_step` times. Preprocesses the carry
         so it gets zeroed at the start of an episode
         """
-        assert len(inputs.shape) == 4
+        assert len(inputs.shape) == 4 or len(inputs.shape) == 2, (
+            f"inputs shape must be [batch, c, h, w] or [batch, c] but is {inputs.shape=}"
+        )
         assert len(episode_starts.shape) == 1
 
         not_reset = ~episode_starts
@@ -223,30 +225,6 @@ class ConvLSTM(BaseLSTM):
             w //= conv.strides[0]
             h //= conv.strides[1]
         return super().initialize_carry(rng, (n, h, w, c))
-
-
-class LSTM(BaseLSTM):
-    cfg: LSTMConfig
-
-    def setup(self):
-        super().setup()
-        self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
-        self.cell_list = []  # LSTMCell(self.cfg.cell, features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)]
-
-    def _compress_input(self, x: jax.Array) -> jax.Array:
-        assert len(x.shape) == 4, f"observations shape must be [batch, c, h, w] but is {x.shape=}"
-
-        # Flatten input
-        x = jnp.reshape(x, (x.shape[0], math.prod(x.shape[1:])))
-
-        for c in self.compress_list:
-            x = c(x)
-            x = nn.relu(x)
-        return x
-
-    @nn.nowrap
-    def initialize_carry(self, rng, input_shape) -> LSTMState:
-        return super().initialize_carry(rng, (input_shape[0], self.cfg.embed_hiddens[-1]))
 
 
 class ConvLSTMCell(nn.RNNCellBase):
@@ -356,3 +334,58 @@ class ConvLSTMCell(nn.RNNCellBase):
 
     def num_feature_axes(self) -> int:
         return 3
+
+
+class LSTMCell(nn.Module):
+    features: int
+
+    @nn.compact
+    def __call__(
+        self, carry: LSTMCellState, inputs: jax.Array, prev_layer_hidden: jax.Array
+    ) -> tuple[LSTMCellState, jax.Array]:
+        # Concatenate inputs with prev_layer_hidden
+        combined_inputs = jnp.concatenate([inputs, prev_layer_hidden], axis=-1)
+
+        # Use Flax's built-in LSTM implementation
+        lstm = nn.LSTMCell(features=self.features)
+        # Convert our state format to Flax's format
+        flax_carry = (carry.c, carry.h)
+        # Apply the LSTM
+        (new_c, new_h), out = lstm(flax_carry, combined_inputs)
+        # Convert back to our state format
+        return LSTMCellState(c=new_c, h=new_h), out
+
+    @nn.nowrap
+    def initialize_carry(self, rng: jax.Array, input_shape: tuple[int, ...]) -> LSTMCellState:
+        # Initialize with zeros like the ConvLSTMCell
+        shape = (*input_shape[:-1], self.features)
+        c_rng, h_rng = jax.random.split(rng, 2)
+        return LSTMCellState(c=nn.zeros_init()(c_rng, shape), h=nn.zeros_init()(h_rng, shape))
+
+
+class LSTM(BaseLSTM):
+    cfg: LSTMConfig
+
+    def setup(self):
+        super().setup()
+        self.compress_list = [nn.Dense(hidden) for hidden in self.cfg.embed_hiddens]
+        self.cell_list = [LSTMCell(features=self.cfg.recurrent_hidden) for _ in range(self.cfg.n_recurrent)]
+
+    def _compress_input(self, x: jax.Array) -> jax.Array:
+        assert len(x.shape) == 4 or len(x.shape) == 2, (
+            f"observations shape must be [batch, c, h, w] or [batch, c] but is {x.shape=}"
+        )
+        if len(x.shape) == 4:
+            x = jnp.reshape(x, (x.shape[0], math.prod(x.shape[1:])))
+
+        for c in self.compress_list:
+            x = c(x)
+            if self.cfg.use_relu:
+                x = nn.relu(x)
+        return x
+
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> LSTMState:
+        batch_size = input_shape[0]
+        shape = (batch_size, self.cfg.recurrent_hidden)
+        return super().initialize_carry(rng, shape)

@@ -22,7 +22,7 @@ spec:
           sizeLimit: "{SHM_SIZE}"
       - name: training
         persistentVolumeClaim:
-          claimName: az-learned-planners
+          claimName: vast-learned-planners
 
       containers:
       - name: devbox-container

@@ -14,12 +14,13 @@ exclude = [
     "cleanba/envs",
 ]
 
-[tool.ruff.isort]
-known-third-party = ["wandb"]
 
 [tool.ruff.lint]
 # Enable the isort rules.
 extend-select = ["I"]
+
+[tool.ruff.lint.isort]
+known-third-party = ["wandb"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # ignore third_party dir for now
@@ -30,6 +31,8 @@ markers = [
 
 [tool.pyright]
 exclude = [
+	".venv/**",  # venv
+    "nsight-profile/**",
     "wandb/**",  # Saved old codes
     "third_party/**",  # Other libraries
 ]
@@ -47,34 +50,34 @@ authors = [
 readme = "README.md"
 
 dependencies = [
-    "rich ~= 13.7",
-    "tensorboard ~=2.12.0",
-    "flax ~=0.8.0",
-    "optax ~=0.1.4",
-    "huggingface-hub ~=0.23.4",
-    "wandb ~=0.17.4",
-    "tensorboardx ~=2.6",
-    "chex ~= 0.1.5",
-    "gymnasium ~= 0.29",
-    "opencv-python >=4.10",
-    "moviepy ~=1.0.3",
-    "rlax ~=0.1.5",
+    "rich",
+    "tensorboard",
+    "flax",
+    "optax",
+    "huggingface-hub",
+    "wandb",
+    "tensorboardx",
+    "chex",
+    "gymnasium<1",
+    "opencv-python",
+    "moviepy",
+    "rlax",
     "farconf @ git+https://github.com/AlignmentResearch/farconf.git",
-    "ray[tune] ~=2.40.0",
-    "matplotlib ~=3.9.0",
+    "ray[tune]",
+    "matplotlib",
+    "craftax",
+    "jax==0.5.1",
+    "names_generator",
+    "GitPython",
+    "pytest",
 ]
 [project.optional-dependencies]
-dev = [
-    "pre-commit ~=3.6.0",
-    "pyright ~=1.1.349",
-    "ruff ~=0.1.13",
-    "pytest ~=8.1.1",
+py-tools = [
+    "pre-commit",
+    "pyright",
+    "ruff",
 ]
 
-launch-jobs = [
-    "names_generator ~=0.1.0",
-    "GitPython ~=3.1.37",
-]
 
 [tool.setuptools]
 packages = ["cleanba"]

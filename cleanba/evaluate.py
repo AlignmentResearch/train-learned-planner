@@ -57,7 +57,7 @@ class EvalConfig:
 
                     # Update the carry with the initial observation many times
                     for think_step in range(steps_to_think):
-                        carry, _, _, key = get_action_fn(
+                        carry, _, _, _, key = get_action_fn(
                             params, carry, obs, episode_starts_no, key, temperature=self.temperature
                         )
 
@@ -76,7 +76,7 @@ class EvalConfig:
                     while not np.all(eps_done):
                         if i >= self.safeguard_max_episode_steps:
                             break
-                        carry, action, _, key = get_action_fn(
+                        carry, action, _, _, key = get_action_fn(
                             params, carry, obs, episode_starts_no, key, temperature=self.temperature
                         )
 

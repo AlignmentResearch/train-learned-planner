@@ -3,13 +3,19 @@ from dataclasses import field
 from pathlib import Path
 from typing import List, Optional
 
-from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
-from cleanba.environments import AtariEnv, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, MiniPacManConfig, random_seed
-from cleanba.evaluate import EvalConfig
-from cleanba.impala_loss import (
-    ImpalaLossConfig,
+from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig, LSTMConfig
+from cleanba.environments import (
+    AtariEnv,
+    BoxWorldConfig,
+    CraftaxEnvConfig,
+    EnvConfig,
+    EnvpoolBoxobanConfig,
+    MiniPacManConfig,
+    random_seed,
 )
-from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, PolicySpec, SokobanResNetConfig
+from cleanba.evaluate import EvalConfig
+from cleanba.impala_loss import ActorCriticLossConfig, ImpalaLossConfig, PPOLossConfig
+from cleanba.network import AtariCNNSpec, GuezResNetConfig, IdentityNorm, MLPConfig, PolicySpec, SokobanResNetConfig
 
 
 @dataclasses.dataclass
@@ -45,7 +51,7 @@ class Args:
 
     base_run_dir: Path = Path("/tmp/cleanba")
 
-    loss: ImpalaLossConfig = ImpalaLossConfig()
+    loss: ActorCriticLossConfig = ImpalaLossConfig()
 
     net: PolicySpec = AtariCNNSpec(channels=(16, 32, 32), mlp_hiddens=(256,))
 
@@ -362,3 +368,119 @@ def minipacman_drc33() -> Args:
     out.train_env = MiniPacManConfig(seed=1234, max_episode_steps=500, num_envs=1)
     out.eval_envs = dict(valid=EvalConfig(MiniPacManConfig(seed=0, max_episode_steps=500, num_envs=256), n_episode_multiple=4))
     return out
+
+
+def craftax_drc() -> Args:
+    num_envs = 512
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234),
+        eval_envs={},
+        log_frequency=1,
+        net=ConvLSTMConfig(
+            embed=[ConvConfig(128, (3, 3), (1, 1), "SAME", True), ConvConfig(64, (3, 3), (1, 1), "SAME", True)],
+            recurrent=ConvLSTMCellConfig(
+                ConvConfig(64, (3, 3), (1, 1), "SAME", True), pool_and_inject="horizontal", fence_pad="no"
+            ),
+            n_recurrent=3,
+            mlp_hiddens=(512,),
+            repeats_per_step=3,
+            skip_final=True,
+            residual=True,
+            norm=IdentityNorm(),
+        ),
+        loss=PPOLossConfig(
+            gae_lambda=0.8,
+            gamma=0.99,
+            ent_coef=0.01,
+            vf_coef=0.25,
+            normalize_advantage=True,
+        ),
+        actor_update_cutoff=0,
+        sync_frequency=20000000000,
+        num_minibatches=8,
+        rmsprop_eps=1e-8,
+        local_num_envs=num_envs,
+        total_timesteps=3000000,
+        base_run_dir=Path("/training/craftax"),
+        learning_rate=2e-4,
+        final_learning_rate=1e-5,
+        optimizer="adam",
+        adam_b1=0.9,
+        rmsprop_decay=0.999,
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=1.0,
+        num_actor_threads=1,
+        num_steps=64,
+        train_epochs=4,
+    )
+
+
+def craftax_lstm(n_recurrent: int = 3, num_repeats: int = 1) -> Args:
+    num_envs = 512
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, obs_flat=True),
+        eval_envs={},
+        log_frequency=1,
+        net=LSTMConfig(
+            embed_hiddens=(1024,),
+            recurrent_hidden=1024,
+            n_recurrent=3,
+            repeats_per_step=1,
+            norm=IdentityNorm(),
+            mlp_hiddens=(512,),
+        ),
+        actor_update_cutoff=0,
+        sync_frequency=200,
+        num_minibatches=8,
+        rmsprop_eps=1e-8,
+        local_num_envs=num_envs,
+        total_timesteps=3000000,
+        base_run_dir=Path("/training/craftax"),
+        learning_rate=2e-4,
+        final_learning_rate=1e-5,
+        optimizer="adam",
+        adam_b1=0.9,
+        rmsprop_decay=0.999,
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=1.0,
+        num_actor_threads=1,
+        num_steps=64,
+        train_epochs=1,
+    )
+
+
+def craftax_mlp() -> Args:
+    num_envs = 512
+    return Args(
+        train_env=CraftaxEnvConfig(max_episode_steps=3000, num_envs=num_envs, seed=1234, obs_flat=True),
+        eval_envs={},
+        log_frequency=1,
+        net=MLPConfig(hiddens=(512, 512, 512), norm=IdentityNorm(), yang_init=False, activation="tanh", head_scale=0.01),
+        loss=PPOLossConfig(
+            gae_lambda=0.8,
+            gamma=0.99,
+            ent_coef=0.01,
+            vf_coef=0.25,
+            normalize_advantage=True,
+        ),
+        actor_update_cutoff=0,
+        sync_frequency=200,
+        num_minibatches=8,
+        rmsprop_eps=1e-8,
+        local_num_envs=num_envs,
+        total_timesteps=3000000,
+        base_run_dir=Path("/training/craftax"),
+        learning_rate=2e-4,
+        final_learning_rate=1e-5,
+        optimizer="adam",
+        adam_b1=0.9,
+        rmsprop_decay=0.999,
+        base_fan_in=1,
+        anneal_lr=True,
+        max_grad_norm=1.0,
+        num_actor_threads=1,
+        num_steps=64,
+        train_epochs=1,
+    )
