@@ -10,10 +10,18 @@ from typing import Any, Callable, List, Literal, Optional, Tuple, Union
 import gym_sokoban  # noqa: F401
 import gymnasium as gym
 import numpy as np
+from gymnasium.envs.registration import register
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
 
-import cleanba  # noqa: F401
+register(
+    id="BoxWorld-v0",
+    entry_point="cleanba.envs:BoxWorld",
+)
+register(
+    id="MiniPacMan-v0",
+    entry_point="cleanba.envs:MiniPacMan",
+)
 
 
 def random_seed() -> int:
