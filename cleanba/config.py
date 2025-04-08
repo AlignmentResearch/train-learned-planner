@@ -321,6 +321,7 @@ def boxworld_drc33() -> Args:
         seed=1234,
         max_episode_steps=120,
         num_envs=1,
+        step_cost=0.1,
     )
 
     out.eval_envs = dict(
@@ -359,6 +360,6 @@ def boxworld_drc33() -> Args:
 
 def minipacman_drc33() -> Args:
     out = boxworld_drc33()
-    out.train_env = MiniPacManConfig(seed=1234, max_episode_steps=500, num_envs=1)
+    out.train_env = MiniPacManConfig(seed=1234, max_episode_steps=1000, num_envs=1, nghosts_init=3, npills=3)
     out.eval_envs = dict(valid=EvalConfig(MiniPacManConfig(seed=0, max_episode_steps=500, num_envs=256), n_episode_multiple=4))
     return out
