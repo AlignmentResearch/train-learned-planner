@@ -21,7 +21,7 @@ class BoxWorld(gym.Env):
       world: an existing level. If None, generates a new level by calling the world_gen() function
     """
 
-    def __init__(self, n, goal_length, num_distractor, distractor_length, max_steps=10**6, collect_key=True, world=None):
+    def __init__(self, n, goal_length, num_distractor, distractor_length, max_steps=10**6, collect_key=True, step_cost=0, reward_gem=10, reward_key=1, reward_distractor=-1, world=None):
         self.goal_length = goal_length
         self.num_distractor = num_distractor
         self.distractor_length = distractor_length
@@ -30,10 +30,10 @@ class BoxWorld(gym.Env):
         self.collect_key = collect_key  # if True, keys are collected immediately when available
 
         # Penalties and Rewards
-        self.step_cost = 0
-        self.reward_gem = 10
-        self.reward_key = 1
-        self.reward_distractor = -1
+        self.step_cost = step_cost
+        self.reward_gem = reward_gem
+        self.reward_key = reward_key
+        self.reward_distractor = reward_distractor
 
         # Other Settings
         self.viewer = None

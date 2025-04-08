@@ -299,6 +299,10 @@ class BoxWorldConfig(EnvConfig):
     goal_length: int = 4
     num_distractor: int = 1
     distractor_length: int = 3
+    step_cost: float = 0.1
+    reward_gem: float = 10.0
+    reward_key: float = 1.0
+    reward_distractor: float = -1.0
     max_episode_steps: int = 120
     collect_key: bool = True
     nn_without_noop: bool = True
@@ -315,6 +319,10 @@ class BoxWorldConfig(EnvConfig):
                 goal_length=self.goal_length,
                 num_distractor=self.num_distractor,
                 distractor_length=self.distractor_length,
+                step_cost=self.step_cost,
+                reward_gem=self.reward_gem,
+                reward_key=self.reward_key,
+                reward_distractor=self.reward_distractor,
                 max_steps=self.max_episode_steps,
                 collect_key=self.collect_key,
                 asynchronous=self.asynchronous,
@@ -335,6 +343,12 @@ ATARI_MAX_FRAMES = int(
 class MiniPacManConfig(EnvConfig):
     env_id: str = "MiniPacMan-v0"
     mode: str = "regular"
+    npills: int = 2
+    pill_duration: int = 20
+    stochasticity: float = 0.05
+    nghosts_init: int = 1
+    ghost_speed_init: float = 0.5
+    ghost_speed_increase: float = 0.1
     max_episode_steps: int = 1000
     nn_without_noop: bool = True
     asynchronous: bool = True
@@ -347,6 +361,12 @@ class MiniPacManConfig(EnvConfig):
                 gym.vector.make,
                 self.env_id,
                 mode=self.mode,
+                npills=self.npills,
+                pill_duration=self.pill_duration,
+                stochasticity=self.stochasticity,
+                nghosts_init=self.nghosts_init,
+                ghost_speed_init=self.ghost_speed_init,
+                ghost_speed_increase=self.ghost_speed_increase,
                 frame_cap=self.max_episode_steps,
                 num_envs=self.num_envs,
                 asynchronous=self.asynchronous,

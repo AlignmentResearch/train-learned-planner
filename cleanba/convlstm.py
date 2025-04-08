@@ -2,7 +2,7 @@ import abc
 import dataclasses
 import math
 from functools import partial
-from typing import List, Literal, Tuple
+from typing import List, Literal, Sequence, Tuple, Union
 
 import flax.linen as nn
 import flax.struct
@@ -11,13 +11,15 @@ import jax.numpy as jnp
 
 from cleanba.network import PolicySpec
 
+PaddingLike = Union[str, int, Sequence[Union[int, Tuple[int, int]]]]
+
 
 @dataclasses.dataclass(frozen=True)
 class ConvConfig:
     features: int
     kernel_size: Tuple[int, ...]
     strides: Tuple[int, ...]
-    padding: Literal["SAME", "VALID"] | List[Tuple[int, ...]] = "SAME"
+    padding: PaddingLike = "SAME"
     use_bias: bool = True
     initialization: Literal["torch", "lecun"] = "lecun"
 

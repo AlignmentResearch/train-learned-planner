@@ -1,3 +1,5 @@
+"""This environment was adapted from: https://github.com/vasiloglou/mltrain-nips-2017/blob/master/sebastien_racaniere/I2A%20-%20NIPS%20workshop.ipynb"""
+
 import math
 import numpy as np
 from gymnasium.spaces import Box
@@ -144,18 +146,18 @@ class MiniPacMan(gym.Env):
   NUM_ACTIONS = 5
   MODES = ('regular', 'avoid', 'hunt', 'ambush', 'rush')
 
-  def __init__(self, mode="regular", frame_cap=3000):
+  def __init__(self, mode="regular", frame_cap=3000, npills=2, pill_duration=20, stochasticity=0.05, nghosts_init=1, ghost_speed_init=0.5, ghost_speed_increase=0.1):
     assert mode in MiniPacMan.MODES
-    self.nghosts_init = 1
-    self.ghost_speed_init = 0.5
+    self.nghosts_init = nghosts_init
+    self.ghost_speed_init = ghost_speed_init
     self.ghost_speed = self.ghost_speed_init
-    self.ghost_speed_increase = 0.1
+    self.ghost_speed_increase = ghost_speed_increase
     self.end_on_collect = False
-    self.npills = 2
-    self.pill_duration = 20
+    self.npills = npills
+    self.pill_duration = pill_duration
     self.seed = 123
     self.discount = 1
-    self.stochasticity = 0.05
+    self.stochasticity = stochasticity
     self.obs_is_rgb = True
     self.frame_cap = frame_cap
     self.safe_distance = 5
