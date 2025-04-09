@@ -98,7 +98,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
 
 @dataclasses.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
-    env_id: str = "Sokoban-v0"
+    env_id: Optional[str] = "Sokoban-v0"
 
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
@@ -344,10 +344,10 @@ ATARI_MAX_FRAMES = int(
 class MiniPacManConfig(EnvConfig):
     env_id: str = "MiniPacMan-v0"
     mode: str = "regular"
-    npills: int = 2
+    npills: int = 3
     pill_duration: int = 20
     stochasticity: float = 0.05
-    nghosts_init: int = 1
+    nghosts_init: int = 3
     ghost_speed_init: float = 0.5
     ghost_speed_increase: float = 0.1
     max_episode_steps: int = 1000
@@ -393,16 +393,19 @@ def convert_to_cleanba_config(env_config, asynchronous=False):
     if isinstance(env_config, EnvConfig):
         return env_config
     env_classes_map = dict(
+        EnvpoolVecEnvConfig=EnvpoolEnvConfig,
         EnvpoolSokobanVecEnvConfig=EnvpoolBoxobanConfig,
         BoxobanConfig=BoxobanConfig,
         SokobanConfig=SokobanConfig,
+        MiniPacManConfig=MiniPacManConfig,
+        BoxWorldConfig=BoxWorldConfig,
     )
     cls_name = env_config.__class__.__name__
     assert cls_name in env_classes_map, f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
     args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
-    if cls_name == "EnvpoolSokobanVecEnvConfig":
+    if cls_name in ["EnvpoolSokobanVecEnvConfig", "EnvpoolVecEnvConfig"]:
         args.pop("px_scale", None)
     else:
         args["asynchronous"] = asynchronous
