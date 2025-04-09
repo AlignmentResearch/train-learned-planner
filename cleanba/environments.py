@@ -517,6 +517,7 @@ class BoxWorldConfig(EnvConfig):
     reward_gem: float = 10.0
     reward_key: float = 1.0
     reward_distractor: float = -1.0
+    min_episode_steps: int = 60
     max_episode_steps: int = 120
     collect_key: bool = True
     nn_without_noop: bool = True
@@ -537,6 +538,7 @@ class BoxWorldConfig(EnvConfig):
                 reward_gem=self.reward_gem,
                 reward_key=self.reward_key,
                 reward_distractor=self.reward_distractor,
+                min_episode_steps=self.min_episode_steps,
                 max_steps=self.max_episode_steps,
                 collect_key=self.collect_key,
                 asynchronous=self.asynchronous,

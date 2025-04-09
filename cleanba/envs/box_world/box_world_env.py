@@ -21,7 +21,10 @@ class BoxWorld(gym.Env):
       world: an existing level. If None, generates a new level by calling the world_gen() function
     """
 
-    def __init__(self, n, goal_length, num_distractor, distractor_length, max_steps=10**6, collect_key=True, step_cost=0, reward_gem=10, reward_key=1, reward_distractor=-1, world=None):
+    def __init__(self, n, goal_length, num_distractor, distractor_length, max_steps=10**6, min_episode_steps=60, collect_key=True, step_cost=0, reward_gem=10, reward_key=1, reward_distractor=-1, world=None):
+        self.min_episode_steps = min_episode_steps
+        if max_steps < self.min_episode_steps:
+            raise ValueError(f"{max_steps=} cannot be less than {min_episode_steps=}")
         self.goal_length = goal_length
         self.num_distractor = num_distractor
         self.distractor_length = distractor_length
@@ -67,7 +70,7 @@ class BoxWorld(gym.Env):
         self.num_env_steps += 1
 
         reward = -self.step_cost
-        trunc = self.num_env_steps == self.max_steps
+        trunc = self.num_env_steps == self.this_episode_steps
         done = False
         solved = False
 
@@ -163,6 +166,8 @@ class BoxWorld(gym.Env):
             )
         else:
             self.world, self.player_position, self.world_dic = world
+        # Do this so world_gen sets the random seed
+        self.this_episode_steps = random.randint(self.min_episode_steps, self.max_steps)
 
         self.num_env_steps = 0
         self.episode_reward = 0

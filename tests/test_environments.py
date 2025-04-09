@@ -145,16 +145,28 @@ def test_environment_basics(cfg: EnvConfig, shape: tuple[int, int]):
             assert np.array_equal(truncated, sokoban_has_reset(tile_size, prev_obs, next_obs))
 
 
-def test_craftax_environment_basics():
-    cfg = CraftaxEnvConfig(max_episode_steps=20, num_envs=2, obs_flat=False)
+def assert_all_different(obs: np.ndarray):
+    for i in range(obs.shape[0]):
+        for j in range(i + 1, obs.shape[0]):
+            assert not np.array_equal(obs[i], obs[j])
+
+@pytest.mark.parametrize("cfg, shape", [
+    (CraftaxEnvConfig(max_episode_steps=20, num_envs=3, obs_flat=False), (134, 9, 11)),
+    (BoxWorldConfig(max_episode_steps=100, min_episode_steps=60, num_envs=3, dim_room=10), (3, 12, 12)),
+])
+def test_environment_basics(cfg: EnvConfig, shape: tuple[int, ...]):
     envs = EpisodeEvalWrapper(cfg.make())
     next_obs, info = envs.reset()
+    assert next_obs.shape == (cfg.num_envs, *shape)
+    assert_all_different(next_obs)
 
     assert (action_shape := envs.action_space.shape) is not None
     for i in range(50):
         actions = np.zeros(action_shape, dtype=np.int64)
-        envs.step(actions)
-
+        next_obs, next_reward, terminated, truncated, info = envs.step(actions)
+        assert next_obs.shape == (cfg.num_envs, *shape)
+        assert np.all(~(terminated & truncated))
+        assert_all_different(next_obs)
 
 @pytest.mark.parametrize("gamma", [1.0, 0.9])
 def test_mock_sokoban_returns(gamma: float, num_envs: int = 7):

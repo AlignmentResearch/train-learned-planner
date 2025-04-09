@@ -321,18 +321,19 @@ def sokoban_drc33_59() -> Args:
 def boxworld_drc33() -> Args:
     drc_n_n = 3
     out = sokoban_resnet59()
-    out.loss = PPOLossConfig(
-        gae_lambda=0.8,
-        gamma=0.99,
-        ent_coef=0.01,
-        vf_coef=0.25,
-        normalize_advantage=False,
-    )
-
+    # out.loss = PPOLossConfig(
+    #     gae_lambda=0.8,
+    #     gamma=0.99,
+    #     ent_coef=0.01,
+    #     vf_coef=0.25,
+    #     normalize_advantage=False,
+    # )
 
     out.train_env = BoxWorldConfig(
         seed=1234,
         max_episode_steps=120,
+        min_episode_steps=90,
+        num_distractor=0,
         num_envs=1,
     )
 
@@ -353,8 +354,8 @@ def boxworld_drc33() -> Args:
         repeats_per_step=drc_n_n,
         skip_final=True,
         residual=False,
-        use_relu=False,
-        embed=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * 2,
+        use_relu=True,
+        embed=[ConvConfig(32, (3, 3), (1, 1), "SAME", True), ConvConfig(32, (2, 2), (1, 1), "SAME", True)],
         recurrent=ConvLSTMCellConfig(
             ConvConfig(32, (3, 3), (1, 1), "SAME", True),
             pool_and_inject="horizontal",
