@@ -55,7 +55,7 @@ def print_available_actions():
     display_actions = "\n".join(available_actions_list)
     print()
     print("Action out of Range!")
-    print("Available Actions:\n{}".format(display_a1ctions))
+    print("Available Actions:\n{}".format(display_actions))
     print()
 
 

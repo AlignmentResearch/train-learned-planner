@@ -108,6 +108,7 @@ class Policy(nn.Module):
     def _maybe_normalize_input_image(self, x: jax.Array) -> jax.Array:
         # Convert from NCHW to NHWC
         assert len(x.shape) == 4, "x must be a NCHW image"
+        # commented since H and W can be different for some environments
         # assert (
         #     x.shape[2] == x.shape[3]
         # ), f"x is not a rectangular NCHW image, but is instead {x.shape=}. This is probably wrong."
