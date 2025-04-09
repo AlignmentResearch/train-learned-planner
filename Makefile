@@ -8,7 +8,8 @@ export DOCKERFILE
 
 COMMIT_HASH ?= $(shell git rev-parse HEAD)
 BRANCH_NAME ?= $(shell git branch --show-current)
-JAX_DATE=2024-04-08
+JAX_DATE=2025-02-22
+PYTHON_VERSION=3.12
 
 default: release/main
 
@@ -29,12 +30,10 @@ BUILD_PREFIX ?= $(shell git rev-parse --short HEAD)
 		-f "${DOCKERFILE}" .
 	touch ".build/with-reqs/${BUILD_PREFIX}/$*"
 
-# NOTE: --extra=extra is for stable-baselines3 testing.
-requirements.txt.new: pyproject.toml ${DOCKERFILE}
-	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/nvidia/jax:base-${JAX_DATE}" \
-    bash -c "pip install pip-tools \
-		&& cd /workspace \
-		&& pip-compile --verbose -o requirements.txt.new --extra=dev --extra=launch_jobs pyproject.toml"
+requirements.txt.new: pyproject.toml
+	docker run -v "${HOME}/.cache:/home/dev/.cache" -v "$(shell pwd):/workspace" "ghcr.io/astral-sh/uv:python${PYTHON_VERSION}-alpine" \
+    sh -c "cd /workspace \
+		&& uv pip compile --verbose -o requirements.txt.new --extra=dev pyproject.toml"
 
 # To bootstrap `requirements.txt`, comment out this target
 requirements.txt: requirements.txt.new
@@ -42,8 +41,8 @@ requirements.txt: requirements.txt.new
 
 .PHONY: local-install
 local-install: requirements.txt
-	pip install --no-deps -r requirements.txt
-	pip install --config-settings editable_mode=compat -e ".[dev-local]" -e ./third_party/gym-sokoban
+	uv pip install --no-deps -r requirements.txt
+	uv pip install -e ".[py-tools]" -e ./third_party/gym-sokoban
 	pip install https://github.com/AlignmentResearch/envpool/releases/download/v0.1.0/envpool-0.8.4-cp310-cp310-linux_x86_64.whl
 
 
@@ -93,18 +92,18 @@ cuda-devbox/%: devbox/%
 cuda-devbox: cuda-devbox/main
 
 .PHONY: envpool-devbox
-envpool-devbox: devbox/envpool-ci
+envpool-devbox: devbox/envpool
 
 
 .PHONY: docker docker/%
 docker/%:
-	docker run -v "$(shell pwd):/workspace" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
+	docker run -v "${HOME}/.cache:/home/ubuntu/.cache" -v "$(shell pwd):/workspace" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
 docker: docker/main
 
 .PHONY: envpool-docker envpool-docker/%
 envpool-docker/%:
-	docker run -v "$(shell pwd)/third_party/envpool:/app" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
-envpool-docker: envpool-docker/envpool-ci
+	docker run -v "${HOME}/.cache:/home/ubuntu/.cache" -v "$(shell pwd)/third_party/envpool:/app" -it "${APPLICATION_URL}:${RELEASE_PREFIX}-$*" /bin/bash
+envpool-docker: envpool-docker/envpool
 
 # Section 3: project commands
 

@@ -22,7 +22,7 @@ spec:
           sizeLimit: "{SHM_SIZE}"
       - name: training
         persistentVolumeClaim:
-          claimName: az-learned-planners
+          claimName: vast-learned-planners
 
       containers:
       - name: devbox-container
@@ -48,6 +48,7 @@ spec:
             cpu: {CPU}
           limits:
             memory: "{MEMORY}"
+            # nvidia.com/mig-2g.20gb: {GPU}
             nvidia.com/gpu: {GPU}
         env:
         - name: OMP_NUM_THREADS
@@ -55,9 +56,9 @@ spec:
         - name: WANDB_MODE
           value: offline
         - name: WANDB_PROJECT
-          value: lp-cleanba
+          value: impala
         - name: WANDB_ENTITY
-          value: farai
+          value: matsrlgoals
         - name: WANDB_RUN_GROUP
           value: devbox
         - name: GIT_ASKPASS

@@ -23,7 +23,7 @@ spec:
       volumes:
       - name: training
         persistentVolumeClaim:
-          claimName: az-learned-planners
+          claimName: vast-learned-planners
       - name: dshm
         emptyDir:
           medium: Memory
