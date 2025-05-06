@@ -70,6 +70,7 @@ dependencies = [
     "names_generator",
     "GitPython",
     "pytest",
+    "gym-sokoban",
 ]
 [project.optional-dependencies]
 py-tools = [
@@ -81,3 +82,7 @@ py-tools = [
 
 [tool.setuptools]
 packages = ["cleanba"]
+
+[tool.uv.sources]
+craftax = { path = "third_party/craftax" }
+gym-sokoban = { path = "third_party/gym-sokoban" }
