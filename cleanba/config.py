@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from cleanba.convlstm import ConvConfig, ConvLSTMCellConfig, ConvLSTMConfig
-from cleanba.environments import AtariEnv, EnvConfig, EnvpoolBoxobanConfig, random_seed
+from cleanba.environments import AtariEnv, BoxWorldConfig, EnvConfig, EnvpoolBoxobanConfig, MiniPacManConfig, random_seed
 from cleanba.evaluate import EvalConfig
 from cleanba.impala_loss import (
     ImpalaLossConfig,
@@ -309,4 +309,57 @@ def sokoban_drc33_59() -> Args:
         ),
         head_scale=1.0,
     )
+    return out
+
+
+def boxworld_drc33() -> Args:
+    drc_n_n = 3
+
+    out = sokoban_resnet59()
+
+    out.train_env = BoxWorldConfig(
+        seed=1234,
+        max_episode_steps=120,
+        num_envs=1,
+        step_cost=0.1,
+    )
+
+    out.eval_envs = dict(
+        valid=EvalConfig(
+            BoxWorldConfig(
+                seed=0,
+                max_episode_steps=120,
+                num_envs=256,
+            ),
+            n_episode_multiple=4,
+            steps_to_think=[0, 2, 4, 8, 12, 16, 24, 32],
+        ),
+    )
+
+    out.net = ConvLSTMConfig(
+        n_recurrent=drc_n_n,
+        repeats_per_step=drc_n_n,
+        skip_final=True,
+        residual=False,
+        use_relu=False,
+        embed=[ConvConfig(32, (3, 3), (1, 1), "SAME", True)] * 2,
+        recurrent=ConvLSTMCellConfig(
+            ConvConfig(32, (3, 3), (1, 1), "SAME", True),
+            pool_and_inject="horizontal",
+            pool_projection="per-channel",
+            output_activation="tanh",
+            fence_pad="valid",
+            forget_bias=0.0,
+        ),
+        head_scale=1.0,
+    )
+
+    out.total_timesteps = 200_000_000
+    return out
+
+
+def minipacman_drc33() -> Args:
+    out = boxworld_drc33()
+    out.train_env = MiniPacManConfig(seed=1234, max_episode_steps=1000, num_envs=1, nghosts_init=3, npills=3)
+    out.eval_envs = dict(valid=EvalConfig(MiniPacManConfig(seed=0, max_episode_steps=500, num_envs=256), n_episode_multiple=4))
     return out

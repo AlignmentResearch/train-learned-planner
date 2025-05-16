@@ -13,6 +13,8 @@ import numpy as np
 from gymnasium.vector.utils.spaces import batch_space
 from numpy.typing import NDArray
 
+import cleanba  # noqa: F401
+
 
 def random_seed() -> int:
     return random.randint(0, 2**31 - 2)
@@ -37,6 +39,7 @@ class EnvpoolEnvConfig(EnvConfig):
     num_threads: int = 0
     thread_affinity_offset: int = -1
     max_num_players: int = 1
+    extra_env_kwargs: dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
     def make(self) -> Callable[[], gym.vector.VectorEnv]:
@@ -51,7 +54,7 @@ class EnvpoolEnvConfig(EnvConfig):
             batch_size=self.num_envs,
         )
         SPECIAL_KEYS = {"base_path", "gym_reset_return_info"}
-        env_kwargs = {}
+        env_kwargs = self.extra_env_kwargs.copy()
         for k in dummy_spec._config_keys:
             if not (k in special_kwargs or k in SPECIAL_KEYS):
                 try:
@@ -95,7 +98,7 @@ class EnvpoolVectorEnv(gym.vector.VectorEnv):
 
 @dataclasses.dataclass
 class EnvpoolBoxobanConfig(EnvpoolEnvConfig):
-    env_id: str = "Sokoban-v0"
+    env_id: Optional[str] = "Sokoban-v0"
 
     reward_finished: float = 10.0  # Reward for completing a level
     reward_box: float = 1.0  # Reward for putting a box on target
@@ -290,10 +293,88 @@ class BoxobanConfig(BaseSokobanEnvConfig):
         return make_fn
 
 
+@dataclasses.dataclass
+class BoxWorldConfig(EnvConfig):
+    env_id: str = "BoxWorld-v0"
+    dim_room: int = 12
+    goal_length: int = 4
+    num_distractor: int = 1
+    distractor_length: int = 3
+    step_cost: float = 0.1
+    reward_gem: float = 10.0
+    reward_key: float = 1.0
+    reward_distractor: float = -1.0
+    max_episode_steps: int = 120
+    collect_key: bool = True
+    nn_without_noop: bool = True
+    asynchronous: bool = True
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        make_fn = partial(
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                gym.vector.make,
+                self.env_id,
+                n=self.dim_room,
+                goal_length=self.goal_length,
+                num_distractor=self.num_distractor,
+                distractor_length=self.distractor_length,
+                step_cost=self.step_cost,
+                reward_gem=self.reward_gem,
+                reward_key=self.reward_key,
+                reward_distractor=self.reward_distractor,
+                max_steps=self.max_episode_steps,
+                collect_key=self.collect_key,
+                asynchronous=self.asynchronous,
+                num_envs=self.num_envs,
+            ),
+            self.nn_without_noop,
+        )
+        return make_fn
+
+
 ATARI_MAX_FRAMES = int(
     108000 / 4
 )  # 108000 is the max number of frames in an Atari game, divided by 4 to account for frame skipping
 # This equals 27k, which is the default max_episode_steps for Atari in Envpool
+
+
+@dataclasses.dataclass
+class MiniPacManConfig(EnvConfig):
+    env_id: str = "MiniPacMan-v0"
+    mode: str = "regular"
+    npills: int = 3
+    pill_duration: int = 20
+    stochasticity: float = 0.05
+    nghosts_init: int = 3
+    ghost_speed_init: float = 0.5
+    ghost_speed_increase: float = 0.1
+    max_episode_steps: int = 1000
+    nn_without_noop: bool = True
+    asynchronous: bool = True
+
+    @property
+    def make(self) -> Callable[[], gym.vector.VectorEnv]:
+        make_fn = partial(
+            VectorNHWCtoNCHWWrapper.from_fn,
+            partial(
+                gym.vector.make,
+                self.env_id,
+                mode=self.mode,
+                npills=self.npills,
+                pill_duration=self.pill_duration,
+                stochasticity=self.stochasticity,
+                nghosts_init=self.nghosts_init,
+                ghost_speed_init=self.ghost_speed_init,
+                ghost_speed_increase=self.ghost_speed_increase,
+                frame_cap=self.max_episode_steps,
+                num_envs=self.num_envs,
+                asynchronous=self.asynchronous,
+            ),
+            self.nn_without_noop,
+        )
+        return make_fn
 
 
 @dataclasses.dataclass
@@ -312,16 +393,19 @@ def convert_to_cleanba_config(env_config, asynchronous=False):
     if isinstance(env_config, EnvConfig):
         return env_config
     env_classes_map = dict(
+        EnvpoolVecEnvConfig=EnvpoolEnvConfig,
         EnvpoolSokobanVecEnvConfig=EnvpoolBoxobanConfig,
         BoxobanConfig=BoxobanConfig,
         SokobanConfig=SokobanConfig,
+        MiniPacManConfig=MiniPacManConfig,
+        BoxWorldConfig=BoxWorldConfig,
     )
     cls_name = env_config.__class__.__name__
     assert cls_name in env_classes_map, f"{cls_name=} not available in cleanba.environments"
     args = dataclasses.asdict(env_config)
     args["num_envs"] = args.pop("n_envs")
     args.pop("n_envs_to_render", None)
-    if cls_name == "EnvpoolSokobanVecEnvConfig":
+    if cls_name in ["EnvpoolSokobanVecEnvConfig", "EnvpoolVecEnvConfig"]:
         args.pop("px_scale", None)
     else:
         args["asynchronous"] = asynchronous

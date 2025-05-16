@@ -2,7 +2,7 @@ import abc
 import dataclasses
 import math
 from functools import partial
-from typing import List, Literal, Tuple
+from typing import List, Literal, Sequence, Tuple, Union
 
 import flax.linen as nn
 import flax.struct
@@ -11,13 +11,15 @@ import jax.numpy as jnp
 
 from cleanba.network import PolicySpec
 
+PaddingLike = Union[str, int, Sequence[Union[int, Tuple[int, int]]]]
+
 
 @dataclasses.dataclass(frozen=True)
 class ConvConfig:
     features: int
     kernel_size: Tuple[int, ...]
     strides: Tuple[int, ...]
-    padding: Literal["SAME", "VALID"] | List[Tuple[int, ...]] = "SAME"
+    padding: PaddingLike = "SAME"
     use_bias: bool = True
     initialization: Literal["torch", "lecun"] = "lecun"
 
@@ -217,9 +219,36 @@ class ConvLSTM(BaseLSTM):
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> LSTMState:
         n, h, w, c = input_shape
+
+        def _compute_output_dim(dim, kernel, stride, padding):
+            if isinstance(padding, str):
+                if padding.upper() == "SAME":
+                    return math.ceil(dim / stride)
+                elif padding.upper() == "VALID":
+                    return math.floor((dim - kernel + stride) / stride)
+                else:
+                    raise ValueError(f"Unknown padding: {padding}")
+            elif isinstance(padding, int):
+                return (dim + 2 * padding - kernel) // stride + 1
+            elif isinstance(padding, (tuple, list)):
+                # Assume symmetric padding.
+                if isinstance(padding[0], int):
+                    p = padding[0]
+                else:
+                    p = sum(padding[0])
+                return (dim + 2 * p - kernel) // stride + 1
+            else:
+                raise ValueError(f"Unsupported padding type: {padding}")
+
         for conv in self.conv_list:
-            w //= conv.strides[0]
-            h //= conv.strides[1]
+            kernel_size = conv.kernel_size
+            kernel_h, kernel_w = (kernel_size, kernel_size) if isinstance(kernel_size, int) else kernel_size
+            stride = 1 if conv.strides is None else conv.strides
+            stride_h, stride_w = (stride, stride) if isinstance(stride, int) else stride
+            pad = conv.padding
+            h = _compute_output_dim(h, kernel_h, stride_h, pad)
+            w = _compute_output_dim(w, kernel_w, stride_w, pad)
+
         return super().initialize_carry(rng, (n, h, w, c))
 
 

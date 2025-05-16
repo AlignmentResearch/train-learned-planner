@@ -44,6 +44,10 @@ spec:
             git pull
             git checkout {COMMIT_HASH}
             git submodule update --recursive
+            sudo apt update
+            sudo apt install -y libgl1-mesa-glx
+            pip uninstall -y envpool
+            pip install -U envpool
             {COMMAND}
         resources:
           requests:
