@@ -4,3 +4,6 @@
 [submodule "third_party/gym-sokoban"]
 	path = third_party/gym-sokoban
 	url = https://github.com/AlignmentResearch/gym-sokoban
+[submodule "third_party/craftax"]
+	path = third_party/craftax
+	url = https://github.com/rhaps0dy/Craftax
