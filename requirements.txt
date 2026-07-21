@@ -230,7 +230,7 @@ packaging==24.2
     #   tensorboardx
 pandas==2.2.3
     # via ray
-pillow==11.0.0
+pillow==12.3.0
     # via
     #   imageio
     #   matplotlib
