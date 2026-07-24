@@ -100,7 +100,7 @@ gast==0.6.0
     # via tensorflow-probability
 gitdb==4.0.11
     # via gitpython
-gitpython==3.1.43
+gitpython==3.1.54
     # via
     #   train-learned-planner (pyproject.toml)
     #   wandb
