@@ -255,7 +255,7 @@ psutil==6.1.1
     # via wandb
 pyarrow==18.1.0
     # via ray
-pyasn1==0.6.1
+pyasn1==0.6.4
     # via
     #   pyasn1-modules
     #   rsa
