@@ -284,7 +284,7 @@ pyyaml==6.0.2
     #   pre-commit
     #   ray
     #   wandb
-ray[tune]==2.40.0
+ray[tune]==2.56.0
     # via train-learned-planner (pyproject.toml)
 referencing==0.35.1
     # via
