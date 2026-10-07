@@ -378,7 +378,7 @@ urllib3==2.3.0
     # via
     #   requests
     #   sentry-sdk
-virtualenv==20.28.0
+virtualenv==21.7.13
     # via pre-commit
 wandb==0.17.9
     # via train-learned-planner (pyproject.toml)
