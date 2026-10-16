@@ -209,7 +209,7 @@ numpy==1.26.4
     #   tensorboardx
     #   tensorflow-probability
     #   tensorstore
-oauthlib==3.2.2
+oauthlib==4.0.0
     # via requests-oauthlib
 opencv-python==4.10.0.84
     # via train-learned-planner (pyproject.toml)
